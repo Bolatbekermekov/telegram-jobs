@@ -1,5 +1,6 @@
 """Google Sheets repository (gspread). Appends new leads with status=new."""
 import datetime as _dt
+import json
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -9,14 +10,21 @@ from app.domain.lead import COLUMNS, STATUS_NEW, ExtractedLead
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _load_credentials(service_account_path: str) -> Credentials:
-    """Load service-account credentials from a JSON file path."""
-    return Credentials.from_service_account_file(service_account_path, scopes=_SCOPES)
+def _load_credentials(file_path: str, json_content: str) -> Credentials:
+    """Local: load from a JSON file path. Cloud: load from JSON content (env var)."""
+    if json_content.strip():
+        return Credentials.from_service_account_info(json.loads(json_content), scopes=_SCOPES)
+    if file_path.strip():
+        return Credentials.from_service_account_file(file_path, scopes=_SCOPES)
+    raise RuntimeError(
+        "No Google credentials: set GOOGLE_SERVICE_ACCOUNT_JSON (cloud) "
+        "or GOOGLE_SERVICE_ACCOUNT_FILE (local)."
+    )
 
 
 class SheetsRepo:
-    def __init__(self, service_account_path: str, sheet_id: str, tab: str):
-        client = gspread.authorize(_load_credentials(service_account_path))
+    def __init__(self, file_path: str, json_content: str, sheet_id: str, tab: str):
+        client = gspread.authorize(_load_credentials(file_path, json_content))
         self._ws = client.open_by_key(sheet_id).worksheet(tab)
 
     def _ensure_header(self) -> None:

@@ -48,15 +48,13 @@ Per lead: `s`=send, `k`=skip, `e`=edit, `r`=regenerate, `q`=quit.
 Set **Root Directory = `intake-bot`** when importing the repo.
 
 Env vars to add in the Vercel dashboard: `OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`,
-`GOOGLE_SERVICE_ACCOUNT_FILE`, `SHEET_ID`, `SHEET_TAB`, and optionally `TELEGRAM_WEBHOOK_SECRET`.
+`GOOGLE_SERVICE_ACCOUNT_JSON`, `SHEET_ID`, `SHEET_TAB`, and optionally `TELEGRAM_WEBHOOK_SECRET`.
 
-**Credentials on the server:** the app reads the service account from a **file path**
-(`GOOGLE_SERVICE_ACCOUNT_FILE`). Because `service_account.json` is gitignored, it is **not**
-present in a fresh Vercel deploy. To deploy with file-only logic you must make the file
-available in the deployment — e.g. commit `service_account.json` to your **private** repo
-(remove it from `.gitignore`) and set `GOOGLE_SERVICE_ACCOUNT_FILE=service_account.json`.
-If you prefer not to commit the secret, host the intake bot somewhere that supports uploading
-a secret file (e.g. a small VPS / Railway / Render) instead of Vercel.
+**Credentials on the server (public repo):** `service_account.json` is gitignored and must
+**never** be committed to a public repo. Instead, on Vercel set `GOOGLE_SERVICE_ACCOUNT_JSON`
+to the **full JSON content** of your service-account key (open `service_account.json`, copy
+everything, paste it as the value). The cloud component reads creds from this env var; locally
+it keeps using the `GOOGLE_SERVICE_ACCOUNT_FILE` path. You do this once, not per deploy.
 
 Then register the webhook (replace URL/token):
 ```powershell

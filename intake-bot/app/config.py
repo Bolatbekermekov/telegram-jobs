@@ -12,7 +12,9 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 # Optional shared secret to validate Telegram webhook calls.
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 
-# Path to the service-account JSON file (must be present in the deployment).
-GOOGLE_SERVICE_ACCOUNT_FILE = os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]
+# Google credentials. Local: a path to the JSON file (GOOGLE_SERVICE_ACCOUNT_FILE).
+# Cloud (public repo, e.g. Vercel): paste the JSON content into GOOGLE_SERVICE_ACCOUNT_JSON.
+GOOGLE_SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 SHEET_ID = os.environ["SHEET_ID"]
 SHEET_TAB = os.environ.get("SHEET_TAB", "Лист1")
