@@ -1,0 +1,21 @@
+# Secrets — NEVER commit
+.env
+*.env
+service_account.json
+*.session
+*.session-journal
+cv.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+
+# Vercel
+.vercel/
+
+# OS
+.DS_Store
+Thumbs.db
