@@ -1,7 +1,5 @@
 """Google Sheets repository (gspread). Appends new leads with status=new."""
 import datetime as _dt
-import json
-import os
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -11,20 +9,14 @@ from app.domain.lead import COLUMNS, STATUS_NEW, ExtractedLead
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _load_credentials(service_account_ref: str) -> Credentials:
-    """Accept either a path to the JSON file or the raw JSON string (Vercel)."""
-    ref = service_account_ref.strip()
-    if ref.startswith("{"):
-        info = json.loads(ref)
-    else:
-        with open(ref, "r", encoding="utf-8") as fh:
-            info = json.load(fh)
-    return Credentials.from_service_account_info(info, scopes=_SCOPES)
+def _load_credentials(service_account_path: str) -> Credentials:
+    """Load service-account credentials from a JSON file path."""
+    return Credentials.from_service_account_file(service_account_path, scopes=_SCOPES)
 
 
 class SheetsRepo:
-    def __init__(self, service_account_ref: str, sheet_id: str, tab: str):
-        client = gspread.authorize(_load_credentials(service_account_ref))
+    def __init__(self, service_account_path: str, sheet_id: str, tab: str):
+        client = gspread.authorize(_load_credentials(service_account_path))
         self._ws = client.open_by_key(sheet_id).worksheet(tab)
 
     def _ensure_header(self) -> None:

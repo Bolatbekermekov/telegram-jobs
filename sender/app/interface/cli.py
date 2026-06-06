@@ -35,7 +35,7 @@ def run() -> None:
     cv_text = load_cv_text(config.CV_PATH)
     profile_text = load_text_file(config.PROFILE_PATH)
 
-    repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_JSON, config.SHEET_ID, config.SHEET_TAB)
+    repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID, config.SHEET_TAB)
     generator = GenerateMessage(
         OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
         cv_text,

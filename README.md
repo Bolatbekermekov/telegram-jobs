@@ -23,11 +23,16 @@ End of week → [sender on laptop, Telethon] → reads Sheet → you approve →
   **banned**. Keep `DAILY_SEND_LIMIT` low, keep the random delays, run from your home IP.
 
 ## One-time setup
-1. Copy `.env.example` → `.env` and fill values (already done for you locally).
-2. Put your CV at the path in `CV_PATH` (PDF or txt).
-3. Share the Google Sheet with the service-account email
-   (`atlanti-whatsapp-sheets-prod@impressive-bay-405311.iam.gserviceaccount.com`) as **Editor**.
-4. Edit `sender/profile.md` to tune how messages position you.
+1. Copy `.env.example` → `.env` and fill values.
+2. **Add your own Google service-account key.** This project reads Google Sheets credentials
+   from a JSON file path only (`GOOGLE_SERVICE_ACCOUNT_FILE`). Create a service account in
+   Google Cloud Console, download its key, and save it as `service_account.json` in the
+   project root. This file is **gitignored** and is **not** included in the repo — every user
+   must provide their own.
+3. Share your Google Sheet with the service-account email (the `client_email` from that JSON)
+   as **Editor**, and set `SHEET_ID` / `SHEET_TAB` in `.env`.
+4. Put your CV at the path in `CV_PATH` (PDF or txt).
+5. Edit `sender/profile.md` to tune how messages position you.
 
 ## Run the sender (local)
 ```powershell
@@ -40,14 +45,18 @@ First run asks for your phone number + Telegram login code (creates `userbot.ses
 Per lead: `s`=send, `k`=skip, `e`=edit, `r`=regenerate, `q`=quit.
 
 ## Deploy the intake bot (Vercel)
-```powershell
-cd telegram-jobs\intake-bot
-npm i -g vercel
-vercel            # follow prompts; set Root Directory = intake-bot
-```
-In the Vercel dashboard add env vars: `OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`,
-`GOOGLE_SERVICE_ACCOUNT_JSON` (paste the **full JSON string**), `SHEET_ID`, `SHEET_TAB`,
-and optionally `TELEGRAM_WEBHOOK_SECRET`.
+Set **Root Directory = `intake-bot`** when importing the repo.
+
+Env vars to add in the Vercel dashboard: `OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`,
+`GOOGLE_SERVICE_ACCOUNT_FILE`, `SHEET_ID`, `SHEET_TAB`, and optionally `TELEGRAM_WEBHOOK_SECRET`.
+
+**Credentials on the server:** the app reads the service account from a **file path**
+(`GOOGLE_SERVICE_ACCOUNT_FILE`). Because `service_account.json` is gitignored, it is **not**
+present in a fresh Vercel deploy. To deploy with file-only logic you must make the file
+available in the deployment — e.g. commit `service_account.json` to your **private** repo
+(remove it from `.gitignore`) and set `GOOGLE_SERVICE_ACCOUNT_FILE=service_account.json`.
+If you prefer not to commit the secret, host the intake bot somewhere that supports uploading
+a secret file (e.g. a small VPS / Railway / Render) instead of Vercel.
 
 Then register the webhook (replace URL/token):
 ```powershell

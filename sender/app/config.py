@@ -15,7 +15,9 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.1")
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
 
-GOOGLE_SERVICE_ACCOUNT_JSON = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+# Path to the service-account JSON file; relative paths resolve against project root.
+_sa = os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]
+GOOGLE_SERVICE_ACCOUNT_FILE = _sa if os.path.isabs(_sa) else str(_ROOT / _sa)
 SHEET_ID = os.environ["SHEET_ID"]
 SHEET_TAB = os.environ.get("SHEET_TAB", "Лист1")
 

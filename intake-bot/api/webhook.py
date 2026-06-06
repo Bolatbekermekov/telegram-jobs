@@ -32,7 +32,7 @@ def _reply(chat_id: int, text: str) -> None:
 
 def _build_use_case() -> ExtractLeadFromText:
     extractor = OpenAIExtractor(config.OPENAI_API_KEY, config.OPENAI_MODEL)
-    repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_JSON, config.SHEET_ID, config.SHEET_TAB)
+    repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID, config.SHEET_TAB)
     return ExtractLeadFromText(extractor, repo)
 
 
