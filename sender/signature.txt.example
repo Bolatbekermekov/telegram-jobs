@@ -1,0 +1,7 @@
+# Скопируй в signature.txt и заполни своими контактами.
+# Этот блок дописывается к КАЖДОМУ сообщению как подпись (кодом, не ИИ),
+# поэтому ссылки тут всегда корректные. signature.txt в .gitignore.
+С уважением, Имя
+Telegram: @your_username
+Email: you@example.com
+LinkedIn: https://www.linkedin.com/in/your-profile

@@ -40,6 +40,7 @@ def run() -> None:
         OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
         cv_text,
         profile_text,
+        config.SIGNATURE_TEXT,
     )
     messenger = TelethonMessenger(config.SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
     sender = SendOutreach(messenger, config.CV_PATH, config.ATTACH_CV)
@@ -69,6 +70,8 @@ def run() -> None:
 
             while True:
                 print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
+                if "[" in message:
+                    print("⚠️  Остался [плейсхолдер] — заполни через [e]dit перед отправкой.")
                 choice = _prompt("[s]end / [k]skip / [e]dit / [r]egenerate / [q]uit: ").lower()
                 if choice in ("s", "send", ""):
                     result = sender.execute(lead, message)

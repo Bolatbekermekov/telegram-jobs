@@ -48,11 +48,14 @@ def main() -> None:
         OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
         cv_text,
         profile_text,
+        config.SIGNATURE_TEXT,
     )
     message = generator.execute(lead)
     print("--- СГЕНЕРИРОВАННОЕ СООБЩЕНИЕ ---")
     print(message)
     print("---------------------------------\n")
+    if "[" in message:
+        print("⚠️  В сообщении остался [плейсхолдер] (например про компанию) — в реальной отправке заполни его вручную.\n")
 
     if args.dry_run:
         print("dry-run: ничего не отправлено.")

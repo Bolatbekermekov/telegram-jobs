@@ -3,15 +3,19 @@ from app.domain.lead import Lead
 
 
 class GenerateMessage:
-    def __init__(self, ai, cv_text: str, profile_text: str):
+    def __init__(self, ai, cv_text: str, profile_text: str, signature_text: str = ""):
         # ai: object with .generate(cv_text, profile_text, vacancy_context) -> str
         self._ai = ai
         self._cv_text = cv_text
         self._profile_text = profile_text
+        self._signature_text = signature_text.strip()
 
     def execute(self, lead: Lead) -> str:
-        return self._ai.generate(
+        body = self._ai.generate(
             cv_text=self._cv_text,
             profile_text=self._profile_text,
             vacancy_context=lead.vacancy_context or lead.raw_text,
         )
+        if self._signature_text:
+            return f"{body}\n\n{self._signature_text}"
+        return body

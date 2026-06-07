@@ -53,3 +53,15 @@ MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
 # Telethon session file lives next to the project root.
 SESSION_PATH = str(_ROOT / "sender" / "userbot")
 PROFILE_PATH = str(Path(__file__).resolve().parents[1] / "profile.md")
+
+# Fixed signature/contacts block appended to every message (NOT AI-generated, so
+# links like LinkedIn are always correct). Fill sender/signature.txt; gitignored.
+SIGNATURE_PATH = str(Path(__file__).resolve().parents[1] / "signature.txt")
+
+
+def _read_signature() -> str:
+    path = Path(SIGNATURE_PATH)
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+SIGNATURE_TEXT = _read_signature()

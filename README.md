@@ -34,7 +34,11 @@ End of week → [sender on laptop, Telethon] → reads Sheet → you approve →
 4. **Add your CV.** Drop your résumé (PDF or txt) into the `sender/cv/` folder — the
    sender picks up the file from there automatically. This folder is **gitignored** (your
    CV is never committed). Optionally set `CV_PATH` in `.env` to a full path to override.
-5. Edit `sender/profile.md` to tune how messages position you.
+5. **Add your signature.** Copy `sender/signature.txt.example` → `sender/signature.txt`
+   and fill in your contacts (Telegram, email, **LinkedIn**, phone). This block is appended
+   to every message as the signature, so links stay correct and are never invented by the AI.
+   The file is **gitignored** (your contacts aren't committed).
+6. Edit `sender/profile.md` to tune how messages position you.
 
 ## Run the sender (local)
 ```powershell

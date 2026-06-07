@@ -8,6 +8,8 @@ cv.pdf
 # CV lives in sender/cv/ but must never be committed (public repo). Keep the folder, ignore its files.
 sender/cv/*
 !sender/cv/.gitkeep
+# Personal contacts block (has email/phone/LinkedIn). Keep the .example, ignore the real one.
+sender/signature.txt
 
 # Python
 __pycache__/
