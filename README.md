@@ -1,69 +1,300 @@
 # telegram-jobs
 
-Personal Telegram job-outreach automation.
+Личная автоматизация отклика на вакансии в Telegram.
 
-- **`intake-bot/`** — always-on cloud Telegram bot. You forward raw vacancy text to it from
-  your phone; it uses OpenAI to extract the `@nickname`/`t.me` contact + vacancy summary and
-  appends a lead to a Google Sheet (`status=new`).
-- **`sender/`** — local CLI you run on your laptop (e.g. end of week). It reads `new` leads,
-  generates a personalized message with OpenAI (using your CV + `profile.md`), shows each one
-  for approve/skip/edit, sends the DM **from your own account** (Telethon) with the CV PDF
-  attached, and updates the status in the Sheet.
+Ты в течение недели с телефона кидаешь боту текст вакансии. Бот сам достаёт контакт HR
+и сохраняет лид в Google-таблицу. В конце недели на ноутбуке запускаешь рассылку: она
+генерирует персональное сообщение по твоему CV, показывает каждое на подтверждение и
+отправляет HR **от твоего имени** с приложенным резюме.
 
 ```
-Phone → vacancy text → [intake-bot @Vercel + OpenAI] → Google Sheet (status=new)
-End of week → [sender on laptop, Telethon] → reads Sheet → you approve → sends DM → status=sent
+Телефон → текст вакансии → [бот на Vercel + OpenAI] → Google-таблица (статус: new)
+Конец недели → [рассылка на ноуте, Telethon] → читает таблицу → ты подтверждаешь → отправка → статус: sent
 ```
 
-## ⚠️ Before anything: secrets & risks
-- All secrets shared in chat are **compromised** — rotate them: OpenAI key, BotFather token
-  (`/revoke`), Google service-account key, and the my.telegram.org `api_hash`.
-- Secrets live only in `.env` and `service_account.json` — both are **gitignored**. Never commit them.
-- The sender is a **userbot**: mass messaging violates Telegram ToS and can get your account
-  **banned**. Keep `DAILY_SEND_LIMIT` low, keep the random delays, run from your home IP.
+Проект состоит из двух частей:
 
-## One-time setup
-1. Copy `.env.example` → `.env` and fill values.
-2. **Add your own Google service-account key.** This project reads Google Sheets credentials
-   from a JSON file path only (`GOOGLE_SERVICE_ACCOUNT_FILE`). Create a service account in
-   Google Cloud Console, download its key, and save it as `service_account.json` in the
-   project root. This file is **gitignored** and is **not** included in the repo — every user
-   must provide their own.
-3. Share your Google Sheet with the service-account email (the `client_email` from that JSON)
-   as **Editor**, and set `SHEET_ID` / `SHEET_TAB` in `.env`.
-4. **Add your CV.** Drop your résumé (PDF or txt) into the `sender/cv/` folder — the
-   sender picks up the file from there automatically. This folder is **gitignored** (your
-   CV is never committed). Optionally set `CV_PATH` in `.env` to a full path to override.
-5. **Add your signature.** Copy `sender/signature.txt.example` → `sender/signature.txt`
-   and fill in your contacts (Telegram, email, **LinkedIn**, phone). This block is appended
-   to every message as the signature, so links stay correct and are never invented by the AI.
-   The file is **gitignored** (your contacts aren't committed).
-6. Edit `sender/profile.md` to tune how messages position you.
+| Папка | Что это | Где работает |
+|---|---|---|
+| `intake-bot/` | Telegram-бот-приёмник: принимает вакансии, достаёт контакт через OpenAI, пишет лид в таблицу | Облако (Vercel), 24/7 |
+| `sender/` | Локальная рассылка: генерит сообщение по CV, отправляет от твоего аккаунта | Твой ноутбук |
 
-## Run the sender (local)
+---
+
+> [!CAUTION]
+> ## Риск бана аккаунта — прочитай обязательно
+> Рассылка идёт через **твой личный Telegram-аккаунт** (userbot). Массовые сообщения
+> незнакомым людям **нарушают правила Telegram**, и аккаунт могут **заблокировать**.
+>
+> **Настоятельно рекомендуется завести ОТДЕЛЬНЫЙ номер** (новая SIM стоит недорого) и
+> использовать для рассылки именно его, а не свой основной аккаунт. Тогда в случае бана
+> ты не потеряешь личный аккаунт с перепиской.
+>
+> Чтобы снизить риск:
+> - держи низкий дневной лимит (`DAILY_SEND_LIMIT`, по умолчанию 20);
+> - не убирай случайные паузы между отправками (`MIN/MAX_DELAY_SECONDS`);
+> - запускай рассылку **с домашнего IP** (не из облака/VPS);
+> - подтверждай каждое сообщение вручную, не шли всё подряд.
+
+> [!IMPORTANT]
+> Все ключи и токены, которые ты куда-то вставляешь, держи **только** в `.env` и
+> `service_account.json`. Эти файлы в `.gitignore` и **никогда не коммитятся**. Если
+> случайно засветил секрет — сразу его перевыпусти (rotate).
+
+---
+
+## Что понадобится
+
+- **Python 3.10+** (`python --version`).
+- **Telegram-аккаунт** для рассылки (лучше на отдельном номере, см. предупреждение выше).
+- **Ключ OpenAI API.**
+- **Google-аккаунт** (для таблицы и сервис-аккаунта).
+- Для облачного бота: аккаунты **GitHub** и **Vercel** (бесплатно).
+
+---
+
+## Шаг 1. Склонировать проект
+
 ```powershell
-cd telegram-jobs\sender
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python run.py
+git clone https://github.com/Bolatbekermekov/telegram-jobs.git
+cd telegram-jobs
 ```
-First run asks for your phone number + Telegram login code (creates `userbot.session`).
-Per lead: `s`=send, `k`=skip, `e`=edit, `r`=regenerate, `q`=quit.
 
-## Deploy the intake bot (Vercel)
-Set **Root Directory = `intake-bot`** when importing the repo.
+---
 
-Env vars to add in the Vercel dashboard: `OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`,
-`GOOGLE_SERVICE_ACCOUNT_JSON`, `SHEET_ID`, `SHEET_TAB`, and optionally `TELEGRAM_WEBHOOK_SECRET`.
+## Шаг 2. Google-таблица и доступ к ней
 
-**Credentials on the server (public repo):** `service_account.json` is gitignored and must
-**never** be committed to a public repo. Instead, on Vercel set `GOOGLE_SERVICE_ACCOUNT_JSON`
-to the **full JSON content** of your service-account key (open `service_account.json`, copy
-everything, paste it as the value). The cloud component reads creds from this env var; locally
-it keeps using the `GOOGLE_SERVICE_ACCOUNT_FILE` path. You do this once, not per deploy.
+**2.1. Создай таблицу.** Зайди на [sheets.new](https://sheets.new). Из адреса скопируй
+`SHEET_ID` — это часть URL между `/d/` и `/edit`:
+```
+https://docs.google.com/spreadsheets/d/ЭТО_И_ЕСТЬ_SHEET_ID/edit
+```
+Запомни также имя вкладки внизу (по умолчанию `Лист1`) — это `SHEET_TAB`.
+Заголовки колонок создавать вручную **не нужно** — бот сам их проставит при первом лиде.
 
-Then register the webhook (replace URL/token):
+**2.2. Создай сервис-аккаунт Google** (робот, от имени которого код пишет в таблицу):
+1. Открой [Google Cloud Console](https://console.cloud.google.com/) → создай проект.
+2. В поиске найди и включи **Google Sheets API** (APIs & Services → Enable).
+3. APIs & Services → **Credentials** → Create credentials → **Service account** → создай.
+4. Открой созданный сервис-аккаунт → вкладка **Keys** → Add key → **Create new key** →
+   тип **JSON** → скачается файл.
+5. Переименуй его в **`service_account.json`** и положи в **корень проекта** (рядом с этим
+   README). Файл в `.gitignore`, в репозиторий не попадёт — у каждого свой.
+
+**2.3. Дай сервис-аккаунту доступ к таблице (без этого ничего не заработает).**
+Открой `service_account.json`, найди поле `client_email` (вид
+`...@...iam.gserviceaccount.com`). Скопируй его. В таблице нажми **Поделиться** и добавь
+этот email с правом **Редактор**.
+
+> [!NOTE]
+> Сервис-аккаунт в API — это только «личность» робота. Право писать в КОНКРЕТНУЮ таблицу
+> даётся отдельно, через «Поделиться». Если пропустить — будет ошибка доступа `403`.
+
+**2.4. (необязательно) Красивое оформление таблицы.** В таблице: Расширения → Apps Script,
+вставь содержимое `google-apps-script/Formatting.gs`, сохрани и запусти `applyFormatting`.
+Появятся цветные статусы и удобное форматирование.
+
+---
+
+## Шаг 3. Получить ключи и токены
+
+**3.1. OpenAI API key** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+→ Create new secret key. Это `OPENAI_API_KEY`.
+
+**3.2. Токен бота-приёмника** — в Telegram напиши [@BotFather](https://t.me/BotFather):
+`/newbot` → задай имя и @username бота → он пришлёт **токен** вида `123456:AA...`.
+Это `TELEGRAM_BOT_TOKEN`. Этим ботом ты будешь кидать вакансии.
+
+**3.3. api_id и api_hash для рассылки** — зайди на
+[my.telegram.org](https://my.telegram.org) под номером аккаунта-**отправителя** → API
+development tools → создай приложение. Получишь `TELEGRAM_API_ID` (число) и
+`TELEGRAM_API_HASH` (строка).
+
+---
+
+## Шаг 4. Заполнить `.env`
+
+Скопируй пример и открой в редакторе:
 ```powershell
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-app>.vercel.app/"
+copy .env.example .env
 ```
-Now send a vacancy to your bot in Telegram — a `new` row should appear in the Sheet.
+Заполни значения (в `.env.example` каждая переменная подробно описана):
+
+| Переменная | Что это |
+|---|---|
+| `OPENAI_API_KEY` | Ключ OpenAI (шаг 3.1) |
+| `OPENAI_MODEL` | Модель, напр. `gpt-5.1` |
+| `TELEGRAM_BOT_TOKEN` | Токен бота-приёмника (шаг 3.2) |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | Данные аккаунта-отправителя (шаг 3.3) |
+| `GOOGLE_SERVICE_ACCOUNT_FILE` | Путь к ключу, обычно `./service_account.json` |
+| `SHEET_ID` / `SHEET_TAB` | ID таблицы и имя вкладки (шаг 2.1) |
+| `CV_PATH` | Можно оставить **пустым** — резюме берётся из `sender/cv/` (шаг 5) |
+| `DAILY_SEND_LIMIT` | Максимум отправок за запуск (по умолчанию 20) |
+| `MIN_DELAY_SECONDS` / `MAX_DELAY_SECONDS` | Случайная пауза между отправками (анти-бан) |
+| `ATTACH_CV` | `true` — прикладывать PDF резюме к сообщению |
+
+---
+
+## Шаг 5. Резюме, подпись и промпт
+
+**5.1. Резюме.** Положи свой файл резюме (PDF или txt) в папку **`sender/cv/`**.
+Рассылка сама его подхватит. Папка в `.gitignore` — твоё CV в репозиторий не попадёт.
+
+**5.2. Подпись с контактами.** Скопируй пример и впиши свои контакты:
+```powershell
+copy sender\signature.txt.example sender\signature.txt
+```
+Внутри укажи Telegram, email, **LinkedIn**, телефон. Этот блок дописывается к **каждому**
+сообщению как подпись (кодом, а не ИИ — поэтому ссылки всегда корректные). Файл в
+`.gitignore`. LinkedIn прикрепляется **ссылкой в подписи**, не файлом.
+
+**5.3. Промпт (как тебя «продаёт» сообщение).** Это файл **`sender/profile.md`** — открой
+и подстрой под себя: кто ты, как позиционировать под роли (разработка / QA), тон, стиль.
+Системные жёсткие правила (без тире, без указания уровня, формат) лежат в
+`sender/app/infrastructure/openai_client.py`. Для большинства правок хватает `profile.md`.
+
+---
+
+## Шаг 6. Установить зависимости (один раз)
+
+```powershell
+cd sender
+python -m venv .venv
+.\.venv\Scripts\pip.exe install -r requirements.txt
+cd ..
+```
+Активировать venv каждый раз **не обязательно** — команды `make` ниже сами используют
+`sender/.venv/Scripts/python.exe`.
+
+---
+
+## Шаг 7. Войти в Telegram по QR-коду
+
+```powershell
+make login
+```
+1. В терминале появится **QR-код**.
+2. На телефоне открой Telegram **под аккаунтом-отправителем** (тем самым номером из шага 3.3).
+3. Настройки → **Устройства** → **Подключить устройство** → наведи камеру на QR в терминале.
+4. Увидишь `✅ Вход выполнен как …` — создастся файл сессии, больше входить не нужно.
+
+> [!TIP]
+> Вход именно по QR, потому что код подтверждения Telegram часто приходит **внутрь
+> приложения** (в чат «Telegram»), а не по SMS, и его легко не найти. QR это обходит.
+> Если QR в терминале «кривой» — разверни окно на весь экран и уменьши шрифт (Ctrl+−),
+> чтобы он влез целиком.
+
+---
+
+## Шаг 8. Проверить генерацию и отправку
+
+**Показать сгенерированное сообщение (без отправки):**
+```powershell
+make dry
+```
+
+**Отправить тестовое сообщение самому себе** (получатель задан в `Makefile`, переменная `TO`):
+```powershell
+make test
+```
+Проверь: пришёл ли текст и приложился ли PDF. Статус лида в таблице при этом **не меняется**.
+
+---
+
+## Шаг 9. Реальная рассылка
+
+```powershell
+make run
+```
+По каждому лиду со статусом `new` бот сгенерит сообщение и спросит, что делать:
+
+| Клавиша | Действие |
+|---|---|
+| `s` | Отправить (DM с резюме уходит HR, статус → `sent`) |
+| `e` | Отредактировать текст вручную |
+| `r` | Перегенерировать |
+| `k` | Пропустить (статус → `skipped`) |
+| `q` | Выйти |
+
+> [!WARNING]
+> Если в тексте остался `[плейсхолдер]` (например «почему именно эта компания»), программа
+> предупредит. **Заполни его через `e`** перед отправкой — иначе HR увидит шаблон.
+
+---
+
+## Шаг 10. (опционально) Облачный бот-приёмник на Vercel
+
+Чтобы кидать вакансии с телефона в любой момент (даже когда ноут выключен), задеплой
+`intake-bot/` в облако.
+
+1. Запушь проект в **свой** GitHub-репозиторий.
+2. На [vercel.com](https://vercel.com) → Add New → Project → импортируй репозиторий.
+3. **Root Directory** укажи `intake-bot`.
+4. В **Environment Variables** добавь: `OPENAI_API_KEY`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`,
+   `SHEET_ID`, `SHEET_TAB`, и **`GOOGLE_SERVICE_ACCOUNT_JSON`** — сюда вставь **всё
+   содержимое** файла `service_account.json` (файл в облако не попадает, т.к. он в
+   `.gitignore`).
+5. Deploy. Получишь адрес вида `https://твой-проект.vercel.app/`.
+6. **Привяжи webhook** (подставь свой токен и адрес):
+   ```powershell
+   curl "https://api.telegram.org/bot<ТОКЕН>/setWebhook?url=https://твой-проект.vercel.app/"
+   ```
+7. **Меню команд бота** (чтобы по `/` показывались подсказки):
+   ```powershell
+   $token = "<ТОКЕН>"
+   $body = '{"commands":[{"command":"status","description":"Сводка по лидам"},{"command":"start","description":"Запуск и помощь"}]}'
+   Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$token/setMyCommands" -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+   ```
+8. Готово. Кидай боту текст вакансии → он ответит `✅ Сохранил лид`. Команда `/status`
+   покажет, сколько лидов `new` и сколько `sent`.
+
+---
+
+## Как этим пользоваться каждый день
+
+1. **В течение недели:** увидел вакансию → скопировал текст (с @ником или ссылкой на HR)
+   → отправил своему боту. Бот сохранил лид со статусом `new`. Проверить количество — `/status`.
+2. **В конце недели:** на ноуте `make run` → проходишь по лидам, подтверждаешь/правишь/шлёшь.
+
+---
+
+## Шпаргалка по командам
+
+| Команда | Что делает |
+|---|---|
+| `make login` | Войти в Telegram по QR (один раз) |
+| `make dry` | Показать сгенерированное сообщение, без отправки |
+| `make test` | Отправить тест самому себе (с резюме) |
+| `make run` | Реальная рассылка с подтверждением каждого |
+
+---
+
+## Где править промпт
+
+- **`sender/profile.md`** — основные правила: кто ты, позиционирование под роли, тон, стиль.
+  Правь здесь в первую очередь.
+- **`sender/signature.txt`** — твои контакты (Telegram, email, LinkedIn, телефон), подпись.
+- **`sender/app/infrastructure/openai_client.py`** — жёсткие системные правила (без тире и т.п.),
+  трогать обычно не нужно.
+
+---
+
+## Безопасность и приватность
+
+Никогда не коммитятся (в `.gitignore`): `.env`, `service_account.json`, файл сессии
+`*.session`, резюме в `sender/cv/`, контакты `sender/signature.txt`. Если где-то засветил
+секрет — перевыпусти его (OpenAI key, токен бота через BotFather `/revoke`, ключ
+сервис-аккаунта, `api_hash`).
+
+---
+
+## Если что-то не работает
+
+| Симптом | Причина и решение |
+|---|---|
+| `make test`/`/status`: ошибка доступа `403` | Таблица не расшарена на сервис-аккаунт. Шаг 2.3. |
+| Код для входа не приходит | Так и должно быть, используй `make login` (вход по QR). |
+| `--to: expected one argument` в PowerShell | `@` PowerShell принимает за спец-символ. Используй `make test` (там ник в кавычках). |
+| QR в терминале нечитаемый | Разверни окно, уменьши шрифт (Ctrl+−). |
+| `database is locked` при входе | Уже запущен другой `make`-процесс. Закрой его (Ctrl+C) и повтори. |
+| Бот не отвечает на вакансию | Проверь webhook (шаг 10.6) и переменные окружения на Vercel. |
