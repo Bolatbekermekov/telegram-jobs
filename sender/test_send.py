@@ -4,9 +4,9 @@ recipient (yourself), WITHOUT changing the lead's status in the sheet.
 Use it to verify the prompt + CV attachment before the real run.
 
 From the sender folder:
-    python test_send.py --dry-run                      # only generate + print, no Telegram
-    python test_send.py --to @bolatbekermeko_v         # send the test to yourself
-    python test_send.py --to @bolatbekermeko_v --id 1  # pick a specific lead id
+    python test_send.py --dry-run                  # only generate + print, no Telegram
+    python test_send.py --to @your_username        # send the test to yourself
+    python test_send.py --to @your_username --id 1 # pick a specific lead id
 """
 import argparse
 import sys
@@ -24,7 +24,7 @@ from app.infrastructure.telethon_client import TelethonMessenger  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--to", default="@bolatbekermeko_v", help="test recipient")
+    parser.add_argument("--to", default=None, help="test recipient @username (required to send)")
     parser.add_argument("--id", default=None, help="lead id to use (default: first 'new')")
     parser.add_argument("--dry-run", action="store_true", help="generate only, do not send")
     args = parser.parse_args()
@@ -56,6 +56,10 @@ def main() -> None:
 
     if args.dry_run:
         print("dry-run: ничего не отправлено.")
+        return
+
+    if not args.to:
+        print("Укажи получателя: --to @your_username  (или --dry-run, чтобы только показать текст).")
         return
 
     print(f"Отправляю ТЕСТ на {args.to} (CV приложу: {config.ATTACH_CV})...")
