@@ -6,11 +6,12 @@
 #   make test  -> send a TEST message to yourself (TO below); lead status is NOT changed
 #   make run   -> real interactive run: approve / edit / send per lead
 #   make login -> diagnose / complete the Telegram login (shows how the code is sent)
+#   make qr    -> log in by scanning a QR code (use when the code never arrives)
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run login
+.PHONY: dry test run login qr
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -23,3 +24,6 @@ run:
 
 login:
 	$(PYTHON) sender/login_debug.py
+
+qr:
+	$(PYTHON) sender/qr_login.py

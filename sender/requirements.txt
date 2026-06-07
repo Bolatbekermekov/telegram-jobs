@@ -4,3 +4,4 @@ gspread==6.1.4
 google-auth==2.37.0
 pypdf==5.1.0
 python-dotenv==1.0.1
+qrcode==8.0
