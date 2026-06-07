@@ -2,10 +2,25 @@
 from openai import OpenAI
 
 _SYSTEM = (
-    "Ты пишешь персональные сообщения для отклика на вакансию от лица кандидата. "
-    "Следуй правилам позиционирования из PROFILE и фактам из CV. "
-    "Не выдумывай факты, которых нет в CV. Верни ТОЛЬКО текст сообщения, без пояснений."
+    "Ты пишешь персональное сообщение для отклика на вакансию ОТ ЛИЦА кандидата "
+    "(практикующего software engineer уровня middle, который рассматривает и разработку, и QA). "
+    "Строго следуй правилам позиционирования из PROFILE и опирайся только на факты из CV; "
+    "ничего не выдумывай. Пиши как живой человек в личке Telegram: коротко, по делу, тепло, "
+    "без канцелярита и шаблонных клише. Язык сообщения = язык вакансии. "
+    "КРИТИЧЕСКОЕ правило стиля: НИКОГДА не используй тире — ни длинное «—», ни среднее «–». "
+    "Вместо тире ставь запятую, точку или скобки. Обычный дефис допустим только внутри слов. "
+    "Верни ТОЛЬКО текст сообщения, без пояснений и без подписи-приписки от тебя."
 )
+
+
+def _strip_dashes(text: str) -> str:
+    """Safety net: remove em/en dashes even if the model slips one in."""
+    for sep in (" — ", " – ", " —", "— ", " –", "– "):
+        text = text.replace(sep, ", ")
+    text = text.replace("—", ", ").replace("–", ", ")
+    while ", ," in text:
+        text = text.replace(", ,", ",")
+    return text.replace("  ", " ").strip()
 
 
 class OpenAIMessageGenerator:
@@ -27,4 +42,4 @@ class OpenAIMessageGenerator:
                 {"role": "user", "content": user},
             ],
         )
-        return resp.choices[0].message.content.strip()
+        return _strip_dashes((resp.choices[0].message.content or "").strip())
