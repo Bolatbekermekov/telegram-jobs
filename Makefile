@@ -5,13 +5,12 @@
 #   make dry   -> generate a message for a lead and just print it (no Telegram)
 #   make test  -> send a TEST message to yourself (TO below); lead status is NOT changed
 #   make run   -> real interactive run: approve / edit / send per lead
-#   make login -> diagnose / complete the Telegram login (shows how the code is sent)
-#   make qr    -> log in by scanning a QR code (use when the code never arrives)
+#   make login -> log in to Telegram by scanning a QR code (no SMS/app code needed)
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run login qr
+.PHONY: dry test run login
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -23,7 +22,4 @@ run:
 	$(PYTHON) sender/run.py
 
 login:
-	$(PYTHON) sender/login_debug.py
-
-qr:
 	$(PYTHON) sender/qr_login.py
