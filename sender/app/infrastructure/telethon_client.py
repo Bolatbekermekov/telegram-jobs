@@ -18,6 +18,10 @@ def _normalize(nickname: str) -> str:
 class TelethonMessenger:
     def __init__(self, session_path: str, api_id: int, api_hash: str):
         self._client = TelegramClient(session_path, api_id, api_hash)
+        # No Markdown/HTML parsing: send raw text so underscores in @usernames and
+        # URLs aren't mangled. Telegram auto-detects URLs, emails and @mentions as
+        # clickable links on its own.
+        self._client.parse_mode = None
 
     def start(self) -> None:
         # First run prompts for phone number + login code in the console.
