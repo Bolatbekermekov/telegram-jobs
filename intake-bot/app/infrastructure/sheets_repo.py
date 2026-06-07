@@ -8,6 +8,7 @@ from google.oauth2.service_account import Credentials
 from app.domain.lead import COLUMNS, STATUS_NEW, ExtractedLead
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+_STATUS_COL = COLUMNS.index("Статус") + 1  # 1-based column number
 
 
 def _load_credentials(file_path: str, json_content: str) -> Credentials:
@@ -53,3 +54,14 @@ class SheetsRepo:
         ]
         self._ws.append_row(row, value_input_option="USER_ENTERED")
         return row_id
+
+    def count_by_status(self) -> dict[str, int]:
+        """Tally leads by the 'Статус' column (excludes the header row)."""
+        statuses = self._ws.col_values(_STATUS_COL)[1:]
+        counts: dict[str, int] = {}
+        for value in statuses:
+            key = (value or "").strip()
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        return counts

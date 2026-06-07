@@ -30,15 +30,39 @@ def _reply(chat_id: int, text: str) -> None:
         pass  # replying is best-effort; the lead is already saved
 
 
-def _build_use_case() -> ExtractLeadFromText:
-    extractor = OpenAIExtractor(config.OPENAI_API_KEY, config.OPENAI_MODEL)
-    repo = SheetsRepo(
+def _build_repo() -> SheetsRepo:
+    return SheetsRepo(
         config.GOOGLE_SERVICE_ACCOUNT_FILE,
         config.GOOGLE_SERVICE_ACCOUNT_JSON,
         config.SHEET_ID,
         config.SHEET_TAB,
     )
-    return ExtractLeadFromText(extractor, repo)
+
+
+def _build_use_case() -> ExtractLeadFromText:
+    extractor = OpenAIExtractor(config.OPENAI_API_KEY, config.OPENAI_MODEL)
+    return ExtractLeadFromText(extractor, _build_repo())
+
+
+# Human-readable labels for the statuses we know about, in display order.
+_STATUS_LABELS = [
+    ("new", "🆕 Новые"),
+    ("sent", "✅ Отправлено"),
+    ("skipped", "⏭ Пропущено"),
+    ("failed", "❌ Ошибки"),
+]
+
+
+def _format_status(counts: dict) -> str:
+    known = {key for key, _ in _STATUS_LABELS}
+    lines = ["📊 Статус лидов"]
+    for key, label in _STATUS_LABELS:
+        lines.append(f"{label}: {counts.get(key, 0)}")
+    for key in sorted(counts):
+        if key not in known:
+            lines.append(f"❔ {key}: {counts[key]}")
+    lines.append(f"Всего: {sum(counts.values())}")
+    return "\n".join(lines)
 
 
 @app.get("/")
@@ -65,7 +89,18 @@ async def telegram_webhook(
         return {"ok": True}
 
     if text.startswith("/start"):
-        _reply(chat_id, "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.")
+        _reply(
+            chat_id,
+            "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.\n"
+            "Команда /status — сводка по лидам (сколько new / sent).",
+        )
+        return {"ok": True}
+
+    if text.startswith("/status"):
+        try:
+            _reply(chat_id, _format_status(_build_repo().count_by_status()))
+        except Exception as exc:  # noqa: BLE001
+            _reply(chat_id, f"❌ Не смог прочитать статус: {exc}")
         return {"ok": True}
 
     try:
