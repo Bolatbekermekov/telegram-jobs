@@ -46,6 +46,10 @@ def _resolve_cv_path() -> str:
 CV_PATH = _resolve_cv_path()
 ATTACH_CV = os.environ.get("ATTACH_CV", "true").lower() == "true"
 
+# If true, the sender skips the per-lead prompt and sends everything automatically
+# (always send, then wait the random delay). False (default) = ask send/edit/skip per lead.
+AUTO_SEND = os.environ.get("AUTO_SEND", "false").lower() == "true"
+
 DAILY_SEND_LIMIT = int(os.environ.get("DAILY_SEND_LIMIT", "20"))
 MIN_DELAY_SECONDS = int(os.environ.get("MIN_DELAY_SECONDS", "40"))
 MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
