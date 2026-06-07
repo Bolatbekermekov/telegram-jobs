@@ -31,7 +31,9 @@ End of week → [sender on laptop, Telethon] → reads Sheet → you approve →
    must provide their own.
 3. Share your Google Sheet with the service-account email (the `client_email` from that JSON)
    as **Editor**, and set `SHEET_ID` / `SHEET_TAB` in `.env`.
-4. Put your CV at the path in `CV_PATH` (PDF or txt).
+4. **Add your CV.** Drop your résumé (PDF or txt) into the `sender/cv/` folder — the
+   sender picks up the file from there automatically. This folder is **gitignored** (your
+   CV is never committed). Optionally set `CV_PATH` in `.env` to a full path to override.
 5. Edit `sender/profile.md` to tune how messages position you.
 
 ## Run the sender (local)
