@@ -10,6 +10,8 @@ sender/cv/*
 !sender/cv/.gitkeep
 # Personal contacts block (has email/phone/LinkedIn). Keep the .example, ignore the real one.
 sender/signature.txt
+# Local Makefile has your personal @username baked in. Keep the .example, ignore the real one.
+sender/Makefile
 
 # Python
 __pycache__/
