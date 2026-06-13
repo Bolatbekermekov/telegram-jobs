@@ -11,6 +11,22 @@ _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _STATUS_COL = COLUMNS.index("Статус") + 1  # 1-based column number
 
 
+def lead_to_row(lead, row_id, now):
+    """Build the positional sheet row for one lead (matches COLUMNS order)."""
+    return [
+        row_id,                  # id
+        now,                     # Дата добавления
+        lead.raw_text,           # Исходный текст
+        lead.platform,           # Платформа
+        lead.target,             # Цель
+        lead.vacancy_context,    # Вакансия
+        "",                      # Сообщение
+        STATUS_NEW,              # Статус
+        "",                      # Дата отправки
+        "",                      # Заметка
+    ]
+
+
 def _load_credentials(file_path: str, json_content: str) -> Credentials:
     """Local: load from a JSON file path. Cloud: load from JSON content (env var)."""
     if json_content.strip():
@@ -41,18 +57,7 @@ class SheetsRepo:
         self._ensure_header()
         row_id = self._next_id()
         now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-        row = [
-            row_id,                  # id
-            now,                     # Дата добавления
-            lead.raw_text,           # Исходный текст
-            lead.platform,           # Платформа
-            lead.nickname,           # Цель (@nick / link / email / etc.)
-            lead.vacancy_context,    # Вакансия
-            "",                      # Сообщение
-            STATUS_NEW,              # Статус
-            "",                      # Дата отправки
-            "",                      # Заметка
-        ]
+        row = lead_to_row(lead, row_id, now)
         self._ws.append_row(row, value_input_option="USER_ENTERED")
         return row_id
 
