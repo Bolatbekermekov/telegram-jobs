@@ -15,7 +15,8 @@ var HEADERS = [
   'id',
   'Дата добавления',
   'Исходный текст',
-  'Ник/ссылка',
+  'Платформа',
+  'Цель',
   'Вакансия',
   'Сообщение',
   'Статус',
@@ -24,7 +25,7 @@ var HEADERS = [
 ];
 
 // Ширина колонок (px), по индексу HEADERS.
-var WIDTHS = [50, 130, 320, 150, 300, 360, 110, 130, 220];
+var WIDTHS = [50, 130, 320, 100, 150, 300, 360, 110, 130, 220];
 
 // Цвета статусов.
 var STATUS_COLORS = {
@@ -87,12 +88,12 @@ function setWrapAndAlign_(sh) {
   var body = sh.getRange(2, 1, lastRow - 1, HEADERS.length);
   body.setVerticalAlignment('top').setFontSize(10);
 
-  // Перенос текста: Исходный текст(3), Вакансия(5), Сообщение(6), Заметка(9).
-  [3, 5, 6, 9].forEach(function (col) {
+  // Перенос текста: Исходный текст(3), Вакансия(6), Сообщение(7), Заметка(10).
+  [3, 6, 7, 10].forEach(function (col) {
     sh.getRange(2, col, lastRow - 1, 1).setWrap(true);
   });
-  // По центру: id(1), Статус(7), даты(2,8).
-  [1, 2, 7, 8].forEach(function (col) {
+  // По центру: id(1), Платформа(4), Статус(8), даты(2,9).
+  [1, 2, 4, 8, 9].forEach(function (col) {
     sh.getRange(2, col, lastRow - 1, 1).setHorizontalAlignment('center');
   });
 }
@@ -109,7 +110,7 @@ function freezeAndBanding_(sh) {
 
 /** Условное форматирование колонки «Статус» по значению. */
 function applyStatusRules_(sh) {
-  var statusCol = HEADERS.indexOf('Статус') + 1; // 7
+  var statusCol = HEADERS.indexOf('Статус') + 1; // 8
   var maxRows = sh.getMaxRows();
   var statusRange = sh.getRange(2, statusCol, maxRows - 1, 1);
 

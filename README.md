@@ -307,6 +307,37 @@ AUTO_SEND=true
 
 ---
 
+## Платформы
+
+Sender поддерживает пять каналов для отправки откликов:
+
+| Платформа | Как включить |
+|---|---|
+| **Telegram** | Работает из коробки. Нужны `TELEGRAM_API_ID` и `TELEGRAM_API_HASH` (шаг 3.3). |
+| **LinkedIn** | Задай `LINKEDIN_STATE_PATH` (путь к файлу сессии браузера) и `BROWSER_HEADLESS=false`. При первом запуске войди вручную — сессия сохранится. |
+| **Wellfound** | Аналогично LinkedIn: задай `WELLFOUND_STATE_PATH` и `BROWSER_HEADLESS=false`. |
+| **HeadHunter** | Официальное API: задай `HH_ACCESS_TOKEN` и `HH_RESUME_ID`. Токен получить на [dev.hh.ru](https://dev.hh.ru). |
+| **Email (SMTP)** | Задай `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM_NAME`. Для Gmail создай **App Password** в настройках безопасности аккаунта. |
+
+Все переменные задокументированы в `.env.example` в блоке в конце файла.
+
+**Первоначальный вход для LinkedIn и Wellfound** (один раз):
+```powershell
+# LinkedIn
+sender\.venv\Scripts\python.exe sender/run.py --platform linkedin --login
+# Wellfound
+sender\.venv\Scripts\python.exe sender/run.py --platform wellfound --login
+```
+После входа браузер сохраняет сессию в файл, указанный в `*_STATE_PATH`, и при следующих запусках браузер не нужен (если `BROWSER_HEADLESS=true`).
+
+> [!CAUTION]
+> **LinkedIn и Wellfound: риск блокировки аккаунта.** Автоматизированная рассылка через браузер
+> **нарушает правила использования (ToS)** обоих сервисов. Использование этих каналов ведётся
+> на твой страх и риск: аккаунт может быть **временно или навсегда заблокирован**.
+> Для LinkedIn особенно рекомендуется использовать аккаунт не с основным профилем.
+
+---
+
 ## Где править промпт
 
 - **`sender/profile.md`** — основные правила: кто ты, позиционирование под роли, тон, стиль.

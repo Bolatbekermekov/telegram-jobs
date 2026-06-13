@@ -19,7 +19,8 @@ from app.application.generate_message import GenerateMessage  # noqa: E402
 from app.infrastructure.cv_loader import load_cv_text, load_text_file  # noqa: E402
 from app.infrastructure.openai_client import OpenAIMessageGenerator  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
-from app.infrastructure.telethon_client import TelethonMessenger  # noqa: E402
+from app.infrastructure.channels.telegram import TelegramChannel  # noqa: E402
+from app.domain.channel import OutreachContent  # noqa: E402
 
 
 def main() -> None:
@@ -41,7 +42,7 @@ def main() -> None:
         leads = [lead for lead in leads if lead.lead_id == str(args.id)] or leads[:1]
     lead = leads[0]
 
-    print(f"Лид #{lead.lead_id}  ->  {lead.nickname}")
+    print(f"Лид #{lead.lead_id}  ->  {lead.target}")
     print(f"Вакансия: {lead.vacancy_context or lead.raw_text}\n")
 
     generator = GenerateMessage(
@@ -67,13 +68,13 @@ def main() -> None:
 
     print(f"Отправляю ТЕСТ на {args.to} (CV приложу: {config.ATTACH_CV})...")
     print("При первом запуске Telegram попросит номер телефона и код из приложения.")
-    messenger = TelethonMessenger(
+    messenger = TelegramChannel(
         config.SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH
     )
     messenger.start()
     try:
         attachment = config.CV_PATH if config.ATTACH_CV else None
-        messenger.send(args.to, message, attachment)
+        messenger.send(args.to, OutreachContent(body=message, attachment_path=attachment))
         print("✅ Тест отправлен. Проверь Telegram.")
     finally:
         messenger.stop()

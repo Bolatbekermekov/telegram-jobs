@@ -1,19 +1,23 @@
-"""Interactive CLI: read `new` leads, generate, approve per lead, send, update sheet.
+"""Interactive CLI: read `new` leads, generate, approve, send across platforms.
 
-Default mode asks send/edit/skip per lead. If AUTO_SEND=true in .env, it sends
-everything automatically (always send, then wait the random anti-ban delay).
+One run walks every new lead, picks the channel for its platform, and sends.
+Default mode asks send/edit/skip per lead. AUTO_SEND=true sends automatically.
+Per-platform daily limits and anti-ban delays apply.
 """
 import random
 import time
 
 from app import config
-from app.application.generate_message import GenerateMessage
+from app.application.format_content import format_for_channel
+from app.application.generate_message import GenerateMessage, subject_for
 from app.application.send_outreach import SendOutreach
 from app.domain.lead import STATUS_FAILED, STATUS_SENT, STATUS_SKIPPED
+from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.sheets_repo import SheetsRepo
-from app.infrastructure.telethon_client import TelethonMessenger
+
+_KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound"}
 
 
 def _prompt(msg: str) -> str:
@@ -23,54 +27,20 @@ def _prompt(msg: str) -> str:
         return ""
 
 
-def _edit_text(current: str) -> str:
-    print("\nВведи новый текст. Пустая строка = закончить ввод:\n")
-    lines: list[str] = []
-    while True:
-        line = _prompt("")
-        if line == "":
-            break
-        lines.append(line)
-    return "\n".join(lines) if lines else current
-
-
 def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
 
 
-def _deliver(sender, repo, lead, message: str) -> bool:
-    """Send one message and update the sheet status. Returns True if sent."""
-    result = sender.execute(lead, message)
-    if result.ok:
-        repo.mark_sent(lead, message, STATUS_SENT)
-        return True
-    repo.mark_status(lead, STATUS_FAILED)
-    print(f"❌ Ошибка отправки: {result.error}")
-    return False
-
-
-def _maybe_delay(sent_count: int, lead, leads: list) -> None:
-    """Random anti-ban pause between sends (skip after the last lead / at the limit)."""
-    if sent_count < config.DAILY_SEND_LIMIT and lead is not leads[-1]:
-        delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
-        print(f"⏳ Пауза {delay} c (анти-бан)...")
-        time.sleep(delay)
-
-
 def run() -> None:
-    print("== telegram-jobs sender ==")
+    print("== telegram-jobs sender (multi-platform) ==")
     cv_text = load_cv_text(config.CV_PATH)
     profile_text = load_text_file(config.PROFILE_PATH)
 
     repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID, config.SHEET_TAB)
     generator = GenerateMessage(
         OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
-        cv_text,
-        profile_text,
-        config.SIGNATURE_TEXT,
+        cv_text, profile_text, config.SIGNATURE_TEXT,
     )
-    messenger = TelethonMessenger(config.SESSION_PATH, config.TELEGRAM_API_ID, config.TELEGRAM_API_HASH)
-    sender = SendOutreach(messenger, config.CV_PATH, config.ATTACH_CV)
 
     leads = repo.fetch_new_leads()
     if not leads:
@@ -78,66 +48,91 @@ def run() -> None:
         return
 
     mode = "АВТО (без подтверждения)" if config.AUTO_SEND else "ручной"
-    print(f"Найдено новых лидов: {len(leads)}. Дневной лимит: {config.DAILY_SEND_LIMIT}. Режим: {mode}.")
-    print("Подключаюсь к Telegram (при первом запуске спросит номер и код)...")
-    messenger.start()
+    print(f"Новых лидов: {len(leads)}. Лимит/платформа: {config.DAILY_SEND_LIMIT}. Режим: {mode}.")
 
-    sent_count = 0
+    channels: dict[str, object] = {}     # platform -> started channel
+    sent_per_platform: dict[str, int] = {}
+    blocked: set[str] = set()            # platforms stopped by rate-limit
+
+    def _channel_for(platform: str):
+        if platform in channels:
+            return channels[platform]
+        ch = build_channel(platform, config)
+        print(f"Подключаюсь к каналу '{platform}'...")
+        ch.start()
+        channels[platform] = ch
+        return ch
+
     try:
         for lead in leads:
-            if sent_count >= config.DAILY_SEND_LIMIT:
-                print(f"\nДостигнут дневной лимит ({config.DAILY_SEND_LIMIT}). Останавливаюсь.")
-                break
-
-            print("\n" + "=" * 60)
-            print(f"Лид #{lead.lead_id}  →  {lead.nickname}")
-            print(f"Вакансия: {lead.vacancy_context or lead.raw_text}")
-            print("-" * 60)
-            print("Генерирую сообщение...")
-            message = generator.execute(lead)
-
-            # --- AUTO mode: send everything without asking ---
-            if config.AUTO_SEND:
-                _show(message)
-                if "[" in message:
-                    print("⚠️  Остался [плейсхолдер] — в авто-режиме пропускаю, отправь вручную позже.")
-                    continue
-                if _deliver(sender, repo, lead, message):
-                    sent_count += 1
-                    print(f"✅ Отправлено ({sent_count}/{config.DAILY_SEND_LIMIT}).")
-                    _maybe_delay(sent_count, lead, leads)
+            platform = lead.platform
+            if platform not in _KNOWN:
+                repo.mark_status(lead, STATUS_SKIPPED, note=f"unknown platform: {platform}")
+                print(f"⏭  Лид #{lead.lead_id}: неизвестная платформа '{platform}', пропуск.")
+                continue
+            if platform in blocked:
+                repo.mark_status(lead, STATUS_SKIPPED, note="platform rate-limited this run")
+                continue
+            if sent_per_platform.get(platform, 0) >= config.DAILY_SEND_LIMIT:
+                repo.mark_status(lead, STATUS_SKIPPED, note="daily limit reached")
                 continue
 
-            # --- MANUAL mode: approve per lead ---
-            while True:
-                _show(message)
-                if "[" in message:
-                    print("⚠️  Остался [плейсхолдер] — заполни через [e]dit перед отправкой.")
-                choice = _prompt("[s]end / [k]skip / [e]dit / [r]egenerate / [q]uit: ").lower()
-                if choice in ("s", "send", ""):
-                    if _deliver(sender, repo, lead, message):
-                        sent_count += 1
-                        print(f"✅ Отправлено ({sent_count}/{config.DAILY_SEND_LIMIT}).")
-                        _maybe_delay(sent_count, lead, leads)
-                    break
+            print("\n" + "=" * 60)
+            print(f"Лид #{lead.lead_id}  [{platform}]  →  {lead.target}")
+            print(f"Вакансия: {lead.vacancy_context or lead.raw_text}")
+            print("-" * 60)
+
+            try:
+                channel = _channel_for(platform)
+            except Exception as exc:  # noqa: BLE001
+                repo.mark_status(lead, STATUS_FAILED, note=f"channel start failed: {exc}")
+                print(f"❌ Не удалось поднять канал '{platform}': {exc}")
+                continue
+
+            sender = SendOutreach(channel)
+            print("Генерирую сообщение...")
+            body = generator.execute(lead)
+            subject = subject_for(lead.vacancy_context or lead.raw_text)
+            attachment = config.CV_PATH if config.ATTACH_CV else None
+            content = format_for_channel(channel, body, subject, attachment)
+
+            if not config.AUTO_SEND:
+                _show(content.body)
+                if "[" in content.body:
+                    print("⚠️  Остался [плейсхолдер] — заполни через edit перед отправкой.")
+                choice = _prompt("[s]end / [k]skip / [q]uit: ").lower()
                 if choice in ("k", "skip"):
                     repo.mark_status(lead, STATUS_SKIPPED)
                     print("⏭  Пропущено.")
-                    break
-                if choice in ("e", "edit"):
-                    message = _edit_text(message)
-                    continue
-                if choice in ("r", "regenerate"):
-                    print("Генерирую заново...")
-                    message = generator.execute(lead)
                     continue
                 if choice in ("q", "quit"):
                     print("Выход по запросу.")
                     return
-                print("Не понял. Введи s / k / e / r / q.")
+
+            result = sender.execute(lead, content)
+            if result.ok:
+                repo.mark_sent(lead, content.body, STATUS_SENT)
+                sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
+                print(f"✅ Отправлено [{platform}] "
+                      f"({sent_per_platform[platform]}/{config.DAILY_SEND_LIMIT}).")
+                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
+                print(f"⏳ Пауза {delay} c (анти-бан)...")
+                time.sleep(delay)
+            elif result.rate_limited:
+                repo.mark_status(lead, STATUS_SKIPPED, note="rate-limited")
+                blocked.add(platform)
+                print(f"🛑 Платформа '{platform}' ограничила нас — останавливаю её на этот запуск.")
+            else:
+                repo.mark_status(lead, STATUS_FAILED, note=result.error)
+                print(f"❌ Ошибка отправки: {result.error}")
     finally:
-        messenger.stop()
-        print(f"\nГотово. Отправлено за сессию: {sent_count}.")
+        for ch in channels.values():
+            try:
+                ch.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        total = sum(sent_per_platform.values())
+        print(f"\nГотово. Отправлено за сессию: {total}. По платформам: {sent_per_platform}")
 
 
 if __name__ == "__main__":

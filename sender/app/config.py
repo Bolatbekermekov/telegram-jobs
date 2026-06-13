@@ -69,3 +69,39 @@ def _read_signature() -> str:
 
 
 SIGNATURE_TEXT = _read_signature()
+
+# --- Per-platform settings (all optional; a platform is enabled when configured) ---
+
+# LinkedIn / Wellfound browser sessions
+LINKEDIN_STATE_PATH = os.environ.get(
+    "LINKEDIN_STATE_PATH", str(_ROOT / "sender" / "linkedin_state.json"))
+WELLFOUND_STATE_PATH = os.environ.get(
+    "WELLFOUND_STATE_PATH", str(_ROOT / "sender" / "wellfound_state.json"))
+BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
+
+# HeadHunter
+HH_ACCESS_TOKEN = os.environ.get("HH_ACCESS_TOKEN", "")
+HH_RESUME_ID = os.environ.get("HH_RESUME_ID", "")
+
+# Email (SMTP)
+SMTP_HOST = os.environ.get("SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "")
+
+
+def platform_enabled(platform: str, env=None) -> bool:
+    """True if the env has the minimum vars to build this platform's channel."""
+    env = os.environ if env is None else env
+    if platform == "telegram":
+        return bool(env.get("TELEGRAM_API_ID") and env.get("TELEGRAM_API_HASH"))
+    if platform == "linkedin":
+        return True  # browser login is interactive; always available
+    if platform == "wellfound":
+        return True
+    if platform == "hh":
+        return bool(env.get("HH_ACCESS_TOKEN") and env.get("HH_RESUME_ID"))
+    if platform == "email":
+        return bool(env.get("SMTP_HOST") and env.get("SMTP_USER"))
+    return False
