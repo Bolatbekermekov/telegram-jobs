@@ -13,9 +13,9 @@ def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
     if msg_btn.count() == 0:
         # Not a 1st-degree connection: a message box is unavailable here.
         raise ChannelError(f"no Message button on {profile_url} (not connected?)")
-    msg_btn.first().click()
+    msg_btn.first.click()
     page.get_by_label("Write a message…").fill(content.body)
-    page.keyboard_press("Enter")
+    page.keyboard.press("Enter")
 
 
 class LinkedInChannel:

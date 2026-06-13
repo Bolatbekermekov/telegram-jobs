@@ -11,9 +11,9 @@ def apply_via_page(page, job_url: str, content: OutreachContent) -> None:
     apply_btn = page.get_by_role("button", name="Apply")
     if apply_btn.count() == 0:
         raise ChannelError(f"no Apply button on {job_url}")
-    apply_btn.first().click()
+    apply_btn.first.click()
     page.get_by_placeholder("Write a note…").fill(content.body)
-    page.get_by_role("button", name="Submit application").first().click()
+    page.get_by_role("button", name="Submit application").first.click()
 
 
 class WellfoundChannel:

@@ -17,6 +17,7 @@ class _FakePage:
         class _Locator:
             def count(self_inner):
                 return 1 if (name != "Apply" or page._has_apply) else 0
+            @property
             def first(self_inner): return self_inner
             def click(self_inner): page.actions.append(("click", name))
         return _Locator()

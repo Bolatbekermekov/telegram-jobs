@@ -8,6 +8,7 @@ class _FakePage:
     def __init__(self, message_button=True):
         self.actions = []
         self._has_message = message_button
+        self.keyboard = _FakeKeyboard(self)
 
     def goto(self, url, **kw):
         self.actions.append(("goto", url))
@@ -20,6 +21,7 @@ class _FakePage:
                 if name == "Message":
                     return 1 if page._has_message else 0
                 return 1
+            @property
             def first(self_inner): return self_inner
             def click(self_inner): page.actions.append(("click", name))
         return _Locator()
@@ -30,8 +32,13 @@ class _FakePage:
             def fill(self_inner, text): page.actions.append(("fill", label, text))
         return _Box()
 
-    def keyboard_press(self, key):
-        self.actions.append(("press", key))
+
+class _FakeKeyboard:
+    def __init__(self, page):
+        self._page = page
+
+    def press(self, key):
+        self._page.actions.append(("press", key))
 
 
 def test_fill_and_send_messages_connection():
