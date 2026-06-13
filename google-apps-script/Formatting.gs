@@ -110,7 +110,7 @@ function freezeAndBanding_(sh) {
 
 /** Условное форматирование колонки «Статус» по значению. */
 function applyStatusRules_(sh) {
-  var statusCol = HEADERS.indexOf('Статус') + 1; // 7
+  var statusCol = HEADERS.indexOf('Статус') + 1; // 8
   var maxRows = sh.getMaxRows();
   var statusRange = sh.getRange(2, statusCol, maxRows - 1, 1);
 
