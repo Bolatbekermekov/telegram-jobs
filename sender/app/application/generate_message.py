@@ -19,3 +19,12 @@ class GenerateMessage:
         if self._signature_text:
             return f"{body}\n\n{self._signature_text}"
         return body
+
+
+def subject_for(vacancy_context: str) -> str:
+    """A short email subject derived from the vacancy text (first non-empty line)."""
+    for line in vacancy_context.splitlines():
+        line = line.strip()
+        if line:
+            return line[:120]
+    return "Заявка на вакансию"
