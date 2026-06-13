@@ -6,3 +6,4 @@ pypdf==5.1.0
 python-dotenv==1.0.1
 qrcode==8.0
 httpx==0.28.1
+playwright==1.49.1
