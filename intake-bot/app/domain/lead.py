@@ -6,7 +6,8 @@ COLUMNS = [
     "id",
     "Дата добавления",
     "Исходный текст",
-    "Ник/ссылка",
+    "Платформа",
+    "Цель",
     "Вакансия",
     "Сообщение",
     "Статус",
@@ -21,9 +22,10 @@ STATUS_NEW = "new"
 class ExtractedLead:
     """Result of parsing a raw vacancy message."""
 
-    nickname: str          # @nick or t.me/... — recipient
+    nickname: str          # @nick or t.me/... — recipient (stored in «Цель»)
     vacancy_context: str   # role / conditions / salary, summarized
     raw_text: str          # original text the user sent
+    platform: str = "telegram"  # source platform; default telegram
 
     def is_valid(self) -> bool:
         return bool(self.nickname.strip())

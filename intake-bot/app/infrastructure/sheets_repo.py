@@ -45,7 +45,8 @@ class SheetsRepo:
             row_id,                  # id
             now,                     # Дата добавления
             lead.raw_text,           # Исходный текст
-            lead.nickname,           # Ник/ссылка
+            lead.platform,           # Платформа
+            lead.nickname,           # Цель (@nick / link / email / etc.)
             lead.vacancy_context,    # Вакансия
             "",                      # Сообщение
             STATUS_NEW,              # Статус

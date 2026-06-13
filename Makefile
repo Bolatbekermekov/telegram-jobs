@@ -10,7 +10,7 @@
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run login
+.PHONY: dry test run login test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -23,3 +23,6 @@ run:
 
 login:
 	$(PYTHON) sender/qr_login.py
+
+test-unit:
+	$(PYTHON) -m pytest sender/tests -v
