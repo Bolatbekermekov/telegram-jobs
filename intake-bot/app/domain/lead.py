@@ -22,10 +22,10 @@ STATUS_NEW = "new"
 class ExtractedLead:
     """Result of parsing a raw vacancy message."""
 
-    nickname: str          # @nick or t.me/... — recipient (stored in «Цель»)
+    platform: str          # telegram | email | linkedin | hh | wellfound
+    target: str            # @nick / t.me / email / profile or vacancy URL (stored in «Цель»)
     vacancy_context: str   # role / conditions / salary, summarized
     raw_text: str          # original text the user sent
-    platform: str = "telegram"  # source platform; default telegram
 
     def is_valid(self) -> bool:
-        return bool(self.nickname.strip())
+        return bool(self.target.strip())
