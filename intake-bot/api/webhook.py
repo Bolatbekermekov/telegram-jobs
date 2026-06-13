@@ -15,7 +15,8 @@ from fastapi import FastAPI, Header, Request  # noqa: E402
 
 from app import config  # noqa: E402
 from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
-from app.infrastructure.openai_client import OpenAIExtractor  # noqa: E402
+from app.domain.contact import detect_contact  # noqa: E402
+from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
 
 app = FastAPI()
@@ -40,8 +41,8 @@ def _build_repo() -> SheetsRepo:
 
 
 def _build_use_case() -> ExtractLeadFromText:
-    extractor = OpenAIExtractor(config.OPENAI_API_KEY, config.OPENAI_MODEL)
-    return ExtractLeadFromText(extractor, _build_repo())
+    summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
+    return ExtractLeadFromText(detect_contact, summarizer, _build_repo())
 
 
 # Human-readable labels for the statuses we know about, in display order.
@@ -107,10 +108,15 @@ async def telegram_webhook(
         lead = _build_use_case().execute(text)
         _reply(
             chat_id,
-            f"✅ Сохранил лид\nКонтакт: {lead.nickname}\nВакансия: {lead.vacancy_context}",
+            f"✅ Сохранил лид\nПлатформа: {lead.platform}\nЦель: {lead.target}\n"
+            f"Вакансия: {lead.vacancy_context}",
         )
     except ValueError:
-        _reply(chat_id, "⚠️ Не нашёл @ник или t.me-ссылку в тексте. Добавь контакт и пришли снова.")
+        _reply(
+            chat_id,
+            "⚠️ Не нашёл контакт. Пришли вакансию с одним из: @ник, t.me-ссылка, "
+            "email, или ссылка LinkedIn / hh.ru / Wellfound.",
+        )
     except Exception as exc:  # noqa: BLE001
         _reply(chat_id, f"❌ Ошибка при сохранении: {exc}")
 
