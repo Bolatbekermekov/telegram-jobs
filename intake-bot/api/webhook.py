@@ -18,6 +18,10 @@ from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
 from app.domain.contact import detect_contact  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
+from app.infrastructure.candidates_gateway import (  # noqa: E402
+    CandidatesGateway, build_vacancy_message, parse_callback,
+)
+from app.infrastructure.control_gateway import ControlGateway  # noqa: E402
 
 app = FastAPI()
 
@@ -43,6 +47,87 @@ def _build_repo() -> SheetsRepo:
 def _build_use_case() -> ExtractLeadFromText:
     summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
     return ExtractLeadFromText(detect_contact, summarizer, _build_repo())
+
+
+def _book():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    if config.GOOGLE_SERVICE_ACCOUNT_JSON.strip():
+        import json
+        creds = Credentials.from_service_account_info(
+            json.loads(config.GOOGLE_SERVICE_ACCOUNT_JSON), scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file(
+            config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
+    return gspread.authorize(creds).open_by_key(config.SHEET_ID)
+
+
+def _candidates_gateway():
+    book = _book()
+    return CandidatesGateway(book.worksheet(config.CANDIDATES_TAB),
+                             book.worksheet(config.SHEET_TAB))
+
+
+def _control_gateway():
+    return ControlGateway(_book().worksheet(config.CONTROL_TAB))
+
+
+def _reply_with_buttons(chat_id: int, text: str, buttons) -> None:
+    import json
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text,
+               "reply_markup": json.dumps({"inline_keyboard": buttons})}
+    data = urllib.parse.urlencode(payload).encode()
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
+    except Exception:
+        pass
+
+
+def _do_start_search(chat_id: int) -> None:
+    from app.infrastructure.control_gateway import start_search_reply
+    ctrl = _control_gateway()
+    online = ctrl.is_worker_online(config.HEARTBEAT_STALE_SECONDS)
+    ctrl.queue_search("all")           # warn + queue regardless
+    _reply(chat_id, start_search_reply(online))
+
+
+def _do_show_vacancies(chat_id: int) -> None:
+    gw = _candidates_gateway()
+    rows = gw.pending(config.SHOW_BATCH)
+    if not rows:
+        _reply(chat_id, "Пока нет новых вакансий. Запусти /start_search.")
+        return
+    for row in rows:
+        text, buttons = build_vacancy_message(row)
+        _reply_with_buttons(chat_id, text, buttons)
+
+
+def _do_approve(cid: str) -> None:
+    _candidates_gateway().approve(cid)
+
+
+def _do_skip(cid: str) -> None:
+    _candidates_gateway().reject(cid)
+
+
+def _handle_command(text: str, chat_id: int) -> bool:
+    if text.startswith("/start_search"):
+        _do_start_search(chat_id)
+        return True
+    if text.startswith("/show_vacancies"):
+        _do_show_vacancies(chat_id)
+        return True
+    return False
+
+
+def _handle_callback(data: str) -> None:
+    action, cid = parse_callback(data)
+    if action == "approve":
+        _do_approve(cid)
+    elif action == "skip":
+        _do_skip(cid)
 
 
 # Human-readable labels for the statuses we know about, in display order.
@@ -82,6 +167,18 @@ async def telegram_webhook(
         return {"ok": False, "error": "bad_secret"}
 
     update = await request.json()
+
+    callback = update.get("callback_query")
+    if callback:
+        data = callback.get("data", "")
+        _handle_callback(data)
+        cb_msg = callback.get("message") or {}
+        cb_chat = (cb_msg.get("chat") or {}).get("id")
+        if cb_chat:
+            verdict = "✅ Взято" if data.startswith("approve") else "❌ Скип"
+            _reply(cb_chat, verdict)
+        return {"ok": True}
+
     message = update.get("message") or update.get("channel_post") or {}
     chat_id = (message.get("chat") or {}).get("id")
     text = (message.get("text") or "").strip()
@@ -93,7 +190,8 @@ async def telegram_webhook(
         _reply(
             chat_id,
             "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.\n"
-            "Команда /status — сводка по лидам (сколько new / sent).",
+            "Команда /status — сводка по лидам (сколько new / sent).\n"
+            "Команды: /start_search — искать вакансии, /show_vacancies — показать найденные.",
         )
         return {"ok": True}
 
@@ -102,6 +200,9 @@ async def telegram_webhook(
             _reply(chat_id, _format_status(_build_repo().count_by_status()))
         except Exception as exc:  # noqa: BLE001
             _reply(chat_id, f"❌ Не смог прочитать статус: {exc}")
+        return {"ok": True}
+
+    if _handle_command(text, chat_id):
         return {"ok": True}
 
     try:
