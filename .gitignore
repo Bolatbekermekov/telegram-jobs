@@ -4,6 +4,8 @@
 service_account.json
 *.session
 *.session-journal
+# Playwright login sessions (LinkedIn/Wellfound cookies = account access)
+*_state.json
 cv.pdf
 # CV lives in sender/cv/ but must never be committed (public repo). Keep the folder, ignore its files.
 sender/cv/*
