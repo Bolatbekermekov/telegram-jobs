@@ -4,6 +4,7 @@ Automating LinkedIn violates its ToS and risks an account ban (accepted by the
 user). DOM interaction is isolated in fill_and_send() because selectors drift.
 """
 from app.domain.channel import ChannelError, OutreachContent
+from app.domain.candidate import linkedin_action_for_url
 
 
 def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
@@ -16,6 +17,17 @@ def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
     msg_btn.first.click()
     page.get_by_label("Write a message…").fill(content.body)
     page.keyboard.press("Enter")
+
+
+def easy_apply_via_page(page, job_url: str, content: OutreachContent) -> None:
+    """Open a job and submit an Easy Apply note. `page` is a Playwright Page (or fake)."""
+    page.goto(job_url, wait_until="domcontentloaded")
+    apply_btn = page.get_by_role("button", name="Easy Apply")
+    if apply_btn.count() == 0:
+        raise ChannelError(f"no Easy Apply button on {job_url}")
+    apply_btn.first.click()
+    page.get_by_label("Additional questions").fill(content.body)
+    page.get_by_role("button", name="Submit application").first.click()
 
 
 class LinkedInChannel:
@@ -54,4 +66,8 @@ class LinkedInChannel:
     def send(self, target: str, content: OutreachContent) -> None:
         if self._page is None:
             raise ChannelError("LinkedInChannel.start() not called")
-        fill_and_send(self._page, target.strip(), content)
+        target = target.strip()
+        if linkedin_action_for_url(target) == "easy_apply":
+            easy_apply_via_page(self._page, target, content)
+        else:
+            fill_and_send(self._page, target, content)
