@@ -186,7 +186,9 @@ async def telegram_webhook(
     if not chat_id or not text:
         return {"ok": True}
 
-    if text.startswith("/start"):
+    # Exact match only: `text.startswith("/start")` would also swallow /start_search,
+    # which must reach _handle_command below.
+    if text == "/start" or text.startswith("/start@"):
         _reply(
             chat_id,
             "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.\n"
