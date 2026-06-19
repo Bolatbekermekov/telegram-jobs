@@ -18,7 +18,7 @@ def lead_to_row(lead, row_id, now):
         now,                     # Дата добавления
         lead.raw_text,           # Исходный текст
         lead.platform,           # Платформа
-        lead.target,             # Цель
+        lead.target,             # Источник
         lead.vacancy_context,    # Вакансия
         "",                      # Сообщение
         STATUS_NEW,              # Статус

@@ -36,9 +36,9 @@ class CandidatesRepo:
         for url in self._ws.col_values(CANDIDATE_COLUMNS.index("URL") + 1)[1:]:
             if url:
                 keys.add(normalize_url(url))
-        # main tab: «Цель» column holds the URL for linkedin/wellfound leads
+        # main tab: «Источник» column holds the URL for linkedin/wellfound leads
         from app.domain.lead import COLUMNS as MAIN
-        for tgt in self._main.col_values(MAIN.index("Цель") + 1)[1:]:
+        for tgt in self._main.col_values(MAIN.index("Источник") + 1)[1:]:
             if tgt and "http" in tgt:
                 keys.add(normalize_url(tgt))
         return keys

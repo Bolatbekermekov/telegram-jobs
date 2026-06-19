@@ -35,6 +35,6 @@ def test_candidate_row_to_lead_row_maps_main_columns():
     d = dict(zip(COLUMNS, row))
     assert d["id"] == 5
     assert d["Платформа"] == "linkedin"
-    assert d["Цель"] == "https://x/1"
+    assert d["Источник"] == "https://x/1"
     assert "Junior Dev" in d["Вакансия"]
     assert d["Статус"] == "new"

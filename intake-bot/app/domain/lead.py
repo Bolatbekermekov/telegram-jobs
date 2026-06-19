@@ -7,7 +7,7 @@ COLUMNS = [
     "Дата добавления",
     "Исходный текст",
     "Платформа",
-    "Цель",
+    "Источник",
     "Вакансия",
     "Сообщение",
     "Статус",
@@ -23,7 +23,7 @@ class ExtractedLead:
     """Result of parsing a raw vacancy message."""
 
     platform: str          # telegram | email | linkedin | hh | wellfound
-    target: str            # @nick / t.me / email / profile or vacancy URL (stored in «Цель»)
+    target: str            # @nick / t.me / email / profile or vacancy URL (stored in «Источник»)
     vacancy_context: str   # role / conditions / salary, summarized
     raw_text: str          # original text the user sent
 

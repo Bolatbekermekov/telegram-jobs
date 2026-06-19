@@ -55,7 +55,7 @@ def candidate_row_to_lead_row(row, row_id, now: str) -> list:
         "Дата добавления": now,
         "Исходный текст": vacancy,
         "Платформа": _col(row, "Платформа"),
-        "Цель": _col(row, "URL"),
+        "Источник": _col(row, "URL"),
         "Вакансия": vacancy,
         "Сообщение": "",
         "Статус": STATUS_NEW,

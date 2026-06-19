@@ -11,7 +11,7 @@ def test_lead_to_row_column_positions():
         "2026-06-14 10:00",   # Дата добавления
         "raw text",           # Исходный текст
         "linkedin",           # Платформа
-        "linkedin.com/in/x",  # Цель
+        "linkedin.com/in/x",  # Источник
         "Backend",            # Вакансия
         "",                   # Сообщение
         "new",                # Статус

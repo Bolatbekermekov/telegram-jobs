@@ -211,7 +211,7 @@ async def telegram_webhook(
         lead = _build_use_case().execute(text)
         _reply(
             chat_id,
-            f"✅ Сохранил лид\nПлатформа: {lead.platform}\nЦель: {lead.target}\n"
+            f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}\n"
             f"Вакансия: {lead.vacancy_context}",
         )
     except ValueError:

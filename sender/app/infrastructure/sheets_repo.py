@@ -29,7 +29,7 @@ def record_to_lead(rec: dict, offset: int) -> Lead:
         row=offset + 2,  # +1 header, +1 to 1-based
         lead_id=str(rec.get("id", "")),
         platform=platform,
-        target=str(rec.get("Цель", "")).strip(),
+        target=str(rec.get("Источник", "")).strip(),
         vacancy_context=str(rec.get("Вакансия", "")).strip(),
         raw_text=str(rec.get("Исходный текст", "")).strip(),
         status=STATUS_NEW,
