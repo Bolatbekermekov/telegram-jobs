@@ -178,5 +178,25 @@ def run_worker():
         time.sleep(config.WORKER_POLL_SECONDS)
 
 
+def run_login():
+    """Open LinkedIn + Wellfound login windows once and save the sessions.
+
+    Forces a visible browser (ignores BROWSER_HEADLESS) so you can actually log
+    in. After this, the worker can run headless without prompting.
+    """
+    from app.application.login import login_all
+    from app.infrastructure.search.linkedin_search import LinkedInSearcher
+    from app.infrastructure.search.wellfound_search import WellfoundSearcher
+
+    searchers = [
+        LinkedInSearcher(config.LINKEDIN_STATE_PATH, headless=False,
+                         people_enabled=config.LINKEDIN_PEOPLE_ENABLED),
+        WellfoundSearcher(config.WELLFOUND_STATE_PATH, headless=False),
+    ]
+    print("Открываю окна входа. Если сессия уже есть — окно просто закроется.")
+    done = login_all(searchers)
+    print(f"Готово. Сессии сохранены для: {', '.join(done) or '—'}")
+
+
 if __name__ == "__main__":
     run()
