@@ -3,7 +3,7 @@ from app.domain.lead import COLUMNS, Lead
 
 def test_columns_include_platform_and_target():
     assert "Платформа" in COLUMNS
-    assert "Цель" in COLUMNS
+    assert "Источник" in COLUMNS
 
 
 def test_lead_has_platform_and_target():

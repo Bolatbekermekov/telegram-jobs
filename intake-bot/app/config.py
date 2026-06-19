@@ -18,3 +18,8 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 SHEET_ID = os.environ["SHEET_ID"]
 SHEET_TAB = os.environ.get("SHEET_TAB", "Лист1")
+
+CANDIDATES_TAB = os.environ.get("CANDIDATES_TAB", "Кандидаты")
+CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
+HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
+SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))

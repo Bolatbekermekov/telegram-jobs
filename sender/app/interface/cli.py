@@ -135,5 +135,69 @@ def run() -> None:
         print(f"\nГотово. Отправлено за сессию: {total}. По платформам: {sent_per_platform}")
 
 
+def run_worker():
+    """Always-on loop: poll «Команды», scrape, write «Кандидаты». Ctrl+C to stop."""
+    import time
+
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    from app import config
+    from app.application.run_search import run_search
+    from app.application.worker_tick import worker_tick
+    from app.domain.search_request import platforms_for
+    from app.infrastructure.candidates_repo import CandidatesRepo
+    from app.infrastructure.control_repo import ControlRepo
+    from app.infrastructure.search.registry import build_searcher
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
+    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
+    main_ws = book.worksheet(config.SHEET_TAB)
+    cand_ws = book.worksheet(config.CANDIDATES_TAB)
+    ctrl_ws = book.worksheet(config.CONTROL_TAB)
+
+    control = ControlRepo(ctrl_ws)
+    candidates = CandidatesRepo(cand_ws, main_ws, config.SEARCH_LIMIT_PER_PLATFORM)
+    searchers = {p: build_searcher(p) for p in ("linkedin", "wellfound")}
+
+    def run_one(req):
+        return run_search(
+            platforms_for(req.platform), searchers, candidates,
+            keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
+            limit=config.SEARCH_LIMIT_PER_PLATFORM,
+            on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+        )
+
+    print("worker started; polling every", config.WORKER_POLL_SECONDS, "s")
+    while True:
+        try:
+            worker_tick(control, run_one)
+        except Exception as exc:  # noqa: BLE001 — survive transient sheet errors
+            print("tick error:", exc)
+        time.sleep(config.WORKER_POLL_SECONDS)
+
+
+def run_login_browser():
+    """Open LinkedIn + Wellfound login windows once and save the sessions.
+
+    Browser logins only (NOT Telegram — that's `make login_telegram`). Forces a
+    visible browser (ignores BROWSER_HEADLESS) so you can actually log in. After
+    this, the worker can run headless without prompting.
+    """
+    from app.application.login import login_all
+    from app.infrastructure.search.linkedin_search import LinkedInSearcher
+    from app.infrastructure.search.wellfound_search import WellfoundSearcher
+
+    searchers = [
+        LinkedInSearcher(config.LINKEDIN_STATE_PATH, headless=False,
+                         people_enabled=config.LINKEDIN_PEOPLE_ENABLED),
+        WellfoundSearcher(config.WELLFOUND_STATE_PATH, headless=False),
+    ]
+    print("Открываю окна входа. Если сессия уже есть — окно просто закроется.")
+    done = login_all(searchers)
+    print(f"Готово. Сессии сохранены для: {', '.join(done) or '—'}")
+
+
 if __name__ == "__main__":
     run()

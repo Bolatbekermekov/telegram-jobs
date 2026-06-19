@@ -79,6 +79,25 @@ WELLFOUND_STATE_PATH = os.environ.get(
     "WELLFOUND_STATE_PATH", str(_ROOT / "sender" / "wellfound_state.json"))
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
 
+# --- Vacancy search (sub-project C) ---
+SEARCH_KEYWORDS = [
+    k.strip() for k in os.environ.get("SEARCH_KEYWORDS", "internship,junior").split(",")
+    if k.strip()
+]
+SEARCH_LOCATION = os.environ.get("SEARCH_LOCATION", "Worldwide")
+SEARCH_LIMIT_PER_PLATFORM = int(os.environ.get("SEARCH_LIMIT_PER_PLATFORM", "15"))
+SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))
+WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
+HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
+# Recruiter-profile (DM) search is fragile/ban-prone; off by default.
+LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").lower() == "true"
+# Human-like delay between scrape actions.
+PACING_MIN_SECONDS = int(os.environ.get("PACING_MIN_SECONDS", "2"))
+PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))
+# Sheet tabs used for search coordination.
+CANDIDATES_TAB = os.environ.get("CANDIDATES_TAB", "Кандидаты")
+CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
+
 # HeadHunter
 HH_ACCESS_TOKEN = os.environ.get("HH_ACCESS_TOKEN", "")
 HH_RESUME_ID = os.environ.get("HH_RESUME_ID", "")
