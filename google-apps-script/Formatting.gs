@@ -1,122 +1,154 @@
 /**
  * telegram-jobs — оформление Google Sheet для удобного чтения.
  *
+ * Оформляет ТРИ вкладки в едином стиле:
+ *   • «Лист1»     — лиды на отправку (основная).
+ *   • «Кандидаты» — найденные вакансии (approve/skip).  ← sub-project C
+ *   • «Команды»   — очередь /start_search + heartbeat (G1). ← sub-project C
+ *
  * Установка:
  *  1) Открой таблицу → Extensions (Расширения) → Apps Script.
  *  2) Удали пустой код, вставь весь этот файл, нажми Save (Ctrl+S).
  *  3) Запусти функцию applyFormatting один раз (выбери её сверху → Run),
  *     дай разрешения при запросе.
  *  4) Дальше в самой таблице появится меню «🧰 Jobs» — оттуда всё под рукой.
+ *
+ * Скрипт создаёт недостающие вкладки сам и идемпотентен:
+ * повторный запуск не трогает данные, только переоформляет.
  */
 
-var SHEET_NAME = 'Лист1';
+// ── Конфигурация всех вкладок ───────────────────────────────────────────────
+// headers/имена должны совпадать с кодом:
+//   main      → app/domain/lead.py (COLUMNS)
+//   Кандидаты → app/domain/candidate.py (CANDIDATE_COLUMNS)
+//   Команды   → app/infrastructure/control_repo.py (CONTROL_COLUMNS)
 
-var HEADERS = [
-  'id',
-  'Дата добавления',
-  'Исходный текст',
-  'Платформа',
-  'Цель',
-  'Вакансия',
-  'Сообщение',
-  'Статус',
-  'Дата отправки',
-  'Заметка'
+var SHEETS = [
+  {
+    name: 'Лист1',
+    headers: ['id', 'Дата добавления', 'Исходный текст', 'Платформа', 'Цель',
+              'Вакансия', 'Сообщение', 'Статус', 'Дата отправки', 'Заметка'],
+    widths:  [50, 130, 320, 100, 150, 300, 360, 110, 130, 220],
+    wrap:    [3, 6, 7, 10],
+    center:  [1, 2, 4, 8, 9],
+    statusHeader: 'Статус',
+    statusColors: {
+      'new':     { bg: '#FFF7CC', text: '#7A5C00' },
+      'sent':    { bg: '#D9F2D9', text: '#1E5E20' },
+      'skipped': { bg: '#ECECEC', text: '#5F6368' },
+      'failed':  { bg: '#FAD4D4', text: '#A50E0E' },
+      'replied': { bg: '#D6E4FF', text: '#0B3D91' }
+    }
+  },
+  {
+    name: 'Кандидаты',
+    headers: ['id', 'Платформа', 'Тип', 'URL', 'Title', 'Company',
+              'Salary', 'Location', 'Summary', 'Статус', 'Дата'],
+    widths:  [50, 100, 80, 280, 240, 160, 110, 130, 300, 100, 120],
+    wrap:    [4, 5, 9],              // URL, Title, Summary
+    center:  [1, 2, 3, 7, 10, 11],   // id, Платформа, Тип, Salary, Статус, Дата
+    statusHeader: 'Статус',
+    statusColors: {
+      'pending':  { bg: '#FFF7CC', text: '#7A5C00' }, // жёлтый — ждёт ревью
+      'taken':    { bg: '#D9F2D9', text: '#1E5E20' }, // зелёный — одобрено
+      'rejected': { bg: '#ECECEC', text: '#5F6368' }  // серый — пропущено
+    }
+  },
+  {
+    name: 'Команды',
+    headers: ['id', 'platform', 'status', 'created_at', 'done_at'],
+    widths:  [50, 110, 110, 160, 160],
+    wrap:    [],
+    center:  [1, 2, 3, 4, 5],
+    statusHeader: 'status',
+    statusColors: {
+      'pending': { bg: '#FFF7CC', text: '#7A5C00' }, // в очереди
+      'running': { bg: '#D6E4FF', text: '#0B3D91' }, // выполняется
+      'done':    { bg: '#D9F2D9', text: '#1E5E20' }, // готово
+      'error':   { bg: '#FAD4D4', text: '#A50E0E' }  // ошибка
+    },
+    heartbeat: true   // подписать ячейку G1 (пульс воркера)
+  }
 ];
 
-// Ширина колонок (px), по индексу HEADERS.
-var WIDTHS = [50, 130, 320, 100, 150, 300, 360, 110, 130, 220];
+// ── Главная функция ─────────────────────────────────────────────────────────
 
-// Цвета статусов.
-var STATUS_COLORS = {
-  'new':     { bg: '#FFF7CC', text: '#7A5C00' }, // жёлтый — ждёт отправки
-  'sent':    { bg: '#D9F2D9', text: '#1E5E20' }, // зелёный — отправлено
-  'skipped': { bg: '#ECECEC', text: '#5F6368' }, // серый — пропущено
-  'failed':  { bg: '#FAD4D4', text: '#A50E0E' }, // красный — ошибка
-  'replied': { bg: '#D6E4FF', text: '#0B3D91' }  // синий — ответили
-};
-
-function getSheet_() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sh = ss.getSheetByName(SHEET_NAME);
-  if (!sh) sh = ss.insertSheet(SHEET_NAME);
-  return sh;
-}
-
-/** Главная функция: применяет всё оформление сразу. */
+/** Оформляет все вкладки сразу. */
 function applyFormatting() {
-  var sh = getSheet_();
-
-  ensureHeaders_(sh);
-  styleHeader_(sh);
-  setWidths_(sh);
-  setWrapAndAlign_(sh);
-  freezeAndBanding_(sh);
-  applyStatusRules_(sh);
-
-  SpreadsheetApp.getActiveSpreadsheet().toast('Оформление применено ✅', 'telegram-jobs', 4);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  SHEETS.forEach(function (cfg) { formatSheet_(ss, cfg); });
+  ss.toast('Оформление применено для всех вкладок ✅', 'telegram-jobs', 4);
 }
 
-/** Заголовки в первой строке (если их нет/не совпадают). */
-function ensureHeaders_(sh) {
-  var range = sh.getRange(1, 1, 1, HEADERS.length);
-  range.setValues([HEADERS]);
+function formatSheet_(ss, cfg) {
+  var sh = ss.getSheetByName(cfg.name) || ss.insertSheet(cfg.name);
+  ensureHeaders_(sh, cfg);
+  styleHeader_(sh, cfg);
+  setWidths_(sh, cfg);
+  setWrapAndAlign_(sh, cfg);
+  freezeAndBanding_(sh, cfg);
+  applyStatusRules_(sh, cfg);
+  if (cfg.heartbeat) labelHeartbeat_(sh);
 }
 
-/** Стиль шапки. */
-function styleHeader_(sh) {
-  var h = sh.getRange(1, 1, 1, HEADERS.length);
-  h.setBackground('#1F2A44')
-   .setFontColor('#FFFFFF')
-   .setFontWeight('bold')
-   .setFontSize(11)
-   .setVerticalAlignment('middle')
-   .setHorizontalAlignment('center');
+// ── Шаги оформления (работают с любой вкладкой через cfg) ───────────────────
+
+/** Заголовки в первой строке. */
+function ensureHeaders_(sh, cfg) {
+  sh.getRange(1, 1, 1, cfg.headers.length).setValues([cfg.headers]);
+}
+
+/** Тёмная шапка с белым жирным текстом. */
+function styleHeader_(sh, cfg) {
+  sh.getRange(1, 1, 1, cfg.headers.length)
+    .setBackground('#1F2A44')
+    .setFontColor('#FFFFFF')
+    .setFontWeight('bold')
+    .setFontSize(11)
+    .setVerticalAlignment('middle')
+    .setHorizontalAlignment('center');
   sh.setRowHeight(1, 38);
 }
 
 /** Ширина колонок. */
-function setWidths_(sh) {
-  for (var i = 0; i < WIDTHS.length; i++) {
-    sh.setColumnWidth(i + 1, WIDTHS[i]);
+function setWidths_(sh, cfg) {
+  for (var i = 0; i < cfg.widths.length; i++) {
+    sh.setColumnWidth(i + 1, cfg.widths[i]);
   }
 }
 
-/** Перенос текста в длинных колонках + выравнивание. */
-function setWrapAndAlign_(sh) {
+/** Перенос длинных колонок + выравнивание тела. */
+function setWrapAndAlign_(sh, cfg) {
   var lastRow = Math.max(sh.getMaxRows(), 2);
-  var body = sh.getRange(2, 1, lastRow - 1, HEADERS.length);
-  body.setVerticalAlignment('top').setFontSize(10);
-
-  // Перенос текста: Исходный текст(3), Вакансия(6), Сообщение(7), Заметка(10).
-  [3, 6, 7, 10].forEach(function (col) {
-    sh.getRange(2, col, lastRow - 1, 1).setWrap(true);
+  var rows = lastRow - 1;
+  sh.getRange(2, 1, rows, cfg.headers.length)
+    .setVerticalAlignment('top')
+    .setFontSize(10);
+  cfg.wrap.forEach(function (col) {
+    sh.getRange(2, col, rows, 1).setWrap(true);
   });
-  // По центру: id(1), Платформа(4), Статус(8), даты(2,9).
-  [1, 2, 4, 8, 9].forEach(function (col) {
-    sh.getRange(2, col, lastRow - 1, 1).setHorizontalAlignment('center');
+  cfg.center.forEach(function (col) {
+    sh.getRange(2, col, rows, 1).setHorizontalAlignment('center');
   });
 }
 
 /** Закрепить шапку + чередование строк. */
-function freezeAndBanding_(sh) {
+function freezeAndBanding_(sh, cfg) {
   sh.setFrozenRows(1);
-  // Убрать старые банды, чтобы не дублировать.
   sh.getBandings().forEach(function (b) { b.remove(); });
   var lastRow = Math.max(sh.getLastRow(), 2);
-  var range = sh.getRange(1, 1, lastRow, HEADERS.length);
-  range.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
+  sh.getRange(1, 1, lastRow, cfg.headers.length)
+    .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, true, false);
 }
 
-/** Условное форматирование колонки «Статус» по значению. */
-function applyStatusRules_(sh) {
-  var statusCol = HEADERS.indexOf('Статус') + 1; // 8
-  var maxRows = sh.getMaxRows();
-  var statusRange = sh.getRange(2, statusCol, maxRows - 1, 1);
-
+/** Цвета по значению колонки статуса. */
+function applyStatusRules_(sh, cfg) {
+  if (!cfg.statusColors) { sh.setConditionalFormatRules([]); return; }
+  var statusCol = cfg.headers.indexOf(cfg.statusHeader) + 1;
+  var statusRange = sh.getRange(2, statusCol, sh.getMaxRows() - 1, 1);
   var rules = [];
-  Object.keys(STATUS_COLORS).forEach(function (key) {
-    var c = STATUS_COLORS[key];
+  Object.keys(cfg.statusColors).forEach(function (key) {
+    var c = cfg.statusColors[key];
     rules.push(
       SpreadsheetApp.newConditionalFormatRule()
         .whenTextEqualTo(key)
@@ -130,21 +162,35 @@ function applyStatusRules_(sh) {
   sh.setConditionalFormatRules(rules);
 }
 
-/** Меню в таблице. */
+/** Подпись пульса воркера: F1 = ярлык, G1 пишет сам воркер. */
+function labelHeartbeat_(sh) {
+  sh.getRange('F1')
+    .setValue('heartbeat →')
+    .setFontWeight('bold')
+    .setFontColor('#5F6368')
+    .setHorizontalAlignment('right');
+  sh.getRange('G1').setNote('Воркер пишет сюда время последнего «пульса». Пусто = ноут не запускался.');
+  sh.setColumnWidth(6, 110);
+  sh.setColumnWidth(7, 160);
+}
+
+// ── Меню и быстрые действия ─────────────────────────────────────────────────
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('🧰 Jobs')
-    .addItem('✨ Применить оформление', 'applyFormatting')
+    .addItem('✨ Применить оформление (все вкладки)', 'applyFormatting')
     .addSeparator()
     .addItem('🔵 Отметить выбранную строку: replied', 'markReplied')
     .addToUi();
 }
 
-/** Ставит статус 'replied' в строке текущей выделенной ячейки. */
+/** Ставит статус 'replied' в строке текущей выделенной ячейки (вкладка «Лист1»). */
 function markReplied() {
-  var sh = getSheet_();
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Лист1');
+  if (!sh) return;
   var row = sh.getActiveCell().getRow();
   if (row < 2) return;
-  var statusCol = HEADERS.indexOf('Статус') + 1;
+  var statusCol = SHEETS[0].headers.indexOf('Статус') + 1;
   sh.getRange(row, statusCol).setValue('replied');
 }

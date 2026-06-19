@@ -2,15 +2,18 @@
 # Uses the sender's venv directly, so no activation needed.
 # Override the interpreter if your venv is elsewhere: make test PYTHON=python
 #
-#   make dry   -> generate a message for a lead and just print it (no Telegram)
-#   make test  -> send a TEST message to yourself (TO below); lead status is NOT changed
-#   make run   -> real interactive run: approve / edit / send per lead
-#   make login -> log in to Telegram by scanning a QR code (no SMS/app code needed)
+#   make dry            -> generate a message for a lead and just print it (no Telegram)
+#   make test           -> send a TEST message to yourself (TO below); lead status is NOT changed
+#   make run            -> real interactive run: approve / edit / send per lead
+#   make worker         -> background vacancy-search loop (LinkedIn + Wellfound)
+#   make login_telegram -> log in to Telegram by scanning a QR code (no SMS/app code needed)
+#   make login_browser  -> open LinkedIn + Wellfound login windows, save sessions (one-time)
+#   make test-unit      -> run the sender test suite
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run login test-unit
+.PHONY: dry test run worker login_telegram login_browser test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -21,8 +24,14 @@ test:
 run:
 	$(PYTHON) sender/run.py
 
-login:
+worker:
+	$(PYTHON) sender/run.py worker
+
+login_telegram:
 	$(PYTHON) sender/qr_login.py
+
+login_browser:
+	$(PYTHON) sender/run.py login_browser
 
 test-unit:
 	$(PYTHON) -m pytest sender/tests -v

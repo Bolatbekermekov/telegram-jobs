@@ -178,11 +178,12 @@ def run_worker():
         time.sleep(config.WORKER_POLL_SECONDS)
 
 
-def run_login():
+def run_login_browser():
     """Open LinkedIn + Wellfound login windows once and save the sessions.
 
-    Forces a visible browser (ignores BROWSER_HEADLESS) so you can actually log
-    in. After this, the worker can run headless without prompting.
+    Browser logins only (NOT Telegram — that's `make login_telegram`). Forces a
+    visible browser (ignores BROWSER_HEADLESS) so you can actually log in. After
+    this, the worker can run headless without prompting.
     """
     from app.application.login import login_all
     from app.infrastructure.search.linkedin_search import LinkedInSearcher
