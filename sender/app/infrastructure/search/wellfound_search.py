@@ -126,6 +126,20 @@ class WellfoundSearcher:
                 ))
         return cards
 
+    def describe(self, url: str) -> str:
+        """Open a job page and return its description text (best-effort)."""
+        self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        self._page.wait_for_timeout(3000)
+        for sel in ["[data-test='JobDescription']", "div.styles_description__",
+                    "div.job-description", "article", "main"]:
+            try:
+                text = self._page.locator(sel).first.inner_text(timeout=2500)
+                if text.strip():
+                    return text.strip()[:6000]
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
+
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         found: list[Candidate] = []
         for kw in keywords_list:

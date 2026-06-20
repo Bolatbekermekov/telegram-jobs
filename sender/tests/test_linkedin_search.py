@@ -7,9 +7,9 @@ def test_build_jobs_url_has_filters():
     url = build_jobs_url("junior developer", "Worldwide")
     assert "linkedin.com/jobs/search" in url
     assert "keywords=junior+developer" in url or "keywords=junior%20developer" in url
-    assert "f_E=1%2C2" in url or "f_E=1,2" in url   # intern + entry
+    assert "f_E=1%2C2%2C3" in url                     # intern + junior + junior+
     assert "f_WT=2" in url                            # remote
-    assert "f_TPR=r86400" in url                      # last 24h
+    assert "f_TPR=r604800" in url                     # last 7 days
 
 
 class _FakeCard:

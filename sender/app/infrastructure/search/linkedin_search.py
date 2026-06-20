@@ -123,6 +123,20 @@ class LinkedInSearcher:
             ))
         return cards
 
+    def describe(self, url: str) -> str:
+        """Open a job page and return its description text (best-effort)."""
+        self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        self._page.wait_for_timeout(2000)
+        for sel in ["#job-details", ".jobs-description__content",
+                    ".jobs-box__html-content", ".description__text", "article", "main"]:
+            try:
+                text = self._page.locator(sel).first.inner_text(timeout=2500)
+                if text.strip():
+                    return text.strip()[:6000]
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
+
     def _people_cards(self):
         cards = []
         for el in self._page.locator("li.reusable-search__result-container").all():
