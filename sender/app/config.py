@@ -101,6 +101,8 @@ SEARCH_LIMIT_PER_PLATFORM = int(os.environ.get("SEARCH_LIMIT_PER_PLATFORM", "15"
 SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))
 WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
+# Worker fires an all-platform auto-search every N hours (8 ≈ 3×/day).
+SEARCH_EVERY_HOURS = int(os.environ.get("SEARCH_EVERY_HOURS", "8"))
 # Recruiter-profile (DM) search is fragile/ban-prone; off by default.
 LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").lower() == "true"
 # Human-like delay between scrape actions.

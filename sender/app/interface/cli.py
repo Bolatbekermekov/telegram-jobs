@@ -136,16 +136,18 @@ def run() -> None:
 
 
 def run_worker():
-    """Always-on loop: poll «Команды», scrape, write «Кандидаты». Ctrl+C to stop."""
+    """Always-on loop: heartbeat, drain «Команды», auto-search ~3×/day. Ctrl+C to stop."""
     import time
+    from datetime import datetime
 
     import gspread
     from google.oauth2.service_account import Credentials
 
     from app import config
+    from app.application.auto_search import should_auto_search
     from app.application.run_search import run_search
     from app.application.worker_tick import worker_tick
-    from app.domain.search_request import platforms_for
+    from app.domain.search_request import SearchRequest, platforms_for
     from app.infrastructure.candidates_repo import CandidatesRepo
     from app.infrastructure.control_repo import ControlRepo
     from app.infrastructure.search.registry import build_searcher
@@ -170,9 +172,15 @@ def run_worker():
         )
 
     print("worker started; polling every", config.WORKER_POLL_SECONDS, "s")
+    last_auto = None
     while True:
         try:
             worker_tick(control, run_one)
+            now = datetime.now()
+            if should_auto_search(last_auto, now, config.SEARCH_EVERY_HOURS):
+                print("auto-search: all platforms")
+                run_one(SearchRequest(id="auto", platform="all", status="running"))
+                last_auto = now
         except Exception as exc:  # noqa: BLE001 — survive transient sheet errors
             print("tick error:", exc)
         time.sleep(config.WORKER_POLL_SECONDS)
