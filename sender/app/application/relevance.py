@@ -33,3 +33,22 @@ def parse_score_response(raw: str) -> tuple[int, str]:
         return score, str(data.get("reason", "")).strip()
     except Exception:  # noqa: BLE001 — malformed model output → drop the job
         return 0, ""
+
+
+def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs):
+    """Score up to `max_jobs` candidates; keep score >= threshold, stamp Summary.
+
+    `describe(candidate) -> str` fetches the job description. A failing describe or
+    score skips just that job. Returns the kept candidates (mutated with Summary).
+    """
+    kept = []
+    for c in candidates[:max_jobs]:
+        try:
+            description = describe(c)
+            score, reason = scorer.score(profile, c.title, description)
+        except Exception:  # noqa: BLE001 — one bad job never kills the run
+            continue
+        if score >= threshold:
+            c.summary = f"{score}/100: {reason}" if reason else f"{score}/100"
+            kept.append(c)
+    return kept
