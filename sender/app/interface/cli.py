@@ -179,24 +179,76 @@ def run_worker():
 
 
 def run_login_browser():
-    """Open LinkedIn + Wellfound login windows once and save the sessions.
+    """Open the LinkedIn login window once and save the session.
 
-    Browser logins only (NOT Telegram — that's `make login_telegram`). Forces a
-    visible browser (ignores BROWSER_HEADLESS) so you can actually log in. After
-    this, the worker can run headless without prompting.
+    LinkedIn only (NOT Telegram — that's `make login_telegram`; NOT Wellfound —
+    its Cloudflare loops on a launched browser, so it's handled interactively by
+    `make wellfound`). Forces a visible browser (ignores BROWSER_HEADLESS) so you
+    can actually log in. After this, the worker can run headless without prompting.
     """
     from app.application.login import login_all
     from app.infrastructure.search.linkedin_search import LinkedInSearcher
-    from app.infrastructure.search.wellfound_search import WellfoundSearcher
 
     searchers = [
         LinkedInSearcher(config.LINKEDIN_STATE_PATH, headless=False,
                          people_enabled=config.LINKEDIN_PEOPLE_ENABLED),
-        WellfoundSearcher(config.WELLFOUND_STATE_PATH, headless=False),
     ]
-    print("Открываю окна входа. Если сессия уже есть — окно просто закроется.")
+    print("Открываю окно входа в LinkedIn. Если сессия уже есть — окно просто закроется.")
     done = login_all(searchers)
     print(f"Готово. Сессии сохранены для: {', '.join(done) or '—'}")
+
+
+def run_wellfound():
+    """Interactive Wellfound search through the user's own Chrome.
+
+    Wellfound's Cloudflare Turnstile loops on any browser we launch ourselves, so
+    instead: open the user's real Chrome with a debug port, let them pass
+    Cloudflare + log in by hand, then attach over CDP and scrape that warm
+    session. Writes results to «Кандидаты» via the normal search pipeline.
+    """
+    import subprocess
+
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    from app.application.run_search import run_search
+    from app.infrastructure.candidates_repo import CandidatesRepo
+    from app.infrastructure.search.wellfound_search import (
+        WellfoundSearcher,
+        build_chrome_debug_args,
+    )
+
+    args = build_chrome_debug_args(
+        config.WELLFOUND_CHROME_PROFILE, config.WELLFOUND_CDP_PORT,
+        "https://wellfound.com/login")
+    print("Открываю твой Chrome для Wellfound...")
+    try:
+        subprocess.Popen([config.CHROME_PATH, *args])
+    except FileNotFoundError:
+        print(f"❌ Не нашёл Chrome по пути {config.CHROME_PATH}. "
+              f"Укажи его в переменной CHROME_PATH.")
+        return
+
+    print("\n1) В открывшемся Chrome пройди проверку Cloudflare и залогинься в Wellfound.")
+    print("2) Дождись, пока загрузится твоя лента (не страница «Один момент…»).")
+    input("3) Потом вернись сюда и нажми Enter — дальше всё сделаю сам...")
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
+    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
+    candidates = CandidatesRepo(
+        book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
+        config.SEARCH_LIMIT_PER_PLATFORM)
+
+    searcher = WellfoundSearcher(config.WELLFOUND_STATE_PATH, cdp_url=config.WELLFOUND_CDP_URL)
+    print("Подключаюсь к Chrome и ищу вакансии...")
+    added = run_search(
+        ["wellfound"], {"wellfound": searcher}, candidates,
+        keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
+        limit=config.SEARCH_LIMIT_PER_PLATFORM,
+        on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+    )
+    print(f"Готово. Новых кандидатов записано: {added}. Chrome можешь закрыть.")
 
 
 if __name__ == "__main__":

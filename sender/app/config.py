@@ -79,6 +79,18 @@ WELLFOUND_STATE_PATH = os.environ.get(
     "WELLFOUND_STATE_PATH", str(_ROOT / "sender" / "wellfound_state.json"))
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
 
+# Wellfound is behind Cloudflare Turnstile, which loops on any launched/headless
+# browser. The interactive `wellfound` command instead launches the user's real
+# Chrome with a debug port, lets them pass Cloudflare + log in by hand, then
+# attaches over CDP and scrapes through that warm session.
+CHROME_PATH = os.environ.get(
+    "CHROME_PATH", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+WELLFOUND_CDP_PORT = int(os.environ.get("WELLFOUND_CDP_PORT", "9222"))
+WELLFOUND_CDP_URL = os.environ.get(
+    "WELLFOUND_CDP_URL", f"http://127.0.0.1:{WELLFOUND_CDP_PORT}")
+WELLFOUND_CHROME_PROFILE = os.environ.get(
+    "WELLFOUND_CHROME_PROFILE", str(_ROOT / "sender" / ".wellfound_chrome"))
+
 # --- Vacancy search (sub-project C) ---
 SEARCH_KEYWORDS = [
     k.strip() for k in os.environ.get("SEARCH_KEYWORDS", "internship,junior").split(",")
