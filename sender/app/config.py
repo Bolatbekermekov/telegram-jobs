@@ -109,6 +109,10 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 NOTIFY_CHAT_ID = os.environ.get("NOTIFY_CHAT_ID", "")
 # Recruiter-profile (DM) search is fragile/ban-prone; off by default.
 LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").lower() == "true"
+# LinkedIn level filter (f_E): 1=Internship, 2=Entry/Junior, 3=Associate/Junior+.
+# Empty = all levels. Recency f_TPR: r604800 = 7 days.
+LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3")
+LINKEDIN_POSTED_WITHIN = os.environ.get("LINKEDIN_POSTED_WITHIN", "r604800")
 # Human-like delay between scrape actions.
 PACING_MIN_SECONDS = int(os.environ.get("PACING_MIN_SECONDS", "2"))
 PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))

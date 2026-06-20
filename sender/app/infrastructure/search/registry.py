@@ -10,6 +10,8 @@ def build_searcher(platform: str):
             config.LINKEDIN_STATE_PATH,
             headless=config.BROWSER_HEADLESS,
             people_enabled=config.LINKEDIN_PEOPLE_ENABLED,
+            experience=config.LINKEDIN_EXPERIENCE,
+            posted_within=config.LINKEDIN_POSTED_WITHIN,
         )
     if platform == "wellfound":
         return WellfoundSearcher(

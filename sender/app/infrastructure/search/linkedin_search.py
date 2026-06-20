@@ -9,15 +9,17 @@ from urllib.parse import urlencode
 from app.domain.candidate import Candidate, KIND_JOB, KIND_PROFILE
 
 
-def build_jobs_url(keywords: str, location: str) -> str:
-    qs = urlencode({
+def build_jobs_url(keywords: str, location: str,
+                   experience: str = "1,2,3", posted_within: str = "r604800") -> str:
+    qs = {
         "keywords": keywords,
         "location": location,
-        "f_E": "1,2",       # 1=Internship, 2=Entry level
-        "f_WT": "2",        # Remote
-        "f_TPR": "r86400",  # posted in the last 24h
-    })
-    return f"https://www.linkedin.com/jobs/search/?{qs}"
+        "f_WT": "2",            # Remote
+        "f_TPR": posted_within,  # recency window (r604800 = 7 days)
+    }
+    if experience:
+        qs["f_E"] = experience   # 1=Internship, 2=Entry/Junior, 3=Associate/Junior+
+    return f"https://www.linkedin.com/jobs/search/?{urlencode(qs)}"
 
 
 def build_people_url(keywords: str) -> str:
@@ -59,10 +61,13 @@ class LinkedInSearcher:
     name = "linkedin"
 
     def __init__(self, storage_state_path: str, headless: bool = True,
-                 people_enabled: bool = False):
+                 people_enabled: bool = False,
+                 experience: str = "1,2,3", posted_within: str = "r604800"):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._people_enabled = people_enabled
+        self._experience = experience
+        self._posted_within = posted_within
         self._pw = None
         self._browser = None
         self._page = None
@@ -132,7 +137,9 @@ class LinkedInSearcher:
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         found: list[Candidate] = []
         for kw in keywords_list:
-            self._page.goto(build_jobs_url(kw, location), wait_until="domcontentloaded")
+            self._page.goto(
+                build_jobs_url(kw, location, self._experience, self._posted_within),
+                wait_until="domcontentloaded")
             found += parse_job_cards(self._job_cards(), limit=limit)
             if self._people_enabled:
                 self._page.goto(build_people_url(kw), wait_until="domcontentloaded")
