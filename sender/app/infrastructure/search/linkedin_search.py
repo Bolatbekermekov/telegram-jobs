@@ -88,15 +88,33 @@ class LinkedInSearcher:
         if self._pw:
             self._pw.stop()
 
+    @staticmethod
+    def _text(el, selector):
+        """First match's text, or '' — fast-fail so drift doesn't hang 30s/card."""
+        try:
+            return el.locator(selector).first.inner_text(timeout=2000)
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _job_cards(self):
-        """Return card wrappers exposing get_text(role)/get_href(). Selectors here."""
+        """Return card wrappers exposing get_text(role)/get_href(). Selectors here.
+
+        LinkedIn moved job-card fields onto the shared `artdeco-entity-lockup__*`
+        classes; the title is duplicated by a visually-hidden a11y span, so we keep
+        only the first line.
+        """
         cards = []
         for el in self._page.locator("div.job-card-container").all():
+            try:
+                href = el.locator("a.job-card-container__link").first.get_attribute(
+                    "href", timeout=2000)
+            except Exception:  # noqa: BLE001
+                href = ""
             cards.append(_LiveCard(
-                title=el.locator(".job-card-list__title").inner_text(),
-                company=el.locator(".job-card-container__company-name").inner_text(),
-                location=el.locator(".job-card-container__metadata-item").first.inner_text(),
-                href=el.locator("a.job-card-list__title").first.get_attribute("href"),
+                title=self._text(el, ".artdeco-entity-lockup__title").split("\n")[0],
+                company=self._text(el, ".artdeco-entity-lockup__subtitle"),
+                location=self._text(el, ".artdeco-entity-lockup__caption"),
+                href=href,
             ))
         return cards
 
