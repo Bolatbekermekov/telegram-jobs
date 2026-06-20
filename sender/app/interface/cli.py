@@ -31,6 +31,16 @@ def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
 
 
+def _notify_done(platforms, added: int) -> None:
+    """Best-effort Telegram ping after a search; no-op unless token+chat configured."""
+    if not (config.TELEGRAM_BOT_TOKEN and config.NOTIFY_CHAT_ID):
+        return
+    from app.application.notify import search_done_message
+    from app.infrastructure.telegram_notify import send_telegram
+    send_telegram(config.TELEGRAM_BOT_TOKEN, config.NOTIFY_CHAT_ID,
+                  search_done_message(list(platforms), added))
+
+
 def run() -> None:
     print("== telegram-jobs sender (multi-platform) ==")
     cv_text = load_cv_text(config.CV_PATH)
@@ -164,12 +174,15 @@ def run_worker():
     searchers = {p: build_searcher(p) for p in ("linkedin", "wellfound")}
 
     def run_one(req):
-        return run_search(
-            platforms_for(req.platform), searchers, candidates,
+        plats = platforms_for(req.platform)
+        added = run_search(
+            plats, searchers, candidates,
             keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
             limit=config.SEARCH_LIMIT_PER_PLATFORM,
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
         )
+        _notify_done(plats, added)
+        return added
 
     print("worker started; polling every", config.WORKER_POLL_SECONDS, "s")
     last_auto = None
@@ -215,6 +228,7 @@ def run_search_once(platforms):
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
+    _notify_done(platforms, added)
 
 
 def run_login_browser():

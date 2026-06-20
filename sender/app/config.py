@@ -103,6 +103,10 @@ WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
 # Worker fires an all-platform auto-search every N hours (8 ≈ 3×/day).
 SEARCH_EVERY_HOURS = int(os.environ.get("SEARCH_EVERY_HOURS", "8"))
+# After each search the worker pings this Telegram chat (needs the bot token).
+# NOTIFY_CHAT_ID is your chat id with the bot (get it from @userinfobot).
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+NOTIFY_CHAT_ID = os.environ.get("NOTIFY_CHAT_ID", "")
 # Recruiter-profile (DM) search is fragile/ban-prone; off by default.
 LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").lower() == "true"
 # Human-like delay between scrape actions.
