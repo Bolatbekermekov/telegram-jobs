@@ -33,3 +33,8 @@ def test_build_remoteok():
 def test_build_remotive():
     from app.infrastructure.search.remotive_search import RemotiveSearcher
     assert isinstance(build_searcher("remotive"), RemotiveSearcher)
+
+
+def test_build_wwr():
+    from app.infrastructure.search.wwr_search import WWRSearcher
+    assert isinstance(build_searcher("wwr"), WWRSearcher)

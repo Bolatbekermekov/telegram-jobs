@@ -23,7 +23,8 @@ def test_status_constants():
 
 
 def test_platforms_for_all_expands():
-    assert platforms_for("all") == ["linkedin", "wellfound", "remoteok", "remotive"]
+    assert platforms_for("all") == [
+        "linkedin", "wellfound", "remoteok", "remotive", "wwr"]
 
 
 def test_platforms_for_single():

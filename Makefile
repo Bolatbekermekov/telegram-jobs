@@ -14,13 +14,14 @@
 #   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
 #   make search_remoteok -> one-shot RemoteOK search
 #   make search_remotive -> one-shot Remotive search
+#   make search_wwr      -> one-shot We Work Remotely search (opens a visible Chrome)
 #   make bot_menu        -> register the bot's command menu in Telegram (one-time)
 #   make test-unit      -> run the sender test suite
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound search search_linkedin search_wellfound search_remoteok search_remotive bot_menu test-unit
+.PHONY: dry test run worker login_telegram login_browser login_wellfound search search_linkedin search_wellfound search_remoteok search_remotive search_wwr bot_menu test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -57,6 +58,9 @@ search_remoteok:
 
 search_remotive:
 	$(PYTHON) sender/run.py search_remotive
+
+search_wwr:
+	$(PYTHON) sender/run.py search_wwr
 
 bot_menu:
 	$(PYTHON) sender/register_bot_menu.py
