@@ -171,7 +171,7 @@ def run_worker():
     from app.application.auto_search import should_auto_search
     from app.application.run_search import run_search
     from app.application.worker_tick import worker_tick
-    from app.domain.search_request import SearchRequest, platforms_for
+    from app.domain.search_request import SEARCH_PLATFORMS, SearchRequest, platforms_for
     from app.infrastructure.candidates_repo import CandidatesRepo
     from app.infrastructure.control_repo import ControlRepo
     from app.infrastructure.search.registry import build_searcher
@@ -185,7 +185,7 @@ def run_worker():
 
     control = ControlRepo(ctrl_ws)
     candidates = CandidatesRepo(cand_ws, main_ws, config.SEARCH_LIMIT_PER_PLATFORM)
-    searchers = {p: build_searcher(p) for p in ("linkedin", "wellfound")}
+    searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS}
 
     def run_one(req):
         plats = platforms_for(req.platform)
