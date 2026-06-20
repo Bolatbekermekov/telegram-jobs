@@ -82,6 +82,16 @@ def test_search_filters_and_caches_description():
     assert s.describe("https://remoteok.com/remote-jobs/1") == "We use Go and Postgres."
 
 
+def test_search_survives_payload_error():
+    s = RemoteOKSearcher()
+
+    def boom():
+        raise RuntimeError("429 Too Many Requests")
+
+    s._payload = boom
+    assert s.search(["backend"], "Worldwide", limit=5) == []
+
+
 def test_start_stop_are_noops():
     s = RemoteOKSearcher()
     s.start()

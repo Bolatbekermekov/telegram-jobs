@@ -67,6 +67,7 @@ class RemotiveSearcher:
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         from app.domain.search_request import per_keyword_limit
+        self._desc.clear()  # fresh per run — don't accumulate across worker loops
         per_kw = per_keyword_limit(limit, len(keywords_list))
         found: list[Candidate] = []
         seen: set[str] = set()

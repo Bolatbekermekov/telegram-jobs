@@ -112,7 +112,12 @@ class RemoteOKSearcher:
         return resp.json()
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
-        jobs = parse_remoteok_jobs(self._payload())
+        self._desc.clear()  # fresh per run — don't accumulate across worker loops
+        try:
+            payload = self._payload()
+        except Exception:  # noqa: BLE001 — contain our own network failures
+            return []
+        jobs = parse_remoteok_jobs(payload)
         found: list[Candidate] = []
         for job in jobs:
             if not job_matches(job, keywords_list):
