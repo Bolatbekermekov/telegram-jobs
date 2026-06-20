@@ -85,11 +85,11 @@ def _reply_with_buttons(chat_id: int, text: str, buttons) -> None:
         pass
 
 
-def _do_start_search(chat_id: int) -> None:
+def _do_start_search(chat_id: int, platform: str) -> None:
     from app.infrastructure.control_gateway import start_search_reply
     ctrl = _control_gateway()
     online = ctrl.is_worker_online(config.HEARTBEAT_STALE_SECONDS)
-    ctrl.queue_search("all")           # warn + queue regardless
+    ctrl.queue_search(platform)        # warn + queue regardless
     _reply(chat_id, start_search_reply(online))
 
 
@@ -113,8 +113,10 @@ def _do_skip(cid: str) -> None:
 
 
 def _handle_command(text: str, chat_id: int) -> bool:
-    if text.startswith("/start_search"):
-        _do_start_search(chat_id)
+    from app.domain.bot_commands import command_to_search_platform
+    platform = command_to_search_platform(text)
+    if platform is not None:
+        _do_start_search(chat_id, platform)
         return True
     if text.startswith("/show_vacancies"):
         _do_show_vacancies(chat_id)
@@ -193,7 +195,8 @@ async def telegram_webhook(
             chat_id,
             "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.\n"
             "Команда /status — сводка по лидам (сколько new / sent).\n"
-            "Команды: /start_search — искать вакансии, /show_vacancies — показать найденные.",
+            "Поиск: /start_search — по всем платформам, /search_linkedin, "
+            "/search_wellfound. /show_vacancies — показать найденные.",
         )
         return {"ok": True}
 
