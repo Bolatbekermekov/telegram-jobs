@@ -22,6 +22,14 @@ def parse_callback(data: str):
     return action, cid
 
 
+_VERDICT = {"approve": "✅ Взято", "skip": "❌ Скип"}
+
+
+def decided_text(original_text: str, action: str) -> str:
+    """Card text with a verdict line appended (caller removes the buttons)."""
+    return f"{original_text}\n\n{_VERDICT.get(action, action)}"
+
+
 def build_vacancy_message(row):
     platform = _col(row, "Платформа")
     kind = _col(row, "Тип")

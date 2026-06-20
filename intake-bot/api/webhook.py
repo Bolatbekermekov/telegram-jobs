@@ -85,6 +85,19 @@ def _reply_with_buttons(chat_id: int, text: str, buttons) -> None:
         pass
 
 
+def _edit_message(chat_id: int, message_id: int, text: str) -> None:
+    """Replace a card's text and drop its inline keyboard (decision is final)."""
+    import json
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
+               "reply_markup": json.dumps({"inline_keyboard": []})}
+    data = urllib.parse.urlencode(payload).encode()
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
+    except Exception:
+        pass
+
+
 def _do_start_search(chat_id: int, platform: str) -> None:
     from app.infrastructure.control_gateway import start_search_reply
     ctrl = _control_gateway()
@@ -172,13 +185,15 @@ async def telegram_webhook(
 
     callback = update.get("callback_query")
     if callback:
+        from app.infrastructure.candidates_gateway import decided_text
         data = callback.get("data", "")
         _handle_callback(data)
         cb_msg = callback.get("message") or {}
         cb_chat = (cb_msg.get("chat") or {}).get("id")
-        if cb_chat:
-            verdict = "✅ Взято" if data.startswith("approve") else "❌ Скип"
-            _reply(cb_chat, verdict)
+        cb_mid = cb_msg.get("message_id")
+        if cb_chat and cb_mid:
+            action = "approve" if data.startswith("approve") else "skip"
+            _edit_message(cb_chat, cb_mid, decided_text(cb_msg.get("text") or "", action))
         return {"ok": True}
 
     message = update.get("message") or update.get("channel_post") or {}

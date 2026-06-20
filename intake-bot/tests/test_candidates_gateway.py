@@ -1,7 +1,12 @@
 from app.infrastructure.candidates_gateway import (
-    build_vacancy_message, parse_callback, candidate_row_to_lead_row,
+    build_vacancy_message, decided_text, parse_callback, candidate_row_to_lead_row,
     CANDIDATE_COLUMNS,
 )
+
+
+def test_decided_text_keeps_card_and_appends_verdict():
+    assert decided_text("CARD", "approve") == "CARD\n\n✅ Взято"
+    assert decided_text("CARD", "skip") == "CARD\n\n❌ Скип"
 
 
 def _row(id="3", platform="linkedin", kind="job",
