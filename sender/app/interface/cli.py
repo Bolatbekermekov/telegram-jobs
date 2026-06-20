@@ -237,25 +237,17 @@ def run_login_browser():
     print(f"Готово. Сессии сохранены для: {', '.join(done) or '—'}")
 
 
-def run_wellfound():
-    """Interactive Wellfound search through the user's own Chrome.
+def run_login_wellfound():
+    """Open the user's real Chrome for a one-time Wellfound login.
 
-    Wellfound's Cloudflare Turnstile loops on any browser we launch ourselves, so
-    instead: open the user's real Chrome with a debug port, let them pass
-    Cloudflare + log in by hand, then attach over CDP and scrape that warm
-    session. Writes results to «Кандидаты» via the normal search pipeline.
+    Wellfound's Cloudflare loops on any browser we launch headless/automated, so
+    the user passes Cloudflare + logs in by hand here. The Chrome is left RUNNING
+    with a debug port; every Wellfound search (worker / make search*) attaches to
+    it over CDP. Does not scrape — that is `make search_wellfound` / the worker.
     """
     import subprocess
 
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    from app.application.run_search import run_search
-    from app.infrastructure.candidates_repo import CandidatesRepo
-    from app.infrastructure.search.wellfound_search import (
-        WellfoundSearcher,
-        build_chrome_debug_args,
-    )
+    from app.infrastructure.search.wellfound_search import build_chrome_debug_args
 
     args = build_chrome_debug_args(
         config.WELLFOUND_CHROME_PROFILE, config.WELLFOUND_CDP_PORT,
@@ -268,26 +260,26 @@ def run_wellfound():
               f"Укажи его в переменной CHROME_PATH.")
         return
 
-    print("\n1) В открывшемся Chrome пройди проверку Cloudflare и залогинься в Wellfound.")
+    print("\n1) Пройди проверку Cloudflare и залогинься в Wellfound в открывшемся Chrome.")
     print("2) Дождись, пока загрузится твоя лента (не страница «Один момент…»).")
-    input("3) Потом вернись сюда и нажми Enter — дальше всё сделаю сам...")
+    input("3) Потом вернись сюда и нажми Enter — проверю сессию...")
 
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
-    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
-    candidates = CandidatesRepo(
-        book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
-        config.SEARCH_LIMIT_PER_PLATFORM)
+    try:
+        from patchright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(config.WELLFOUND_CDP_URL)
+            ctx = browser.contexts[0] if browser.contexts else None
+            page = ctx.pages[0] if ctx and ctx.pages else None
+            title = page.title() if page else ""
+            browser.close()  # disconnect only — leaves Chrome running
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Не смог проверить сессию по CDP: {exc}. Chrome всё равно оставь открытым.")
+        return
 
-    searcher = WellfoundSearcher(config.WELLFOUND_STATE_PATH, cdp_url=config.WELLFOUND_CDP_URL)
-    print("Подключаюсь к Chrome и ищу вакансии...")
-    added = run_search(
-        ["wellfound"], {"wellfound": searcher}, candidates,
-        keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
-        limit=config.SEARCH_LIMIT_PER_PLATFORM,
-        on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
-    )
-    print(f"Готово. Новых кандидатов записано: {added}. Chrome можешь закрыть.")
+    if "момент" in title.lower() or "moment" in title.lower():
+        print("⚠️ Похоже, ещё на проверке Cloudflare. Доделай вход и запусти команду снова.")
+    else:
+        print("✅ Сессия готова. Chrome НЕ закрывай — поиск Wellfound пойдёт через него.")
 
 
 if __name__ == "__main__":
