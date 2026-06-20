@@ -9,8 +9,9 @@ Search currently keyword-matches job titles only (`SEARCH_KEYWORDS` fed to Linke
 Wellfound) and writes every card to «Кандидаты» with an empty `Summary`. The user
 wants results judged the way a person would — by reading the **job description** and
 deciding whether it fits their target roles — and wants results **worldwide**, not
-restricted to Europe. Today's LinkedIn query is also hard-pinned to entry-level and
-the last 24h, which drops relevant mid-level / older postings.
+restricted to Europe. Today's LinkedIn query is also hard-pinned to the last 24h (drops
+good older postings) and to a fixed experience filter; the user targets Intern / Junior /
+Junior+ roles and wants those levels kept but configurable.
 
 ## Goals
 
@@ -19,8 +20,8 @@ the last 24h, which drops relevant mid-level / older postings.
 2. Write `score/100 — reason` into the existing `Summary` column (shows in the bot card).
 3. Cap AI scoring at **12 jobs per platform per run** (worker and manual alike) to bound
    cost/time.
-4. Search **worldwide** (remote anywhere), and loosen LinkedIn's experience/recency
-   pins so the AI — not a crude filter — decides relevance.
+4. Search **worldwide** (remote anywhere); target Intern / Junior / Junior+ levels
+   (configurable) and widen LinkedIn's recency window so the AI decides role fit.
 5. Everything configurable via `.env`; feature can be turned off (`RELEVANCE_ENABLED`).
 
 ## Non-goals
@@ -40,7 +41,8 @@ existing `load_text_file`. `SEARCH_PROFILE_PATH` in config (default points at th
 env override may point elsewhere). The file is committed (job preferences, not a secret).
 A starter draft is committed describing: AI/Prompt Engineer (Claude Code), Full-Stack
 (Go / Node / Express / NestJS / Vue / React / Next / Vite / Redis / Postgres / Mongo),
-AI-agent design/build, frontend or backend, remote worldwide.
+AI-agent design/build, frontend or backend, remote worldwide, **level: Intern /
+Internship / Junior / Junior+**.
 
 ### 2. Relevance scorer (application + infrastructure)
 - `app/application/relevance.py`:
@@ -82,7 +84,8 @@ pass them through when `RELEVANCE_ENABLED`.
 - `SEARCH_LOCATION` default `"Worldwide"`.
 - `LinkedInSearcher.build_jobs_url` takes the experience and recency filters from config
   instead of hard-coding them:
-  - `LINKEDIN_EXPERIENCE` (default `""` = all levels; was `f_E=1,2`).
+  - `LINKEDIN_EXPERIENCE` (default `"1,2,3"` = Internship + Entry/Junior + Associate/Junior+;
+    `f_E`). Empty string omits the filter (all levels).
   - `LINKEDIN_POSTED_WITHIN` (default `r604800` = 7 days; was `r86400` = 24h).
   - keeps `f_WT=2` (remote).
 - Wellfound: documented manual step — set the Wellfound profile location to Worldwide/
@@ -94,7 +97,7 @@ pass them through when `RELEVANCE_ENABLED`.
 - `MATCH_MAX_JOBS` (default `12`, per platform per run)
 - `SEARCH_PROFILE_PATH` (default `sender/search_profile.txt`)
 - `SEARCH_LOCATION` (default `Worldwide`)
-- `LINKEDIN_EXPERIENCE` (default `""`), `LINKEDIN_POSTED_WITHIN` (default `r604800`)
+- `LINKEDIN_EXPERIENCE` (default `"1,2,3"`), `LINKEDIN_POSTED_WITHIN` (default `r604800`)
 
 ## Data flow
 ```
