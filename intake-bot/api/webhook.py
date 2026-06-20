@@ -211,7 +211,8 @@ async def telegram_webhook(
             "Привет! Кидай текст вакансии — я вытащу контакт и сохраню лид в таблицу.\n"
             "Команда /status — сводка по лидам (сколько new / sent).\n"
             "Поиск: /start_search — по всем платформам, /search_linkedin, "
-            "/search_wellfound. /show_vacancies — показать найденные.",
+            "/search_wellfound, /search_remoteok, /search_remotive. "
+            "/show_vacancies — показать найденные.",
         )
         return {"ok": True}
 
