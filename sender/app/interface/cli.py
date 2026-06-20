@@ -41,6 +41,20 @@ def _notify_done(platforms, added: int) -> None:
                   search_done_message(list(platforms), added))
 
 
+def _relevance_args() -> dict:
+    """Kwargs that turn on AI relevance scoring in run_search, or {} when disabled."""
+    if not config.RELEVANCE_ENABLED:
+        return {}
+    from app.infrastructure.cv_loader import load_text_file
+    from app.infrastructure.openai_relevance import OpenAIRelevanceScorer
+    return dict(
+        scorer=OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL),
+        profile=load_text_file(config.SEARCH_PROFILE_PATH),
+        threshold=config.MATCH_THRESHOLD,
+        max_jobs=config.MATCH_MAX_JOBS,
+    )
+
+
 def run() -> None:
     print("== telegram-jobs sender (multi-platform) ==")
     cv_text = load_cv_text(config.CV_PATH)
@@ -180,6 +194,7 @@ def run_worker():
             keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
             limit=config.SEARCH_LIMIT_PER_PLATFORM,
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+            **_relevance_args(),
         )
         _notify_done(plats, added)
         return added
@@ -226,6 +241,7 @@ def run_search_once(platforms):
         keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
         limit=config.SEARCH_LIMIT_PER_PLATFORM,
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+        **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
     _notify_done(platforms, added)

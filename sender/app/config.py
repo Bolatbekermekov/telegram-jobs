@@ -113,6 +113,13 @@ LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").low
 # Empty = all levels. Recency f_TPR: r604800 = 7 days.
 LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3")
 LINKEDIN_POSTED_WITHIN = os.environ.get("LINKEDIN_POSTED_WITHIN", "r604800")
+
+# AI relevance filtering of search results.
+RELEVANCE_ENABLED = os.environ.get("RELEVANCE_ENABLED", "true").lower() == "true"
+MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))
+MATCH_MAX_JOBS = int(os.environ.get("MATCH_MAX_JOBS", "12"))  # per platform per run
+SEARCH_PROFILE_PATH = os.environ.get(
+    "SEARCH_PROFILE_PATH", str(_ROOT / "sender" / "search_profile.txt"))
 # Human-like delay between scrape actions.
 PACING_MIN_SECONDS = int(os.environ.get("PACING_MIN_SECONDS", "2"))
 PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))

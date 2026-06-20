@@ -1,0 +1,17 @@
+Кого ищу (роли):
+- AI Engineer / Prompt Engineer (работа с LLM, в т.ч. Claude Code / агенты)
+- Проектирование и построение AI-агентов
+- Full-Stack Developer (можно отдельно frontend или backend)
+
+Уровень: Intern / Internship / Junior / Junior+. НЕ middle/senior.
+
+Стек (что знаю и хочу применять):
+- Backend: Go, Node.js, Express, NestJS
+- Frontend: Vue.js, React, Next.js, Vite
+- Базы/инфра: PostgreSQL, MongoDB, Redis
+- AI: LLM-приложения, агенты, prompt engineering
+
+Формат: удалённо (remote), любая страна (UAE, USA, Europe, и т.д.).
+
+Что НЕ подходит: middle/senior-позиции, роли без программирования,
+узкий не-мой стек (например только PHP/Java/.NET/Ruby), не-remote.
