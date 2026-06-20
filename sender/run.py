@@ -7,16 +7,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app.interface.cli import (  # noqa: E402
     run,
     run_login_browser,
+    run_search_once,
     run_wellfound,
     run_worker,
 )
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["worker"]:
+    cmd = sys.argv[1:2]
+    if cmd == ["worker"]:
         run_worker()
-    elif sys.argv[1:2] == ["login_browser"]:
+    elif cmd == ["login_browser"]:
         run_login_browser()
-    elif sys.argv[1:2] == ["wellfound"]:
+    elif cmd == ["wellfound"]:
         run_wellfound()
+    elif cmd and cmd[0] in ("search", "search_linkedin", "search_wellfound"):
+        from app.application.search_commands import platforms_arg
+        run_search_once(platforms_arg(cmd[0]))
     else:
         run()

@@ -178,6 +178,37 @@ def run_worker():
         time.sleep(config.WORKER_POLL_SECONDS)
 
 
+def run_search_once(platforms):
+    """One-shot search across `platforms`, write candidates, then exit.
+
+    Standalone process (does not touch the worker). Wellfound rides the warm
+    Chrome from `make login_wellfound` via CDP; if it is closed, Wellfound is
+    skipped and the other platforms still run.
+    """
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    from app.application.run_search import run_search
+    from app.infrastructure.candidates_repo import CandidatesRepo
+    from app.infrastructure.search.registry import build_searcher
+
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
+    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
+    candidates = CandidatesRepo(
+        book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
+        config.SEARCH_LIMIT_PER_PLATFORM)
+    searchers = {p: build_searcher(p) for p in platforms}
+    print(f"Ищу вакансии: {', '.join(platforms)}...")
+    added = run_search(
+        platforms, searchers, candidates,
+        keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
+        limit=config.SEARCH_LIMIT_PER_PLATFORM,
+        on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+    )
+    print(f"Готово. Новых кандидатов записано: {added}.")
+
+
 def run_login_browser():
     """Open the LinkedIn login window once and save the session.
 

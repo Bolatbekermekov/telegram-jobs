@@ -9,12 +9,15 @@
 #   make login_telegram -> log in to Telegram by scanning a QR code (no SMS/app code needed)
 #   make login_browser  -> open the LinkedIn login window, save the session (one-time)
 #   make wellfound      -> interactive Wellfound search: log in by hand in Chrome, then it scrapes
+#   make search          -> one-shot vacancy search across all platforms
+#   make search_linkedin -> one-shot LinkedIn search
+#   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
 #   make test-unit      -> run the sender test suite
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser wellfound test-unit
+.PHONY: dry test run worker login_telegram login_browser wellfound search search_linkedin search_wellfound test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -36,6 +39,15 @@ login_browser:
 
 wellfound:
 	$(PYTHON) sender/run.py wellfound
+
+search:
+	$(PYTHON) sender/run.py search
+
+search_linkedin:
+	$(PYTHON) sender/run.py search_linkedin
+
+search_wellfound:
+	$(PYTHON) sender/run.py search_wellfound
 
 test-unit:
 	$(PYTHON) -m pytest sender/tests -v
