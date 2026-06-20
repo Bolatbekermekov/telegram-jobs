@@ -41,12 +41,16 @@ class WellfoundSearcher:
     def start(self) -> None:
         from pathlib import Path
 
-        from playwright.sync_api import sync_playwright
+        # Wellfound sits behind Cloudflare Turnstile, which loops forever on a
+        # browser launched by stock Playwright (CDP/automation fingerprint).
+        # patchright (patched Playwright) + the real Chrome channel removes those
+        # signals so the challenge can resolve. Uses system Chrome (no download).
+        from patchright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self._headless)
+        self._browser = self._pw.chromium.launch(headless=self._headless, channel="chrome")
         state = self._storage_state_path if Path(self._storage_state_path).exists() else None
-        context = self._browser.new_context(storage_state=state)
+        context = self._browser.new_context(storage_state=state, no_viewport=True)
         self._page = context.new_page()
         if state is None:
             self._page.goto("https://wellfound.com/login")
