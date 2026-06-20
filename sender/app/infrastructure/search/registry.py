@@ -15,5 +15,6 @@ def build_searcher(platform: str):
         return WellfoundSearcher(
             config.WELLFOUND_STATE_PATH,
             headless=config.BROWSER_HEADLESS,
+            cdp_url=config.WELLFOUND_CDP_URL,
         )
     raise ValueError(f"no searcher for platform: {platform}")

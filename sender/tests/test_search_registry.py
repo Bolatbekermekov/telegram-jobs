@@ -18,3 +18,8 @@ def test_build_wellfound():
 def test_unknown_platform_raises():
     with pytest.raises(ValueError):
         build_searcher("telegram")
+
+
+def test_wellfound_uses_cdp():
+    s = build_searcher("wellfound")
+    assert s.uses_cdp is True
