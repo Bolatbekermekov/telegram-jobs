@@ -127,14 +127,22 @@ class WellfoundSearcher:
         return cards
 
     def describe(self, url: str) -> str:
-        """Open a job page and return its description text (best-effort)."""
+        """Open a job page and return its description text (best-effort).
+
+        Wellfound renders the description (React) into an element whose class
+        contains 'description'; wait for it, then take the first sizeable block
+        (skip the small company-header section).
+        """
         self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        self._page.wait_for_timeout(3000)
-        for sel in ["[data-test='JobDescription']", "div.styles_description__",
-                    "div.job-description", "article", "main"]:
+        try:
+            self._page.wait_for_selector("[class*='description']", timeout=12000)
+        except Exception:  # noqa: BLE001
+            self._page.wait_for_timeout(4000)
+        for sel in ["[class*='description']", "[data-test='JobDescription']",
+                    "div.styles_description__"]:
             try:
                 text = self._page.locator(sel).first.inner_text(timeout=2500)
-                if text.strip():
+                if len(text.strip()) > 100:
                     return text.strip()[:6000]
             except Exception:  # noqa: BLE001
                 continue
