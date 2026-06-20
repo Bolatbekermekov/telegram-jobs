@@ -52,15 +52,36 @@ def test_to_candidate_maps_fields():
     assert c.summary == ""   # AI scorer fills this later
 
 
-def test_search_maps_dedups_and_caches_description():
+def test_search_title_filters_dedups_and_caches_description():
     s = RemotiveSearcher()
-    s._payload = lambda keyword, limit: PAYLOAD     # stub network; server-side search
-    found = s.search(["backend", "frontend"], "Worldwide", limit=10)
-    # two keywords return the same payload -> deduped by url
+    s._payload = lambda: PAYLOAD                    # stub the cached feed
+    found = s.search(["backend developer", "frontend engineer"], "Worldwide", limit=10)
     assert sorted(c.title for c in found) == ["Frontend Engineer", "Junior Backend Developer"]
     # describe() returns the cached, HTML-stripped description (no network call)
     assert s.describe("https://remotive.com/remote-jobs/dev/junior-backend-1") == \
         "We use Go and Postgres."
+
+
+def test_search_drops_non_matching_titles():
+    payload = {"jobs": [
+        {"id": 9, "url": "https://remotive.com/remote-jobs/x/office-assistant-9",
+         "title": "Office Assistant", "company_name": "Acme",
+         "candidate_required_location": "Worldwide", "salary": "",
+         "description": "<p>Filing.</p>"},
+    ]}
+    s = RemotiveSearcher()
+    s._payload = lambda: payload
+    assert s.search(["backend developer"], "Worldwide", limit=10) == []
+
+
+def test_search_survives_payload_error():
+    s = RemotiveSearcher()
+
+    def boom():
+        raise RuntimeError("503 Service Unavailable")
+
+    s._payload = boom
+    assert s.search(["backend"], "Worldwide", limit=5) == []
 
 
 def test_start_stop_are_noops():
