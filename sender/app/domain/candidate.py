@@ -18,7 +18,7 @@ KIND_PROFILE = "profile"
 
 @dataclass
 class Candidate:
-    platform: str    # linkedin | wellfound
+    platform: str    # linkedin | wellfound | remoteok | remotive
     kind: str        # job | profile
     url: str
     title: str

@@ -114,6 +114,16 @@ LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").low
 LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3")
 LINKEDIN_POSTED_WITHIN = os.environ.get("LINKEDIN_POSTED_WITHIN", "r604800")
 
+# RemoteOK / Remotive (HTTP-only platforms — no browser, no login).
+HTTP_USER_AGENT = os.environ.get(
+    "HTTP_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+HTTP_TIMEOUT_SECONDS = int(os.environ.get("HTTP_TIMEOUT_SECONDS", "20"))
+REMOTEOK_API_URL = os.environ.get("REMOTEOK_API_URL", "https://remoteok.com/api")
+REMOTIVE_API_URL = os.environ.get(
+    "REMOTIVE_API_URL", "https://remotive.com/api/remote-jobs")
+
 # AI relevance filtering of search results.
 RELEVANCE_ENABLED = os.environ.get("RELEVANCE_ENABLED", "true").lower() == "true"
 MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))

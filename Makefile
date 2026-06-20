@@ -12,13 +12,15 @@
 #   make search          -> one-shot vacancy search across all platforms
 #   make search_linkedin -> one-shot LinkedIn search
 #   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
+#   make search_remoteok -> one-shot RemoteOK search
+#   make search_remotive -> one-shot Remotive search
 #   make bot_menu        -> register the bot's command menu in Telegram (one-time)
 #   make test-unit      -> run the sender test suite
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound search search_linkedin search_wellfound bot_menu test-unit
+.PHONY: dry test run worker login_telegram login_browser login_wellfound search search_linkedin search_wellfound search_remoteok search_remotive bot_menu test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -49,6 +51,12 @@ search_linkedin:
 
 search_wellfound:
 	$(PYTHON) sender/run.py search_wellfound
+
+search_remoteok:
+	$(PYTHON) sender/run.py search_remoteok
+
+search_remotive:
+	$(PYTHON) sender/run.py search_remotive
 
 bot_menu:
 	$(PYTHON) sender/register_bot_menu.py

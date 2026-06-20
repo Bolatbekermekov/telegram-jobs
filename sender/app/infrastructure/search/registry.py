@@ -1,6 +1,8 @@
 """Build the right searcher for a platform (mirrors channels/registry.py)."""
 from app import config
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
+from app.infrastructure.search.remoteok_search import RemoteOKSearcher
+from app.infrastructure.search.remotive_search import RemotiveSearcher
 from app.infrastructure.search.wellfound_search import WellfoundSearcher
 
 
@@ -18,5 +20,17 @@ def build_searcher(platform: str):
             config.WELLFOUND_STATE_PATH,
             headless=config.BROWSER_HEADLESS,
             cdp_url=config.WELLFOUND_CDP_URL,
+        )
+    if platform == "remoteok":
+        return RemoteOKSearcher(
+            api_url=config.REMOTEOK_API_URL,
+            user_agent=config.HTTP_USER_AGENT,
+            timeout=config.HTTP_TIMEOUT_SECONDS,
+        )
+    if platform == "remotive":
+        return RemotiveSearcher(
+            api_url=config.REMOTIVE_API_URL,
+            user_agent=config.HTTP_USER_AGENT,
+            timeout=config.HTTP_TIMEOUT_SECONDS,
         )
     raise ValueError(f"no searcher for platform: {platform}")
