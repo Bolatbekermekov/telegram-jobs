@@ -55,6 +55,10 @@ class CandidatesRepo:
     def _next_id(self) -> int:
         return max(len(self._ws.col_values(1)) - 1, 0) + 1
 
+    def known_urls(self) -> set:
+        """Normalized URLs already saved (Кандидаты + main tab), for pre-score dedup."""
+        return self._seen_keys()
+
     def add_new(self, candidates) -> int:
         """Append candidates that pass dedup + cap. Returns how many were added."""
         self._ensure_header()

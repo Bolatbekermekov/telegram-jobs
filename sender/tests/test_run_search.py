@@ -1,5 +1,5 @@
 from app.application.run_search import run_search
-from app.domain.candidate import Candidate
+from app.domain.candidate import Candidate, normalize_url
 
 
 def _cand(url, platform="linkedin"):
@@ -31,8 +31,12 @@ class _FakeSearcher:
 
 
 class _FakeRepo:
-    def __init__(self):
+    def __init__(self, known=()):
         self.added = []
+        self._known = {normalize_url(u) for u in known}
+
+    def known_urls(self):
+        return set(self._known)
 
     def add_new(self, candidates):
         items = list(candidates)
@@ -79,3 +83,16 @@ def test_run_search_with_scorer_filters_and_describes():
     assert added == 1
     assert [c.title for c in repo.added] == ["keep"]
     assert s.described  # descriptions were fetched for scoring
+
+
+def test_run_search_skips_already_known_before_scoring():
+    """Known URLs are filtered out BEFORE describe/score, so no OpenAI is wasted."""
+    repo = _FakeRepo(known=["https://x/dup"])
+    new = Candidate("linkedin", "job", "https://x/new", "keep", "c", "", "x", "")
+    dup = Candidate("linkedin", "job", "https://x/dup", "keep", "c", "", "x", "")
+    s = _FakeSearcher([new, dup])
+    added = run_search(["linkedin"], {"linkedin": s}, repo,
+                       keywords=["junior"], location="Worldwide", limit=15,
+                       scorer=_Scorer(), profile="P", threshold=60, max_jobs=10)
+    assert added == 1
+    assert s.described == ["https://x/new"]   # the dup was never described/scored

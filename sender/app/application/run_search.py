@@ -4,6 +4,7 @@ One platform failing neither stops the others nor kills the caller's loop.
 Returns the number of new candidates written.
 """
 from app.application.relevance import score_and_filter
+from app.domain.candidate import normalize_url
 
 
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
@@ -15,6 +16,10 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
             searcher.start()
             found = searcher.search(keywords, location, limit)
             if scorer is not None:
+                # Drop already-saved jobs BEFORE scoring so max_jobs counts fresh
+                # ones and we never spend OpenAI calls on duplicates.
+                known = candidates_repo.known_urls()
+                found = [c for c in found if normalize_url(c.url) not in known]
                 found = score_and_filter(
                     found, lambda c: searcher.describe(c.url),
                     scorer, profile, threshold, max_jobs)
