@@ -10,7 +10,10 @@ CANDIDATE_COLUMNS = [
     "Salary", "Location", "Summary", "Статус", "Дата",
 ]
 
-_BADGE = {"linkedin": "🔵 LinkedIn", "wellfound": "🅰️ Wellfound"}
+_BADGE = {
+    "linkedin": "🔵 LinkedIn", "wellfound": "🅰️ Wellfound",
+    "remoteok": "🟢 RemoteOK", "remotive": "🟩 Remotive",
+}
 
 
 def _col(row, name):

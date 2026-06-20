@@ -7,6 +7,10 @@ def command_to_search_platform(text: str):
         return "linkedin"
     if t.startswith("/search_wellfound"):
         return "wellfound"
+    if t.startswith("/search_remoteok"):
+        return "remoteok"
+    if t.startswith("/search_remotive"):
+        return "remotive"
     if t.startswith("/start_search"):
         return "all"
     return None

@@ -2,16 +2,19 @@
 - AI Engineer / Prompt Engineer (работа с LLM, в т.ч. Claude Code / агенты)
 - Проектирование и построение AI-агентов
 - Full-Stack Developer (можно отдельно frontend или backend)
+- QA Engineer / QA Tester (ручное и автоматизированное тестирование, QA Automation)
 
-Уровень: Intern / Internship / Junior / Junior+. НЕ middle/senior.
+Уровень: Intern / Internship / Junior / Junior+ / Middle. НЕ senior/lead/staff.
 
 Стек (что знаю и хочу применять):
 - Backend: Go, Node.js, Express, NestJS
 - Frontend: Vue.js, React, Next.js, Vite
 - Базы/инфра: PostgreSQL, MongoDB, Redis
 - AI: LLM-приложения, агенты, prompt engineering
+- QA: функциональное/ручное тестирование, автотесты, баг-репорты
 
 Формат: удалённо (remote), любая страна (UAE, USA, Europe, и т.д.).
 
-Что НЕ подходит: middle/senior-позиции, роли без программирования,
-узкий не-мой стек (например только PHP/Java/.NET/Ruby), не-remote.
+Что НЕ подходит: senior / lead / staff / principal / head-позиции,
+роли без IT (разработка / тестирование), не-remote.
+Middle — ПОДХОДИТ.

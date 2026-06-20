@@ -23,3 +23,13 @@ def test_unknown_platform_raises():
 def test_wellfound_uses_cdp():
     s = build_searcher("wellfound")
     assert s.uses_cdp is True
+
+
+def test_build_remoteok():
+    from app.infrastructure.search.remoteok_search import RemoteOKSearcher
+    assert isinstance(build_searcher("remoteok"), RemoteOKSearcher)
+
+
+def test_build_remotive():
+    from app.infrastructure.search.remotive_search import RemotiveSearcher
+    assert isinstance(build_searcher("remotive"), RemotiveSearcher)
