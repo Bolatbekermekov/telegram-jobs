@@ -149,15 +149,17 @@ class LinkedInSearcher:
         return cards
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
+        from app.domain.search_request import per_keyword_limit
+        per_kw = per_keyword_limit(limit, len(keywords_list))
         found: list[Candidate] = []
         for kw in keywords_list:
             self._page.goto(
                 build_jobs_url(kw, location, self._experience, self._posted_within),
                 wait_until="domcontentloaded")
-            found += parse_job_cards(self._job_cards(), limit=limit)
+            found += parse_job_cards(self._job_cards(), limit=per_kw)
             if self._people_enabled:
                 self._page.goto(build_people_url(kw), wait_until="domcontentloaded")
-                found += parse_people_cards(self._people_cards(), limit=limit)
+                found += parse_people_cards(self._people_cards(), limit=per_kw)
         return found[:limit]
 
 

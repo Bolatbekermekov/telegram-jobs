@@ -22,3 +22,14 @@ def platforms_for(platform: str) -> list[str]:
     if platform == "all":
         return list(SEARCH_PLATFORMS)
     return [platform]
+
+
+def per_keyword_limit(total: int, n_keywords: int) -> int:
+    """Split the per-platform card budget across keywords (>=1 each).
+
+    Without this the first keyword fills the whole budget and later keywords
+    (other roles) never get scraped.
+    """
+    if n_keywords <= 0:
+        return total
+    return max(1, total // n_keywords)

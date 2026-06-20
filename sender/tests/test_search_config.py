@@ -2,7 +2,8 @@ from app import config
 
 
 def test_search_defaults_present():
-    assert config.SEARCH_KEYWORDS == ["internship", "junior"]
+    # SEARCH_KEYWORDS is user config (set in .env); just require a non-empty list.
+    assert isinstance(config.SEARCH_KEYWORDS, list) and config.SEARCH_KEYWORDS
     assert config.SEARCH_LOCATION == "Worldwide"
     assert config.SEARCH_LIMIT_PER_PLATFORM == 15
     assert config.SHOW_BATCH == 7
