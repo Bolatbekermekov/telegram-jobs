@@ -11,6 +11,8 @@ def command_to_search_platform(text: str):
         return "remoteok"
     if t.startswith("/search_remotive"):
         return "remotive"
+    if t.startswith("/search_wwr"):
+        return "wwr"
     if t.startswith("/start_search"):
         return "all"
     return None

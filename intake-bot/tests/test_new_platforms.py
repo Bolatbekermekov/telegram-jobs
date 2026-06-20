@@ -20,10 +20,13 @@ def _row(platform):
 def test_commands_map_new_platforms():
     assert command_to_search_platform("/search_remoteok") == "remoteok"
     assert command_to_search_platform("/search_remotive") == "remotive"
+    assert command_to_search_platform("/search_wwr") == "wwr"
 
 
 def test_badges_for_new_platforms():
     remoteok_text, _ = build_vacancy_message(_row("remoteok"))
     remotive_text, _ = build_vacancy_message(_row("remotive"))
+    wwr_text, _ = build_vacancy_message(_row("wwr"))
     assert "RemoteOK" in remoteok_text
     assert "Remotive" in remotive_text
+    assert "WWR" in wwr_text

@@ -4,6 +4,7 @@ from app.infrastructure.search.linkedin_search import LinkedInSearcher
 from app.infrastructure.search.remoteok_search import RemoteOKSearcher
 from app.infrastructure.search.remotive_search import RemotiveSearcher
 from app.infrastructure.search.wellfound_search import WellfoundSearcher
+from app.infrastructure.search.wwr_search import WWRSearcher
 
 
 def build_searcher(platform: str):
@@ -33,4 +34,6 @@ def build_searcher(platform: str):
             user_agent=config.HTTP_USER_AGENT,
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )
+    if platform == "wwr":
+        return WWRSearcher()  # headful (Cloudflare); no login needed
     raise ValueError(f"no searcher for platform: {platform}")

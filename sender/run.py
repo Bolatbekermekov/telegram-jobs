@@ -21,7 +21,7 @@ if __name__ == "__main__":
     elif cmd == ["login_wellfound"]:
         run_login_wellfound()
     elif cmd and cmd[0] in ("search", "search_linkedin", "search_wellfound",
-                            "search_remoteok", "search_remotive"):
+                            "search_remoteok", "search_remotive", "search_wwr"):
         from app.application.search_commands import platforms_arg
         run_search_once(platforms_arg(cmd[0]))
     else:
