@@ -16,6 +16,11 @@ DEFAULT_UA = "Mozilla/5.0 (compatible; telegram-jobs/1.0)"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+_WORD_RE = re.compile(r"[a-z0-9+#]+")
+# Seniority words carry no role signal — drop them so "junior backend developer"
+# matches on its role words (backend / developer), not on the absent "junior".
+_LEVEL_WORDS = {"junior", "jr", "intern", "internship", "senior", "sr",
+                "mid", "entry", "level"}
 
 
 def strip_html(text: str) -> str:
@@ -55,11 +60,21 @@ def parse_remoteok_jobs(payload: list) -> list[dict]:
 
 
 def job_matches(job: dict, keywords: list[str]) -> bool:
-    haystack = " ".join([
-        job.get("title", ""), " ".join(job.get("tags", [])),
-        strip_html(job.get("description", "")),
-    ]).lower()
-    return any(kw.lower() in haystack for kw in keywords if kw.strip())
+    """Match on the TITLE only, by role words.
+
+    RemoteOK's public feed is all categories (its tags are noisy and its
+    descriptions mention unrelated tech), so title words are the one clean
+    signal. A job matches when any role word of any keyword (seniority words
+    dropped) appears as a whole word in the title; the AI scorer then does the
+    precise relevance filtering on the full description.
+    """
+    title_words = set(_WORD_RE.findall(job.get("title", "").lower()))
+    for kw in keywords:
+        role_words = [w for w in _WORD_RE.findall(kw.lower())
+                      if w not in _LEVEL_WORDS]
+        if role_words and any(w in title_words for w in role_words):
+            return True
+    return False
 
 
 def to_candidate(job: dict) -> Candidate:

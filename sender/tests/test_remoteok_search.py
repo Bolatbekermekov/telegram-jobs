@@ -28,11 +28,27 @@ def test_parse_skips_disclaimer():
     assert [j["id"] for j in jobs] == ["1", "2"]
 
 
-def test_job_matches_title_and_tags():
+def test_job_matches_on_title_role_words():
     jobs = parse_remoteok_jobs(PAYLOAD)
-    assert job_matches(jobs[0], ["backend"]) is True       # in tags + title
+    # "junior backend developer" -> role words backend/developer hit the title
+    assert job_matches(jobs[0], ["junior backend developer"]) is True
+    assert job_matches(jobs[0], ["backend"]) is True
+    # title "Senior Sales Manager" has none of the role words
     assert job_matches(jobs[1], ["backend"]) is False
-    assert job_matches(jobs[1], ["sales"]) is True          # in tags
+    assert job_matches(jobs[1], ["sales"]) is True
+
+
+def test_job_matches_ignores_description_noise():
+    # A non-dev title must NOT match even if the description mentions dev tech.
+    job = {"title": "VP of Sales", "tags": ["backend", "engineer"],
+           "description": "<p>Work with our backend developer team.</p>"}
+    assert job_matches(job, ["junior backend developer"]) is False
+
+
+def test_job_matches_drops_seniority_words():
+    # "junior" alone is a seniority word -> no role word -> no match
+    job = {"title": "Junior Marketing Lead", "tags": [], "description": ""}
+    assert job_matches(job, ["junior"]) is False
 
 
 def test_strip_html():
