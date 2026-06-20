@@ -161,14 +161,14 @@ def run() -> None:
 
 def run_worker():
     """Always-on loop: heartbeat, drain «Команды», auto-search ~3×/day. Ctrl+C to stop."""
+    import datetime as _dt
     import time
-    from datetime import datetime
 
     import gspread
     from google.oauth2.service_account import Credentials
 
     from app import config
-    from app.application.auto_search import should_auto_search
+    from app.application.auto_search import due_auto_search, parse_times
     from app.application.run_search import run_search
     from app.application.worker_tick import worker_tick
     from app.domain.search_request import SEARCH_PLATFORMS, SearchRequest, platforms_for
@@ -199,14 +199,17 @@ def run_worker():
         _notify_done(plats, added)
         return added
 
+    tz = _dt.timezone(_dt.timedelta(hours=config.AUTO_SEARCH_TZ_OFFSET))
+    times = parse_times(config.AUTO_SEARCH_TIMES)
+    last_auto = _dt.datetime.now(tz)  # seed with boot time so startup never fires
     print("worker started; polling every", config.WORKER_POLL_SECONDS, "s")
-    last_auto = None
+    print(f"auto-search scheduled at {config.AUTO_SEARCH_TIMES} (UTC+{config.AUTO_SEARCH_TZ_OFFSET})")
     while True:
         try:
             worker_tick(control, run_one)
-            now = datetime.now()
-            if should_auto_search(last_auto, now, config.SEARCH_EVERY_HOURS):
-                print("auto-search: all platforms")
+            now = _dt.datetime.now(tz)
+            if due_auto_search(times, last_auto, now):
+                print(f"auto-search {now:%Y-%m-%d %H:%M} (UTC+{config.AUTO_SEARCH_TZ_OFFSET}): all platforms")
                 run_one(SearchRequest(id="auto", platform="all", status="running"))
                 last_auto = now
         except Exception as exc:  # noqa: BLE001 — survive transient sheet errors

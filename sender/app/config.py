@@ -101,8 +101,11 @@ SEARCH_LIMIT_PER_PLATFORM = int(os.environ.get("SEARCH_LIMIT_PER_PLATFORM", "15"
 SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))
 WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
-# Worker fires an all-platform auto-search every N hours (8 ≈ 3×/day).
-SEARCH_EVERY_HOURS = int(os.environ.get("SEARCH_EVERY_HOURS", "8"))
+# Worker auto-search runs at these fixed local times (HH:MM, comma-separated),
+# in the timezone UTC+AUTO_SEARCH_TZ_OFFSET. Not on a rolling interval and not
+# on worker startup. Default: 12:00 / 16:00 / 22:00 at UTC+5.
+AUTO_SEARCH_TIMES = os.environ.get("AUTO_SEARCH_TIMES", "12:00,16:00,22:00")
+AUTO_SEARCH_TZ_OFFSET = int(os.environ.get("AUTO_SEARCH_TZ_OFFSET", "5"))
 # After each search the worker pings this Telegram chat (needs the bot token).
 # NOTIFY_CHAT_ID is your chat id with the bot (get it from @userinfobot).
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
