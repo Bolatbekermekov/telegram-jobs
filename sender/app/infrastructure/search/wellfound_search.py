@@ -95,16 +95,35 @@ class WellfoundSearcher:
             self._pw.stop()
 
     def _job_cards(self):
+        """Flatten Wellfound's company-grouped results into one card per role.
+
+        Each [data-test='StartupResult'] is a startup (company name in its h2)
+        with one or more role links (a[href*='/jobs/<id>-...']). The page is a SPA,
+        so wait for the cards to render first. Salary/location render as a run-on
+        blob per role, so they are left empty (title/company/url are reliable).
+        """
+        try:
+            self._page.wait_for_selector("[data-test='StartupResult']", timeout=15000)
+        except Exception:  # noqa: BLE001 — genuinely no results
+            return []
         cards = []
-        for el in self._page.locator("div.styles_component__job").all():
-            href = el.locator("a").first.get_attribute("href")
-            cards.append(_LiveCard(
-                title=el.locator("a.styles_titleLink__").first.inner_text(),
-                company=el.locator("h2").first.inner_text(),
-                salary=el.locator(".styles_compensation__").first.inner_text(),
-                location=el.locator(".styles_location__").first.inner_text(),
-                href=href if str(href).startswith("http") else f"https://wellfound.com{href}",
-            ))
+        for startup in self._page.locator("[data-test='StartupResult']").all():
+            try:
+                company = startup.locator("h2").first.inner_text(timeout=2000)
+            except Exception:  # noqa: BLE001
+                company = ""
+            for a in startup.locator("a[href*='/jobs/']").all():
+                href = a.get_attribute("href") or ""
+                slug = href.split("/jobs/", 1)[1] if "/jobs/" in href else ""
+                if not slug[:1].isdigit():   # skip /jobs/home and other nav links
+                    continue
+                title = a.inner_text().strip()
+                if not title:
+                    continue
+                cards.append(_LiveCard(
+                    title=title, company=company, salary="", location="",
+                    href=href if href.startswith("http") else f"https://wellfound.com{href}",
+                ))
         return cards
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
