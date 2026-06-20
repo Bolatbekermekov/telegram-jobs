@@ -101,7 +101,7 @@ class CandidatesGateway:
         row_id = max(len(self._main.col_values(1)) - 1, 0) + 1
         now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
         self._main.append_row(candidate_row_to_lead_row(row, row_id, now),
-                              value_input_option="USER_ENTERED")
+                              value_input_option="USER_ENTERED", table_range="A1")
         self._cand.update_cell(idx, CANDIDATE_COLUMNS.index("Статус") + 1, "taken")
         return True
 

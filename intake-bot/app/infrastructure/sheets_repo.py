@@ -58,7 +58,7 @@ class SheetsRepo:
         row_id = self._next_id()
         now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
         row = lead_to_row(lead, row_id, now)
-        self._ws.append_row(row, value_input_option="USER_ENTERED")
+        self._ws.append_row(row, value_input_option="USER_ENTERED", table_range="A1")
         return row_id
 
     def count_by_status(self) -> dict[str, int]:

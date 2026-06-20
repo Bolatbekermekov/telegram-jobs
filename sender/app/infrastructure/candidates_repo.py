@@ -70,7 +70,7 @@ class CandidatesRepo:
             if not should_add(c, seen, counts.get(c.platform, 0), self._cap):
                 continue
             self._ws.append_row(candidate_to_row(c, self._next_id(), now),
-                                value_input_option="USER_ENTERED")
+                                value_input_option="USER_ENTERED", table_range="A1")
             seen.add(normalize_url(c.url))
             counts[c.platform] = counts.get(c.platform, 0) + 1
             added += 1

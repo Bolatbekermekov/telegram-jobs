@@ -43,7 +43,7 @@ class ControlRepo:
         row_id = max(len(self._ws.col_values(1)) - 1, 0) + 1
         now = _dt.datetime.now().strftime(_TS)
         self._ws.append_row(request_to_row(row_id, platform, now),
-                            value_input_option="USER_ENTERED")
+                            value_input_option="USER_ENTERED", table_range="A1")
 
     def pending_requests(self) -> list:
         rows = self._ws.get_all_values()[1:]
