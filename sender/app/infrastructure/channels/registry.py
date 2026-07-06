@@ -14,7 +14,7 @@ def build_channel(platform: str, config):
         return EmailChannel(config.SMTP_HOST, config.SMTP_PORT, config.SMTP_USER,
                             config.SMTP_PASSWORD, config.EMAIL_FROM_NAME)
     if platform == "hh":
-        return HeadHunterChannel(config.HH_ACCESS_TOKEN, config.HH_RESUME_ID)
+        return HeadHunterChannel(config.HH_STATE_PATH, config.BROWSER_HEADLESS)
     if platform == "linkedin":
         return LinkedInChannel(config.LINKEDIN_STATE_PATH, config.BROWSER_HEADLESS)
     if platform == "wellfound":

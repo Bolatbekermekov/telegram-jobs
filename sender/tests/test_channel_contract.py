@@ -9,7 +9,7 @@ from app.infrastructure.channels.wellfound import WellfoundChannel
 
 _CHANNELS = [
     EmailChannel("h", 587, "u", "p", "Me"),
-    HeadHunterChannel("t", "r"),
+    HeadHunterChannel("hh.json", True),
     LinkedInChannel("l.json", True),
     WellfoundChannel("w.json", True),
     # TelegramChannel constructs a TelegramClient; skip instantiation, check class attrs.
