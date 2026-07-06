@@ -9,19 +9,21 @@
 #   make login_telegram -> log in to Telegram by scanning a QR code (no SMS/app code needed)
 #   make login_browser  -> open the LinkedIn login window, save the session (one-time)
 #   make login_wellfound -> open your Chrome for a one-time Wellfound login (leave it open)
+#   make login_hh        -> open the hh.ru login window, save the session (one-time)
 #   make search          -> one-shot vacancy search across all platforms
 #   make search_linkedin -> one-shot LinkedIn search
 #   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
 #   make search_remoteok -> one-shot RemoteOK search
 #   make search_remotive -> one-shot Remotive search
 #   make search_wwr      -> one-shot We Work Remotely search (opens a visible Chrome)
+#   make search_hh       -> one-shot HeadHunter search (needs make login_hh once)
 #   make bot_menu        -> register the bot's command menu in Telegram (one-time)
 #   make test-unit      -> run the sender test suite
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound search search_linkedin search_wellfound search_remoteok search_remotive search_wwr bot_menu test-unit
+.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -61,6 +63,12 @@ search_remotive:
 
 search_wwr:
 	$(PYTHON) sender/run.py search_wwr
+
+login_hh:
+	$(PYTHON) sender/run.py login_hh
+
+search_hh:
+	$(PYTHON) sender/run.py search_hh
 
 bot_menu:
 	$(PYTHON) sender/register_bot_menu.py

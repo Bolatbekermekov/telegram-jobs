@@ -8,6 +8,7 @@ from app.interface.cli import (  # noqa: E402
     run,
     run_login_browser,
     run_login_wellfound,
+    run_login_hh,
     run_search_once,
     run_worker,
 )
@@ -20,8 +21,11 @@ if __name__ == "__main__":
         run_login_browser()
     elif cmd == ["login_wellfound"]:
         run_login_wellfound()
+    elif cmd == ["login_hh"]:
+        run_login_hh()
     elif cmd and cmd[0] in ("search", "search_linkedin", "search_wellfound",
-                            "search_remoteok", "search_remotive", "search_wwr"):
+                            "search_remoteok", "search_remotive", "search_wwr",
+                            "search_hh"):
         from app.application.search_commands import platforms_arg
         run_search_once(platforms_arg(cmd[0]))
     else:
