@@ -17,4 +17,8 @@ def test_search_platforms_includes_new_boards():
 
 def test_all_expands_to_every_platform():
     assert platforms_for("all") == [
-        "linkedin", "wellfound", "remoteok", "remotive", "wwr"]
+        "linkedin", "wellfound", "remoteok", "remotive", "wwr", "hh"]
+
+
+def test_search_platforms_includes_hh():
+    assert "hh" in SEARCH_PLATFORMS

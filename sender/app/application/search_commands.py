@@ -8,6 +8,7 @@ _TOKEN_TO_PLATFORM = {
     "search_remoteok": "remoteok",
     "search_remotive": "remotive",
     "search_wwr": "wwr",
+    "search_hh": "hh",
 }
 
 
