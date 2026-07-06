@@ -22,6 +22,7 @@ def bot_commands_payload() -> list[dict]:
         {"command": "search_remoteok", "description": "Искать вакансии в RemoteOK"},
         {"command": "search_remotive", "description": "Искать вакансии в Remotive"},
         {"command": "search_wwr", "description": "Искать вакансии в We Work Remotely"},
+        {"command": "search_hh", "description": "Искать вакансии в HeadHunter"},
         {"command": "show_vacancies", "description": "Показать найденные вакансии"},
         {"command": "status", "description": "Сводка по лидам (new / sent)"},
     ]

@@ -13,3 +13,7 @@ def test_per_platform_commands():
 def test_non_search_command_returns_none():
     assert command_to_search_platform("/show_vacancies") is None
     assert command_to_search_platform("just some vacancy text") is None
+
+
+def test_search_hh_command():
+    assert command_to_search_platform("/search_hh") == "hh"
