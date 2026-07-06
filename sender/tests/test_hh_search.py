@@ -56,3 +56,32 @@ def test_searcher_start_raises_without_state(tmp_path):
     s = HHSearcher(str(tmp_path / "missing.json"), headless=True)
     with pytest.raises(RuntimeError, match="login_hh"):
         s.start()
+
+
+def test_search_splits_limit_across_keywords(monkeypatch):
+    s = HHSearcher("hh.json", headless=True)
+    state = {"query": ""}
+
+    class _FakePage:
+        def goto(self, url, **kwargs):
+            # extract the query from ...?text=<q>&page=N
+            state["query"] = url.split("text=")[1].split("&")[0]
+
+        def wait_for_selector(self, sel, **kwargs):
+            pass
+
+    s._page = _FakePage()
+    # 10 distinct cards per page, URLs encode the current query in the path
+    # (normalize_url drops query strings, so the keyword must live in the path)
+    monkeypatch.setattr(s, "_vacancy_cards", lambda: [
+        _Card(f"Dev {state['query']} {i}",
+              f"https://hh.ru/vacancy/{state['query']}-{i}")
+        for i in range(10)
+    ])
+
+    got = s.search(["a", "b"], location="", limit=4)
+    assert len(got) == 4
+    from_a = [c for c in got if "/vacancy/a-" in c.url]
+    from_b = [c for c in got if "/vacancy/b-" in c.url]
+    assert len(from_a) == 2
+    assert len(from_b) == 2

@@ -12,6 +12,7 @@ prompting — the worker must never block on input().
 from urllib.parse import quote
 
 from app.domain.candidate import KIND_JOB, Candidate, normalize_url
+from app.domain.search_request import per_keyword_limit
 
 HH_BASE_URL = "https://hh.ru"
 SEARCH_PAGES = 2  # first 1-2 result pages per keyword (spec)
@@ -77,8 +78,8 @@ class HHSearcher:
 
         if not Path(self._storage_state_path).exists():
             raise RuntimeError(
-                f"hh.ru session not found at {self._storage_state_path}; "
-                "run `make login_hh` first")
+                f"Сессия hh.ru не найдена ({self._storage_state_path}). "
+                "Сначала выполни `make login_hh`")
 
         from patchright.sync_api import sync_playwright
 
@@ -121,8 +122,12 @@ class HHSearcher:
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         found: list[Candidate] = []
         seen: set[str] = set()
+        per_kw = per_keyword_limit(limit, len(keywords_list))
         for query in keywords_list:
+            kw_found = 0
             for page_n in range(SEARCH_PAGES):
+                if kw_found >= per_kw:
+                    break
                 try:
                     self._page.goto(build_search_url(query, page_n),
                                     wait_until="domcontentloaded", timeout=30000)
@@ -135,8 +140,11 @@ class HHSearcher:
                         continue
                     seen.add(key)
                     found.append(c)
+                    kw_found += 1
                     if len(found) >= limit:
                         return found
+                    if kw_found >= per_kw:
+                        break
         return found
 
     def describe(self, url: str) -> str:
