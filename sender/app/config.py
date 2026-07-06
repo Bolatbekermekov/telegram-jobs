@@ -140,9 +140,9 @@ PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))
 CANDIDATES_TAB = os.environ.get("CANDIDATES_TAB", "Кандидаты")
 CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
 
-# HeadHunter
-HH_ACCESS_TOKEN = os.environ.get("HH_ACCESS_TOKEN", "")
-HH_RESUME_ID = os.environ.get("HH_RESUME_ID", "")
+# HeadHunter (browser session; the applicant API was closed on 2025-12-15)
+HH_STATE_PATH = os.environ.get(
+    "HH_STATE_PATH", str(_ROOT / "sender" / "hh_state.json"))
 
 # Email (SMTP)
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
@@ -162,7 +162,7 @@ def platform_enabled(platform: str, env=None) -> bool:
     if platform == "wellfound":
         return True
     if platform == "hh":
-        return bool(env.get("HH_ACCESS_TOKEN") and env.get("HH_RESUME_ID"))
+        return True  # browser login is interactive; always available
     if platform == "email":
         return bool(env.get("SMTP_HOST") and env.get("SMTP_USER"))
     return False
