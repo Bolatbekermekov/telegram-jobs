@@ -51,6 +51,8 @@ def apply_via_page(page, url: str, content: OutreachContent) -> None:
         raise ChannelError(f"no apply button on {url}")
     apply_btn.first.click()
     _check_not_blocked(page)
+    # The response form renders async; wait for it (or the relocation popup).
+    page.wait_for_selector(f"{SEL_LETTER_INPUT}, {SEL_RELOCATION_CONFIRM}", timeout=15000)
     # Foreign-vacancy confirmation popup ("вакансия в другой стране") — optional.
     if page.locator(SEL_RELOCATION_CONFIRM).count() > 0:
         page.locator(SEL_RELOCATION_CONFIRM).first.click()

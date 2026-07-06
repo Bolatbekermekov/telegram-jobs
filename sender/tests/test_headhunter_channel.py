@@ -6,6 +6,7 @@ from app.infrastructure.channels.headhunter import (
     SEL_APPLY,
     SEL_LETTER_INPUT,
     SEL_LETTER_TOGGLE,
+    SEL_RELOCATION_CONFIRM,
     SEL_SUBMIT,
     HeadHunterChannel,
     apply_via_page,
@@ -44,6 +45,9 @@ class _FakePage:
 
         return _Locator()
 
+    def wait_for_selector(self, selector, **kw):
+        self.actions.append(("wait", selector))
+
 
 def test_extract_vacancy_id_from_url():
     assert extract_vacancy_id("https://hh.ru/vacancy/12345?from=x") == "12345"
@@ -72,6 +76,7 @@ def test_apply_fills_letter_and_submits():
     assert ("click", SEL_LETTER_TOGGLE) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "Здравствуйте") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
+    assert ("wait", f"{SEL_LETTER_INPUT}, {SEL_RELOCATION_CONFIRM}") in page.actions
 
 
 def test_apply_without_letter_toggle_fills_directly():
