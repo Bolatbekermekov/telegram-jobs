@@ -2,6 +2,15 @@
 import sys
 from pathlib import Path
 
+# Force UTF-8 stdout/stderr: the CLI prints Russian text and arrows, which crash
+# with UnicodeEncodeError when output goes anywhere non-console (a log file, a
+# pipe, cron) where Windows defaults to cp1251.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — older/odd streams without reconfigure
+        pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.interface.cli import (  # noqa: E402
