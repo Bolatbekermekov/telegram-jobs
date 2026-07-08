@@ -6,7 +6,7 @@ from app.infrastructure.channels.headhunter import (
     SEL_APPLY,
     SEL_LETTER_INPUT,
     SEL_LETTER_TOGGLE,
-    SEL_RELOCATION_CONFIRM,
+    SEL_COUNTRY_CONFIRM,
     SEL_SUBMIT,
     HeadHunterChannel,
     apply_via_page,
@@ -76,7 +76,8 @@ def test_apply_fills_letter_and_submits():
     assert ("click", SEL_LETTER_TOGGLE) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "Здравствуйте") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
-    assert ("wait", f"{SEL_LETTER_INPUT}, {SEL_RELOCATION_CONFIRM}") in page.actions
+    assert ("wait", f"{SEL_COUNTRY_CONFIRM}, {SEL_LETTER_TOGGLE}, {SEL_LETTER_INPUT}") \
+        in page.actions
 
 
 def test_apply_without_letter_toggle_fills_directly():
@@ -87,12 +88,12 @@ def test_apply_without_letter_toggle_fills_directly():
     assert ("click", SEL_SUBMIT) in page.actions
 
 
-def test_apply_confirms_relocation_popup_then_sends():
-    # Vacancy in another country: hh shows a confirm popup before the letter form.
-    page = _FakePage({SEL_APPLY: 1, SEL_RELOCATION_CONFIRM: 1,
+def test_apply_confirms_country_popup_then_sends():
+    # Vacancy in another country: hh shows a consent popup before the letter form.
+    page = _FakePage({SEL_APPLY: 1, SEL_COUNTRY_CONFIRM: 1,
                       SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
     apply_via_page(page, "https://hh.ru/vacancy/3", OutreachContent(body="hi"))
-    assert ("click", SEL_RELOCATION_CONFIRM) in page.actions
+    assert ("click", SEL_COUNTRY_CONFIRM) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "hi") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
 

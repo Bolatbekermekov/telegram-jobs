@@ -21,7 +21,7 @@ SEARCH_PAGES = 2  # first 1-2 result pages per keyword (spec)
 SEL_CARD = "[data-qa='vacancy-serp__vacancy']"
 SEL_TITLE = "[data-qa='serp-item__title']"
 SEL_COMPANY = "[data-qa='vacancy-serp__vacancy-employer']"
-SEL_SALARY = "[data-qa='vacancy-serp__vacancy-compensation']"
+SEL_SALARY = "[data-qa='vacancy-serp__compensation']"
 SEL_ADDRESS = "[data-qa='vacancy-serp__vacancy-address']"
 SEL_DESCRIPTION = "[data-qa='vacancy-description']"
 _LOGIN_MARKERS = ("/account/login", "captcha")

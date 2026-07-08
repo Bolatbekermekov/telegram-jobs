@@ -12,11 +12,16 @@ from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
 
 _VACANCY_RE = re.compile(r"hh\.(?:ru|kz)/vacancy/(\d+)")
 
-# hh.ru data-qa hooks (verified live in Task 8; fix HERE when they drift).
-SEL_APPLY = "[data-qa='vacancy-response-link-top']"
+# hh.ru data-qa hooks. Verified live 2026-07-08 on a real vacancy detail page;
+# fix HERE when they drift. `:visible` on the apply link avoids a hidden
+# duplicate (y=0) that would hang the click waiting to become actionable.
+SEL_APPLY = "[data-qa='vacancy-response-link-top']:visible"
 SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
-SEL_RELOCATION_CONFIRM = "[data-qa='relocation-warning-confirm']"
+# Consent popup shown when applying to a vacancy in another country (KZ↔RU).
+SEL_COUNTRY_CONFIRM = "[data-qa='countries-profile-visibility-popup-confirm']"
 SEL_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
+# NOTE: the letter textarea/submit appear only after the toggle; these two are
+# still best-effort (mapping them requires actually sending a response).
 SEL_LETTER_INPUT = "[data-qa='vacancy-response-popup-form-letter-input']"
 SEL_SUBMIT = "[data-qa='vacancy-response-submit-popup']"
 _LOGIN_MARKERS = ("/account/login", "/login", "captcha")
@@ -51,12 +56,18 @@ def apply_via_page(page, url: str, content: OutreachContent) -> None:
         raise ChannelError(f"no apply button on {url}")
     apply_btn.first.click()
     _check_not_blocked(page)
-    # The response form renders async; wait for it (or the relocation popup).
-    page.wait_for_selector(f"{SEL_LETTER_INPUT}, {SEL_RELOCATION_CONFIRM}", timeout=15000)
-    # Foreign-vacancy confirmation popup ("вакансия в другой стране") — optional.
-    if page.locator(SEL_RELOCATION_CONFIRM).count() > 0:
-        page.locator(SEL_RELOCATION_CONFIRM).first.click()
-    # The cover-letter textarea may need expanding first — also optional.
+    # After the click hh may show a country-visibility consent popup (foreign
+    # vacancy) and/or render the inline response form. Wait for any of them,
+    # best-effort — the optional checks below still run if the wait times out.
+    try:
+        page.wait_for_selector(
+            f"{SEL_COUNTRY_CONFIRM}, {SEL_LETTER_TOGGLE}, {SEL_LETTER_INPUT}", timeout=15000)
+    except Exception:  # noqa: BLE001
+        pass
+    # Consent popup for a vacancy in another country — optional.
+    if page.locator(SEL_COUNTRY_CONFIRM).count() > 0:
+        page.locator(SEL_COUNTRY_CONFIRM).first.click()
+    # The cover-letter field may need expanding first — also optional.
     if page.locator(SEL_LETTER_TOGGLE).count() > 0:
         page.locator(SEL_LETTER_TOGGLE).first.click()
     page.locator(SEL_LETTER_INPUT).first.fill(content.body)
