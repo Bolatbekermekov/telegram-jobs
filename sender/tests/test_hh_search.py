@@ -7,6 +7,20 @@ from app.infrastructure.search.hh_search import (
 )
 
 
+def test_search_raises_when_redirected_to_login():
+    s = HHSearcher("hh.json", headless=True)
+
+    class _LoginPage:
+        url = "https://hh.ru/account/login?backurl=%2Fsearch%2Fvacancy"
+
+        def goto(self, url, **kw):
+            pass
+
+    s._page = _LoginPage()
+    with pytest.raises(RuntimeError, match="login_hh"):
+        s.search(["python"], "", 5)
+
+
 class _Card:
     def __init__(self, title, href, company="Acme", salary="", location="Almaty"):
         self._d = {"title": title, "company": company,
@@ -63,9 +77,12 @@ def test_search_splits_limit_across_keywords(monkeypatch):
     state = {"query": ""}
 
     class _FakePage:
+        url = ""  # stays on the search page (no login redirect)
+
         def goto(self, url, **kwargs):
             # extract the query from ...?text=<q>&page=N
             state["query"] = url.split("text=")[1].split("&")[0]
+            self.url = url
 
         def wait_for_selector(self, sel, **kwargs):
             pass

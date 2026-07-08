@@ -224,6 +224,8 @@ def run_search_once(platforms):
     Chrome from `make login_wellfound` via CDP; if it is closed, Wellfound is
     skipped and the other platforms still run.
     """
+    from pathlib import Path
+
     import gspread
     from google.oauth2.service_account import Credentials
 
@@ -237,6 +239,10 @@ def run_search_once(platforms):
     candidates = CandidatesRepo(
         book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
         config.SEARCH_LIMIT_PER_PLATFORM)
+    if "hh" in platforms and not Path(config.HH_STATE_PATH).exists():
+        # Manual run: log in interactively now instead of failing with a hint.
+        # (The worker never gets here — it builds its searchers itself.)
+        run_login_hh()
     searchers = {p: build_searcher(p) for p in platforms}
     print(f"Ищу вакансии: {', '.join(platforms)}...")
     added = run_search(
@@ -324,6 +330,52 @@ def run_login_hh():
     ch.start()
     ch.stop()
     print(f"Готово. Сессия сохранена в {config.HH_STATE_PATH}.")
+
+
+def run_login_all():
+    """One command: log in to every platform, skipping ones with a live session.
+
+    Telegram runs the QR script in a subprocess (its own asyncio flow); wellfound
+    goes last because its Chrome must stay open for CDP.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from app.application.login import (
+        LOGIN_ORDER,
+        cdp_alive,
+        platforms_needing_login,
+        telegram_session_file,
+    )
+
+    has_session = {
+        "telegram": Path(telegram_session_file(config.SESSION_PATH)).exists(),
+        "linkedin": Path(config.LINKEDIN_STATE_PATH).exists(),
+        "hh": Path(config.HH_STATE_PATH).exists(),
+        "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
+    }
+    todo = platforms_needing_login(has_session)
+    for p in LOGIN_ORDER:
+        if p not in todo:
+            print(f"✅ {p}: сессия уже есть, пропускаю.")
+    if not todo:
+        print("Все платформы уже залогинены.")
+        return
+
+    def _login_telegram():
+        qr_script = Path(__file__).resolve().parents[2] / "qr_login.py"
+        subprocess.call([sys.executable, str(qr_script)])
+
+    actions = {"telegram": _login_telegram, "linkedin": run_login_browser,
+               "hh": run_login_hh, "wellfound": run_login_wellfound}
+    for p in todo:
+        print(f"\n🔑 {p}: вход...")
+        try:
+            actions[p]()
+        except Exception as exc:  # noqa: BLE001 — one platform must not stop the rest
+            print(f"⚠️ {p}: {exc}")
+    print(f"\nГотово. Логин выполнялся для: {', '.join(todo)}.")
 
 
 if __name__ == "__main__":

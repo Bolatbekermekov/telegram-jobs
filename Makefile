@@ -10,6 +10,7 @@
 #   make login_browser  -> open the LinkedIn login window, save the session (one-time)
 #   make login_wellfound -> open your Chrome for a one-time Wellfound login (leave it open)
 #   make login_hh        -> open the hh.ru login window, save the session (one-time)
+#   make login           -> log in to ALL platforms in one go (skips ones with a session)
 #   make search          -> one-shot vacancy search across all platforms
 #   make search_linkedin -> one-shot LinkedIn search
 #   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
@@ -23,7 +24,7 @@
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit
+.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -66,6 +67,9 @@ search_wwr:
 
 login_hh:
 	$(PYTHON) sender/run.py login_hh
+
+login:
+	$(PYTHON) sender/run.py login
 
 search_hh:
 	$(PYTHON) sender/run.py search_hh

@@ -1,4 +1,9 @@
-from app.application.login import login_all
+from app.application.login import (
+    LOGIN_ORDER,
+    login_all,
+    platforms_needing_login,
+    telegram_session_file,
+)
 
 
 class _FakeSearcher:
@@ -37,3 +42,21 @@ def test_login_all_stops_even_if_start_fails_and_continues():
     # ...and the next searcher still runs
     assert done == ["wellfound"]
     assert ok.events == ["start", "stop"]
+
+
+def test_telegram_session_file_appends_telethon_suffix():
+    assert telegram_session_file("sender/userbot") == "sender/userbot.session"
+
+
+def test_platforms_needing_login_keeps_order_and_skips_existing():
+    has = {"telegram": True, "linkedin": False, "hh": False, "wellfound": True}
+    assert platforms_needing_login(has) == ["linkedin", "hh"]
+
+
+def test_platforms_needing_login_unknown_platform_means_login():
+    assert platforms_needing_login({}) == LOGIN_ORDER
+
+
+def test_wellfound_logs_in_last():
+    # Its Chrome stays open for CDP, so it must not block the other logins.
+    assert LOGIN_ORDER[-1] == "wellfound"

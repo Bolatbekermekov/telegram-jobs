@@ -24,6 +24,7 @@ SEL_COMPANY = "[data-qa='vacancy-serp__vacancy-employer']"
 SEL_SALARY = "[data-qa='vacancy-serp__vacancy-compensation']"
 SEL_ADDRESS = "[data-qa='vacancy-serp__vacancy-address']"
 SEL_DESCRIPTION = "[data-qa='vacancy-description']"
+_LOGIN_MARKERS = ("/account/login", "captcha")
 
 
 def build_search_url(query: str, page: int = 0) -> str:
@@ -131,8 +132,16 @@ class HHSearcher:
                 try:
                     self._page.goto(build_search_url(query, page_n),
                                     wait_until="domcontentloaded", timeout=30000)
-                    self._page.wait_for_selector(SEL_CARD, timeout=12000)
                 except Exception:  # noqa: BLE001 — one page failing must not kill the rest
+                    break
+                if any(m in self._page.url for m in _LOGIN_MARKERS):
+                    # Expired/invalid session: fail loudly instead of silently
+                    # returning 0 candidates (run_search reports it per-platform).
+                    raise RuntimeError(
+                        "Сессия hh.ru истекла или требуется вход — выполни `make login_hh`")
+                try:
+                    self._page.wait_for_selector(SEL_CARD, timeout=12000)
+                except Exception:  # noqa: BLE001
                     break
                 for c in parse_hh_cards(self._vacancy_cards(), limit):
                     key = normalize_url(c.url)

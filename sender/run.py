@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.interface.cli import (  # noqa: E402
     run,
+    run_login_all,
     run_login_browser,
     run_login_wellfound,
     run_login_hh,
@@ -17,6 +18,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1:2]
     if cmd == ["worker"]:
         run_worker()
+    elif cmd == ["login"]:
+        run_login_all()
     elif cmd == ["login_browser"]:
         run_login_browser()
     elif cmd == ["login_wellfound"]:

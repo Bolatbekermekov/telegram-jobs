@@ -87,6 +87,16 @@ def test_apply_without_letter_toggle_fills_directly():
     assert ("click", SEL_SUBMIT) in page.actions
 
 
+def test_apply_confirms_relocation_popup_then_sends():
+    # Vacancy in another country: hh shows a confirm popup before the letter form.
+    page = _FakePage({SEL_APPLY: 1, SEL_RELOCATION_CONFIRM: 1,
+                      SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/3", OutreachContent(body="hi"))
+    assert ("click", SEL_RELOCATION_CONFIRM) in page.actions
+    assert ("fill", SEL_LETTER_INPUT, "hi") in page.actions
+    assert ("click", SEL_SUBMIT) in page.actions
+
+
 def test_apply_raises_when_already_applied():
     page = _FakePage({SEL_ALREADY_APPLIED: 1})
     with pytest.raises(ChannelError, match="already applied"):
