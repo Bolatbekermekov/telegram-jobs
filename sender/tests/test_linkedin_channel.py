@@ -56,53 +56,64 @@ def test_fill_and_send_raises_without_message_button():
         fill_and_send(page, "https://linkedin.com/in/x", OutreachContent(body="Hi"))
 
 
-from app.infrastructure.channels.linkedin import easy_apply_via_page, LinkedInChannel
-
-
-class _FakeLocator:
-    def __init__(self, count=1):
-        self._count = count
-        self.clicked = False
-        self.filled = None
-        self.first = self
-
-    def count(self):
-        return self._count
-
-    def click(self):
-        self.clicked = True
-
-    def fill(self, text):
-        self.filled = text
+from app.infrastructure.channels.linkedin import (
+    SEL_APPLY_SUBMIT,
+    SEL_EASY_APPLY,
+    easy_apply_via_page,
+    LinkedInChannel,
+)
 
 
 class _FakeApplyPage:
-    def __init__(self):
-        self.goto_url = None
-        self._apply = _FakeLocator()
-        self._note = _FakeLocator()
-        self._submit = _FakeLocator()
+    """Maps selector -> element count; records goto/click actions."""
 
-    def goto(self, url, wait_until=None):
-        self.goto_url = url
+    def __init__(self, counts):
+        self._counts = counts
+        self.actions = []
 
-    def get_by_role(self, role, name=None):
-        if name == "Easy Apply":
-            return self._apply
-        if name and "Submit" in name:
-            return self._submit
-        return _FakeLocator(count=0)
+    def goto(self, url, **kw):
+        self.actions.append(("goto", url))
 
-    def get_by_label(self, label):
-        return self._note
+    def locator(self, selector):
+        page = self
+
+        class _Locator:
+            def count(self_inner):
+                return page._counts.get(selector, 0)
+
+            @property
+            def first(self_inner):
+                return self_inner
+
+            def click(self_inner):
+                page.actions.append(("click", selector))
+
+        return _Locator()
 
 
-def test_easy_apply_fills_and_submits():
-    page = _FakeApplyPage()
+def test_easy_apply_single_step_submits():
+    page = _FakeApplyPage({SEL_EASY_APPLY: 1, SEL_APPLY_SUBMIT: 1})
     easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/9",
                         OutreachContent(body="hi"))
-    assert page.goto_url == "https://www.linkedin.com/jobs/view/9"
-    assert page._apply.clicked and page._submit.clicked
+    assert ("goto", "https://www.linkedin.com/jobs/view/9") in page.actions
+    assert ("click", SEL_EASY_APPLY) in page.actions
+    assert ("click", SEL_APPLY_SUBMIT) in page.actions
+
+
+def test_easy_apply_external_job_skipped():
+    # No jobs-apply-button = external apply -> skip with a clear reason.
+    page = _FakeApplyPage({})
+    with pytest.raises(ChannelError, match="внешний отклик"):
+        easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/1",
+                            OutreachContent(body="hi"))
+
+
+def test_easy_apply_multistep_skipped():
+    # Easy Apply present but no immediate submit = multi-step form -> skip.
+    page = _FakeApplyPage({SEL_EASY_APPLY: 1})
+    with pytest.raises(ChannelError, match="многошаговый"):
+        easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/2",
+                            OutreachContent(body="hi"))
 
 
 def test_send_routes_job_url_to_easy_apply(monkeypatch):

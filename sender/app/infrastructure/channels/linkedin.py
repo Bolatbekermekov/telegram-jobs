@@ -7,6 +7,17 @@ from app.domain.channel import ChannelError, OutreachContent
 from app.domain.candidate import linkedin_action_for_url
 
 
+# Easy Apply's button carries the class `jobs-apply-button` in every UI language
+# (the account may be in Russian: "Простая подача заявки"). External-apply jobs
+# ("Подать заявку" / "Apply", which open the company's own site) do NOT have it
+# and cannot be automated.
+SEL_EASY_APPLY = "button.jobs-apply-button"
+# Final submit of the Easy Apply modal, RU + EN.
+SEL_APPLY_SUBMIT = ("button:has-text('Отправить заявку'), "
+                    "button[aria-label='Отправить заявку'], "
+                    "button:has-text('Submit application')")
+
+
 def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
     """Open a profile and send a message. `page` is a Playwright Page (or a fake)."""
     page.goto(profile_url, wait_until="domcontentloaded")
@@ -20,14 +31,26 @@ def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
 
 
 def easy_apply_via_page(page, job_url: str, content: OutreachContent) -> None:
-    """Open a job and submit an Easy Apply note. `page` is a Playwright Page (or fake)."""
+    """Open a job and submit via Easy Apply. `page` is a Playwright Page (or fake).
+
+    Only in-platform Easy Apply is automatable. Jobs whose only apply route is
+    an external site raise a clear ChannelError so the lead is skipped instead
+    of failing with a misleading message.
+    """
     page.goto(job_url, wait_until="domcontentloaded")
-    apply_btn = page.get_by_role("button", name="Easy Apply")
+    apply_btn = page.locator(SEL_EASY_APPLY)
     if apply_btn.count() == 0:
-        raise ChannelError(f"no Easy Apply button on {job_url}")
+        raise ChannelError(
+            f"внешний отклик LinkedIn (не Easy Apply), нужен ручной отклик: {job_url}")
     apply_btn.first.click()
-    page.get_by_label("Additional questions").fill(content.body)
-    page.get_by_role("button", name="Submit application").first.click()
+    # A single-step Easy Apply shows the submit button right away. Multi-step
+    # forms (contact → resume → questions) don't, and can't be auto-completed —
+    # surface that clearly instead of leaving a half-filled application.
+    submit = page.locator(SEL_APPLY_SUBMIT)
+    if submit.count() == 0:
+        raise ChannelError(
+            f"LinkedIn Easy Apply многошаговый, нужен ручной отклик: {job_url}")
+    submit.first.click()
 
 
 class LinkedInChannel:
