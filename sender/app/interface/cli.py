@@ -315,5 +315,16 @@ def run_login_wellfound():
         print("✅ Сессия готова. Chrome НЕ закрывай — поиск Wellfound пойдёт через него.")
 
 
+def run_login_hh():
+    """Open the hh.ru login window once; the saved session serves search AND send."""
+    from app.infrastructure.channels.headhunter import HeadHunterChannel
+
+    ch = HeadHunterChannel(config.HH_STATE_PATH, headless=False)
+    print("Открываю окно входа в hh.ru. Если сессия уже есть — окно просто закроется.")
+    ch.start()
+    ch.stop()
+    print(f"Готово. Сессия сохранена в {config.HH_STATE_PATH}.")
+
+
 if __name__ == "__main__":
     run()

@@ -13,3 +13,13 @@ def test_email_enabled_requires_host_and_user():
 
 def test_unknown_platform_disabled():
     assert platform_enabled("nope", {}) is False
+
+
+def test_hh_always_enabled_browser_login():
+    # Browser login is interactive (make login_hh); no env vars required.
+    assert platform_enabled("hh", {}) is True
+
+
+def test_hh_state_path_configured():
+    from app import config
+    assert config.HH_STATE_PATH.endswith("hh_state.json")

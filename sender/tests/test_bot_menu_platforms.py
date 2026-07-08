@@ -6,3 +6,8 @@ def test_menu_has_new_search_commands():
     assert "search_remoteok" in commands
     assert "search_remotive" in commands
     assert "search_wwr" in commands
+
+
+def test_menu_has_hh_search_command():
+    commands = {c["command"] for c in bot_commands_payload()}
+    assert "search_hh" in commands

@@ -1,5 +1,6 @@
 """Build the right searcher for a platform (mirrors channels/registry.py)."""
 from app import config
+from app.infrastructure.search.hh_search import HHSearcher
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
 from app.infrastructure.search.remoteok_search import RemoteOKSearcher
 from app.infrastructure.search.remotive_search import RemotiveSearcher
@@ -36,4 +37,6 @@ def build_searcher(platform: str):
         )
     if platform == "wwr":
         return WWRSearcher()  # headful (Cloudflare); no login needed
+    if platform == "hh":
+        return HHSearcher(config.HH_STATE_PATH, headless=config.BROWSER_HEADLESS)
     raise ValueError(f"no searcher for platform: {platform}")

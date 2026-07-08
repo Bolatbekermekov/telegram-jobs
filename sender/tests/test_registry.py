@@ -8,7 +8,7 @@ from app.infrastructure.channels.headhunter import HeadHunterChannel
 class _Cfg:
     SMTP_HOST = "h"; SMTP_PORT = 587; SMTP_USER = "u"; SMTP_PASSWORD = "p"
     EMAIL_FROM_NAME = "Me"
-    HH_ACCESS_TOKEN = "t"; HH_RESUME_ID = "r"
+    HH_STATE_PATH = "hh.json"
     TELEGRAM_API_ID = 1; TELEGRAM_API_HASH = "h"; SESSION_PATH = "s"
     LINKEDIN_STATE_PATH = "l.json"; WELLFOUND_STATE_PATH = "w.json"
     BROWSER_HEADLESS = True

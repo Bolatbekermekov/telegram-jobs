@@ -13,6 +13,8 @@ def command_to_search_platform(text: str):
         return "remotive"
     if t.startswith("/search_wwr"):
         return "wwr"
+    if t.startswith("/search_hh"):
+        return "hh"
     if t.startswith("/start_search"):
         return "all"
     return None
