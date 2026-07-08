@@ -17,12 +17,18 @@ from app.infrastructure.channels.headhunter import (
 
 
 class _FakePage:
-    """Maps selector -> element count; records goto/click/fill actions."""
+    """Maps selector -> element count; records goto/click/fill actions.
 
-    def __init__(self, counts, url="https://hh.ru/vacancy/1"):
+    Clicking the submit button removes it (models a successful send) unless
+    submit_sticks=True (models a rejected form).
+    """
+
+    def __init__(self, counts, url="https://hh.ru/vacancy/1", submit_sticks=False):
         self._counts = counts
         self.url = url
         self.actions = []
+        self._submitted = False
+        self._submit_sticks = submit_sticks
 
     def goto(self, url, **kw):
         self.actions.append(("goto", url))
@@ -32,22 +38,35 @@ class _FakePage:
 
         class _Locator:
             def count(self_inner):
+                if selector == SEL_SUBMIT and page._submitted and not page._submit_sticks:
+                    return 0
                 return page._counts.get(selector, 0)
 
             @property
             def first(self_inner):
                 return self_inner
 
+            def nth(self_inner, i):
+                return self_inner
+
             def click(self_inner):
+                if selector == SEL_SUBMIT:
+                    page._submitted = True
                 page.actions.append(("click", selector))
 
             def fill(self_inner, value):
                 page.actions.append(("fill", selector, value))
 
+            def check(self_inner):
+                page.actions.append(("check", selector))
+
         return _Locator()
 
     def wait_for_selector(self, selector, **kw):
         self.actions.append(("wait", selector))
+
+    def wait_for_timeout(self, ms):
+        pass
 
 
 def test_extract_vacancy_id_from_url():
@@ -108,6 +127,39 @@ def test_apply_skips_vacancy_with_employer_questions():
     # no letter filled and no submit clicked
     assert not any(a[0] == "fill" for a in page.actions)
     assert ("click", SEL_SUBMIT) not in page.actions
+
+
+def test_apply_answers_questions_with_answerer(monkeypatch):
+    import app.infrastructure.channels.headhunter as hh
+
+    questions = [
+        {"id": "task_1", "type": "text", "prompt": "p", "options": []},
+        {"id": "task_2", "type": "choice", "prompt": "p", "options": ["a", "b"]},
+    ]
+    monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
+    monkeypatch.setattr(hh, "_verify_submitted", lambda page: None)
+
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_QUESTIONS: 2,
+                      SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1,
+                      "label:has(input[name='task_2'])": 2})
+
+    def answerer(qs, vacancy):
+        return {"task_1": {"id": "task_1", "text": "my answer"},
+                "task_2": {"id": "task_2", "choice": 1}}
+
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="letter"), answerer)
+    assert ("fill", "textarea[name='task_1_text']", "my answer") in page.actions
+    assert ("click", "label:has(input[name='task_2'])") in page.actions
+    assert ("fill", SEL_LETTER_INPUT, "letter") in page.actions
+    assert ("click", SEL_SUBMIT) in page.actions
+
+
+def test_apply_fails_when_form_not_accepted():
+    # Submit button still present after clicking = form rejected -> don't lie.
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 1,
+                      SEL_SUBMIT: 1}, submit_sticks=True)
+    with pytest.raises(ChannelError, match="не подтверждён"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
 
 
 def test_apply_raises_when_already_applied():

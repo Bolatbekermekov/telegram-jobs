@@ -1,5 +1,20 @@
 """OpenAI-backed message generator for outreach."""
+import json
+
 from openai import OpenAI
+
+_QUESTIONS_SYSTEM = (
+    "Ты отвечаешь на обязательные вопросы работодателя в отклике на hh.ru ОТ ЛИЦА "
+    "кандидата. Опирайся ТОЛЬКО на факты из CV и PROFILE, ничего не выдумывай. "
+    "Свободные текстовые ответы: коротко, по делу, честно, на русском, 1-3 предложения, "
+    "без тире («—»/«–») и без плейсхолдеров. Если по вакансии просят описать интерес или "
+    "опыт, свяжи с реальным опытом из CV. "
+    "Вопросы с вариантами (choice): выбери ОДИН технически самый правильный вариант "
+    "(это часто тест знаний по QA/разработке), верни его индекс (0 = первый вариант). "
+    "Верни СТРОГО JSON вида "
+    '{"answers":[{"id":"<id>","text":"<для type=text>"},{"id":"<id>","choice":<индекс для type=choice>}]} '
+    "с ответом на КАЖДЫЙ вопрос по его id. Без пояснений вне JSON."
+)
 
 _SYSTEM = (
     "Ты пишешь персональное сообщение для отклика на вакансию ОТ ЛИЦА кандидата "
@@ -67,3 +82,30 @@ class OpenAIMessageGenerator:
             ],
         )
         return _strip_dashes((resp.choices[0].message.content or "").strip())
+
+    def answer_questions(self, cv_text: str, profile_text: str, vacancy_context: str,
+                         questions: list) -> dict:
+        """Answer hh employer questions. Returns {question_id: {"text"|"choice"}}."""
+        from app.application.hh_questions import parse_ai_answers
+
+        lines = []
+        for q in questions:
+            if q.get("type") == "choice":
+                opts = "; ".join(f"[{i}] {o}" for i, o in enumerate(q.get("options", [])))
+                lines.append(f'- id={q["id"]} (выбор одного): {q["prompt"]}\n  Варианты: {opts}')
+            else:
+                lines.append(f'- id={q["id"]} (свободный текст): {q["prompt"]}')
+        user = (
+            f"=== PROFILE ===\n{profile_text}\n\n=== CV ===\n{cv_text}\n\n"
+            f"=== ВАКАНСИЯ ===\n{vacancy_context}\n\n"
+            f"=== ВОПРОСЫ ===\n" + "\n".join(lines) + "\n\nОтветь JSON по правилам."
+        )
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _QUESTIONS_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+        )
+        return parse_ai_answers(resp.choices[0].message.content or "{}")
