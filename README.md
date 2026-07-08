@@ -191,7 +191,7 @@ cd ..
 ## Шаг 7. Войти в Telegram по QR-коду
 
 ```powershell
-make login
+make login_telegram
 ```
 1. В терминале появится **QR-код**.
 2. На телефоне открой Telegram **под аккаунтом-отправителем** (тем самым номером из шага 3.3).
@@ -303,7 +303,10 @@ AUTO_SEND=true
 
 | Команда | Что делает |
 |---|---|
-| `make login` | Войти в Telegram по QR (один раз) |
+| `make login` | Войти сразу во все платформы; где сессия жива — пропустит |
+| `make login_telegram` | Войти в Telegram по QR (один раз) |
+| `make login_hh` | Войти в hh.ru (один раз; сессию делят поиск и отклики) |
+| `make search` | Разовый поиск вакансий по всем платформам |
 | `make dry` | Показать сгенерированное сообщение, без отправки |
 | `make test` | Отправить тест самому себе (с резюме) |
 | `make run` | Реальная рассылка с подтверждением каждого |
@@ -319,19 +322,17 @@ Sender поддерживает пять каналов для отправки 
 | **Telegram** | Работает из коробки. Нужны `TELEGRAM_API_ID` и `TELEGRAM_API_HASH` (шаг 3.3). |
 | **LinkedIn** | Задай `LINKEDIN_STATE_PATH` (путь к файлу сессии браузера) и `BROWSER_HEADLESS=false`. При первом запуске войди вручную — сессия сохранится. |
 | **Wellfound** | Аналогично LinkedIn: задай `WELLFOUND_STATE_PATH` и `BROWSER_HEADLESS=false`. |
-| **HeadHunter** | Официальное API: задай `HH_ACCESS_TOKEN` и `HH_RESUME_ID`. Токен получить на [dev.hh.ru](https://dev.hh.ru). |
+| **HeadHunter** | Один раз `make login_hh` (браузерный вход). Соискательский API hh.ru закрыт с 15.12.2025, поэтому и поиск, и отклики идут через браузер (patchright) — риск бана как у других браузерных платформ. |
 | **Email (SMTP)** | Задай `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM_NAME`. Для Gmail создай **App Password** в настройках безопасности аккаунта. |
 
 Все переменные задокументированы в `.env.example` в блоке в конце файла.
 
-**Первоначальный вход для LinkedIn и Wellfound** (один раз):
+**Первоначальный вход** (один раз) — проще всего одной командой:
 ```powershell
-# LinkedIn
-sender\.venv\Scripts\python.exe sender/run.py --platform linkedin --login
-# Wellfound
-sender\.venv\Scripts\python.exe sender/run.py --platform wellfound --login
+make login          # telegram → linkedin → hh → wellfound; где сессия уже есть — пропустит
 ```
-После входа браузер сохраняет сессию в файл, указанный в `*_STATE_PATH`, и при следующих запусках браузер не нужен (если `BROWSER_HEADLESS=true`).
+Или по отдельности: `make login_telegram`, `make login_browser` (LinkedIn), `make login_hh`, `make login_wellfound`.
+После входа браузер сохраняет сессию в файл, указанный в `*_STATE_PATH`, и при следующих запусках браузер не нужен (если `BROWSER_HEADLESS=true`). Chrome для Wellfound оставь открытым — поиск ходит через него.
 
 > [!CAUTION]
 > **LinkedIn и Wellfound: риск блокировки аккаунта.** Автоматизированная рассылка через браузер
@@ -401,7 +402,7 @@ LinkedIn и Wellfound, а ты отбираешь их с телефона.
 | Симптом | Причина и решение |
 |---|---|
 | `make test`/`/status`: ошибка доступа `403` | Таблица не расшарена на сервис-аккаунт. Шаг 2.3. |
-| Код для входа не приходит | Так и должно быть, используй `make login` (вход по QR). |
+| Код для входа не приходит | Так и должно быть, используй `make login_telegram` (вход по QR). |
 | `--to: expected one argument` в PowerShell | `@` PowerShell принимает за спец-символ. Используй `make test` (там ник в кавычках). |
 | QR в терминале нечитаемый | Разверни окно, уменьши шрифт (Ctrl+−). |
 | `database is locked` при входе | Уже запущен другой `make`-процесс. Закрой его (Ctrl+C) и повтори. |
