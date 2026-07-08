@@ -78,17 +78,21 @@ class HeadHunterChannel:
     def start(self) -> None:
         from pathlib import Path
 
+        # No interactive login fallback: hh.ru's anti-fraud blocks the login
+        # request (SMS send) in any browser we launch, so the session can only
+        # come from `make login_hh` (real Chrome + CDP export).
+        if not Path(self._storage_state_path).exists():
+            raise ChannelError(
+                f"Сессия hh.ru не найдена ({self._storage_state_path}). "
+                "Сначала выполни `make login_hh`")
+
         from patchright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=self._headless, channel="chrome")
-        state = self._storage_state_path if Path(self._storage_state_path).exists() else None
-        context = self._browser.new_context(storage_state=state, no_viewport=True)
+        context = self._browser.new_context(
+            storage_state=self._storage_state_path, no_viewport=True)
         self._page = context.new_page()
-        if state is None:
-            self._page.goto("https://hh.ru/account/login")
-            input("Залогинься в hh.ru в открытом окне, потом нажми Enter здесь...")
-            context.storage_state(path=self._storage_state_path)
 
     def stop(self) -> None:
         if self._browser:

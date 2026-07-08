@@ -322,14 +322,58 @@ def run_login_wellfound():
 
 
 def run_login_hh():
-    """Open the hh.ru login window once; the saved session serves search AND send."""
-    from app.infrastructure.channels.headhunter import HeadHunterChannel
+    """Log in to hh.ru in the user's REAL Chrome, then export the session.
 
-    ch = HeadHunterChannel(config.HH_STATE_PATH, headless=False)
-    print("Открываю окно входа в hh.ru. Если сессия уже есть — окно просто закроется.")
-    ch.start()
-    ch.stop()
-    print(f"Готово. Сессия сохранена в {config.HH_STATE_PATH}.")
+    hh.ru's anti-fraud blocks the login request (the SMS send) in any browser
+    we launch through automation — the page opens, the submit spins forever.
+    So the user logs in by hand in a real Chrome started with a debug port,
+    and we pull the cookies over CDP into HH_STATE_PATH. Search and send then
+    reuse the saved session silently; this Chrome may be closed afterwards.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from app.infrastructure.search.wellfound_search import build_chrome_debug_args
+
+    if Path(config.HH_STATE_PATH).exists():
+        print(f"✅ Сессия hh.ru уже есть ({config.HH_STATE_PATH}). "
+              "Удали этот файл, если хочешь перелогиниться.")
+        return
+
+    args = build_chrome_debug_args(
+        config.HH_CHROME_PROFILE, config.HH_CDP_PORT, "https://hh.ru/account/login")
+    print("Открываю твой Chrome для входа в hh.ru...")
+    try:
+        subprocess.Popen([config.CHROME_PATH, *args])
+    except FileNotFoundError:
+        print(f"❌ Не нашёл Chrome по пути {config.CHROME_PATH}. "
+              f"Укажи его в переменной CHROME_PATH.")
+        return
+
+    print("\n1) Залогинься в hh.ru в открывшемся Chrome (телефон → SMS-код).")
+    input("2) Когда увидишь себя залогиненным — вернись сюда и нажми Enter...")
+
+    try:
+        from patchright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(config.HH_CDP_URL)
+            ctx = browser.contexts[0] if browser.contexts else None
+            if ctx is None:
+                print("⚠️ Не нашёл открытую вкладку Chrome. Запусти команду снова.")
+                return
+            cookie_names = {c["name"] for c in ctx.cookies("https://hh.ru")}
+            if "hhtoken" not in cookie_names:
+                print("⚠️ Похоже, вход не завершён (нет куки hhtoken). "
+                      "Дологинься в Chrome и запусти `make login_hh` снова.")
+                browser.close()  # disconnect only — leaves Chrome running
+                return
+            ctx.storage_state(path=config.HH_STATE_PATH)
+            browser.close()  # disconnect only — leaves Chrome running
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Не смог забрать сессию по CDP: {exc}")
+        return
+
+    print(f"✅ Сессия сохранена в {config.HH_STATE_PATH}. Этот Chrome можно закрыть.")
 
 
 def run_login_all():

@@ -140,9 +140,16 @@ PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))
 CANDIDATES_TAB = os.environ.get("CANDIDATES_TAB", "Кандидаты")
 CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
 
-# HeadHunter (browser session; the applicant API was closed on 2025-12-15)
+# HeadHunter (browser session; the applicant API was closed on 2025-12-15).
+# Login happens in the user's REAL Chrome (anti-fraud blocks the SMS request
+# in launched browsers): `make login_hh` starts Chrome with a debug port on a
+# dedicated profile and exports the session over CDP into HH_STATE_PATH.
 HH_STATE_PATH = os.environ.get(
     "HH_STATE_PATH", str(_ROOT / "sender" / "hh_state.json"))
+HH_CDP_PORT = int(os.environ.get("HH_CDP_PORT", "9223"))  # 9222 is wellfound's
+HH_CDP_URL = os.environ.get("HH_CDP_URL", f"http://127.0.0.1:{HH_CDP_PORT}")
+HH_CHROME_PROFILE = os.environ.get(
+    "HH_CHROME_PROFILE", str(_ROOT / "sender" / ".hh_chrome"))
 
 # Email (SMTP)
 SMTP_HOST = os.environ.get("SMTP_HOST", "")

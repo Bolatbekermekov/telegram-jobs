@@ -115,6 +115,14 @@ def test_login_redirect_raises_rate_limited():
         apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
 
 
+def test_channel_start_raises_without_state(tmp_path):
+    # hh blocks the login request in launched browsers, so there is no
+    # interactive fallback anymore — start() must point to `make login_hh`.
+    ch = HeadHunterChannel(str(tmp_path / "missing.json"), headless=True)
+    with pytest.raises(ChannelError, match="login_hh"):
+        ch.start()
+
+
 def test_channel_metadata():
     ch = HeadHunterChannel("hh.json", True)
     assert ch.name == "hh"
