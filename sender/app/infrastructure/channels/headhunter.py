@@ -20,10 +20,11 @@ SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
 # Consent popup shown when applying to a vacancy in another country (KZ↔RU).
 SEL_COUNTRY_CONFIRM = "[data-qa='countries-profile-visibility-popup-confirm']"
 SEL_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
-# NOTE: the letter textarea/submit appear only after the toggle; these two are
-# still best-effort (mapping them requires actually sending a response).
 SEL_LETTER_INPUT = "[data-qa='vacancy-response-popup-form-letter-input']"
 SEL_SUBMIT = "[data-qa='vacancy-response-submit-popup']"
+# Employer screening questions render as <textarea name="task_..._text">. They
+# are mandatory, so such vacancies can't be auto-applied — we skip them.
+SEL_QUESTIONS = "textarea[name^='task_']"
 _LOGIN_MARKERS = ("/account/login", "/login", "captcha")
 
 
@@ -70,6 +71,11 @@ def apply_via_page(page, url: str, content: OutreachContent) -> None:
     # The cover-letter field may need expanding first — also optional.
     if page.locator(SEL_LETTER_TOGGLE).count() > 0:
         page.locator(SEL_LETTER_TOGGLE).first.click()
+    # Mandatory employer questions can't be auto-answered — skip this lead so
+    # the user can respond by hand instead of sending an incomplete application.
+    if page.locator(SEL_QUESTIONS).count() > 0:
+        raise ChannelError(
+            f"вакансия с обязательными вопросами работодателя, нужен ручной отклик: {url}")
     page.locator(SEL_LETTER_INPUT).first.fill(content.body)
     page.locator(SEL_SUBMIT).first.click()
 

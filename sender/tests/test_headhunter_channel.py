@@ -7,6 +7,7 @@ from app.infrastructure.channels.headhunter import (
     SEL_LETTER_INPUT,
     SEL_LETTER_TOGGLE,
     SEL_COUNTRY_CONFIRM,
+    SEL_QUESTIONS,
     SEL_SUBMIT,
     HeadHunterChannel,
     apply_via_page,
@@ -96,6 +97,17 @@ def test_apply_confirms_country_popup_then_sends():
     assert ("click", SEL_COUNTRY_CONFIRM) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "hi") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
+
+
+def test_apply_skips_vacancy_with_employer_questions():
+    # Mandatory screening questions can't be auto-answered -> skip, don't submit.
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_QUESTIONS: 6,
+                      SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    with pytest.raises(ChannelError, match="обязательными вопросами"):
+        apply_via_page(page, "https://hh.ru/vacancy/9", OutreachContent(body="hi"))
+    # no letter filled and no submit clicked
+    assert not any(a[0] == "fill" for a in page.actions)
+    assert ("click", SEL_SUBMIT) not in page.actions
 
 
 def test_apply_raises_when_already_applied():
