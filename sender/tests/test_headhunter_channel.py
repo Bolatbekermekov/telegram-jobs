@@ -4,6 +4,10 @@ from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
 from app.infrastructure.channels.headhunter import (
     SEL_ALREADY_APPLIED,
     SEL_APPLY,
+    SEL_CHAT_FILE_INPUT,
+    SEL_CHAT_MSG,
+    SEL_CHAT_OPEN_BTN,
+    SEL_CHAT_SEND_ENABLED,
     SEL_LETTER_INPUT,
     SEL_LETTER_TOGGLE,
     SEL_COUNTRY_CONFIRM,
@@ -11,6 +15,7 @@ from app.infrastructure.channels.headhunter import (
     SEL_SUBMIT,
     HeadHunterChannel,
     apply_via_page,
+    attach_cv_via_chat,
     extract_vacancy_id,
     vacancy_url,
 )
@@ -23,15 +28,21 @@ class _FakePage:
     submit_sticks=True (models a rejected form).
     """
 
-    def __init__(self, counts, url="https://hh.ru/vacancy/1", submit_sticks=False):
+    def __init__(self, counts, url="https://hh.ru/vacancy/1", submit_sticks=False,
+                 body_text=""):
         self._counts = counts
         self.url = url
         self.actions = []
         self._submitted = False
         self._submit_sticks = submit_sticks
+        self._body_text = body_text
+        self.keyboard = _FakeKeyboard(self)
 
     def goto(self, url, **kw):
         self.actions.append(("goto", url))
+
+    def inner_text(self, selector):
+        return self._body_text
 
     def locator(self, selector):
         page = self
@@ -44,6 +55,10 @@ class _FakePage:
 
             @property
             def first(self_inner):
+                return self_inner
+
+            @property
+            def last(self_inner):
                 return self_inner
 
             def nth(self_inner, i):
@@ -60,6 +75,12 @@ class _FakePage:
             def check(self_inner):
                 page.actions.append(("check", selector))
 
+            def set_input_files(self_inner, path):
+                page.actions.append(("set_input_files", selector, path))
+
+            def press(self_inner, key):
+                page.actions.append(("press", selector, key))
+
         return _Locator()
 
     def wait_for_selector(self, selector, **kw):
@@ -67,6 +88,14 @@ class _FakePage:
 
     def wait_for_timeout(self, ms):
         pass
+
+
+class _FakeKeyboard:
+    def __init__(self, page):
+        self._page = page
+
+    def press(self, key):
+        self._page.actions.append(("press", key))
 
 
 def test_extract_vacancy_id_from_url():
@@ -96,8 +125,8 @@ def test_apply_fills_letter_and_submits():
     assert ("click", SEL_LETTER_TOGGLE) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "Здравствуйте") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
-    assert ("wait", f"{SEL_COUNTRY_CONFIRM}, {SEL_LETTER_TOGGLE}, {SEL_LETTER_INPUT}") \
-        in page.actions
+    assert ("wait", f"{SEL_COUNTRY_CONFIRM}, {SEL_LETTER_TOGGLE}, {SEL_LETTER_INPUT}, "
+            f"{SEL_ALREADY_APPLIED}") in page.actions
 
 
 def test_apply_without_letter_toggle_fills_directly():
@@ -116,6 +145,23 @@ def test_apply_confirms_country_popup_then_sends():
     assert ("click", SEL_COUNTRY_CONFIRM) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "hi") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
+
+
+def test_apply_one_click_no_letter_form_succeeds():
+    # One-click-apply: no letter form renders; page shows an applied confirmation.
+    # Must finish cleanly (no hang, no re-submit), not error.
+    page = _FakePage({SEL_APPLY: 1}, body_text="Вы откликнулись на вакансию")
+    apply_via_page(page, "https://hh.ru/vacancy/5", OutreachContent(body="hi"))
+    assert ("click", SEL_APPLY) in page.actions
+    assert not any(a[0] == "fill" for a in page.actions)   # no letter filled
+    assert ("click", SEL_SUBMIT) not in page.actions        # nothing re-submitted
+
+
+def test_apply_unknown_form_raises_instead_of_hanging():
+    # No letter field and no applied confirmation -> clear error, not a 30s hang.
+    page = _FakePage({SEL_APPLY: 1}, body_text="")
+    with pytest.raises(ChannelError, match="поле письма"):
+        apply_via_page(page, "https://hh.ru/vacancy/6", OutreachContent(body="hi"))
 
 
 def test_apply_skips_vacancy_with_employer_questions():
@@ -193,3 +239,73 @@ def test_channel_metadata():
     assert ch.name == "hh"
     assert ch.body_limit == 10000
     assert ch.needs_subject is False
+
+
+# --- CV attachment in the chat ---------------------------------------------
+
+def test_attach_cv_via_chat_sends_file():
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_FILE_INPUT: 1, SEL_CHAT_SEND_ENABLED: 1})
+    attach_cv_via_chat(page, "/cv/me.pdf")
+    assert ("click", SEL_CHAT_OPEN_BTN) in page.actions
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "/cv/me.pdf") in page.actions
+    assert ("click", SEL_CHAT_SEND_ENABLED) in page.actions
+
+
+def test_attach_cv_via_chat_sends_letter_then_file():
+    # One-click vacancies pass the letter here: it's typed and sent, then the PDF.
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1,
+                      SEL_CHAT_FILE_INPUT: 1, SEL_CHAT_SEND_ENABLED: 1})
+    attach_cv_via_chat(page, "/cv/me.pdf", letter="Здравствуйте")
+    assert ("fill", SEL_CHAT_MSG, "Здравствуйте") in page.actions
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "/cv/me.pdf") in page.actions
+
+
+def test_attach_cv_via_chat_raises_without_open_button():
+    page = _FakePage({})
+    with pytest.raises(ChannelError, match="кнопка чата"):
+        attach_cv_via_chat(page, "/cv/me.pdf")
+
+
+def test_attach_cv_via_chat_raises_without_file_input():
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1})
+    with pytest.raises(ChannelError, match="поле файла"):
+        attach_cv_via_chat(page, "/cv/me.pdf")
+
+
+def test_apply_invokes_chat_attach_when_enabled(monkeypatch):
+    import app.infrastructure.channels.headhunter as hh
+    called = {}
+    monkeypatch.setattr(hh, "attach_cv_via_chat",
+                        lambda page, path, debug_dir=None, letter=None: called.setdefault("path", path))
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/1",
+                   OutreachContent(body="hi", attachment_path="/cv/me.pdf"),
+                   attach_cv_in_chat=True)
+    assert called == {"path": "/cv/me.pdf"}
+
+
+def test_apply_skips_chat_attach_without_attachment(monkeypatch):
+    import app.infrastructure.channels.headhunter as hh
+    called = {}
+    monkeypatch.setattr(hh, "attach_cv_via_chat",
+                        lambda *a, **k: called.setdefault("hit", True))
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"),
+                   attach_cv_in_chat=True)  # no attachment_path
+    assert called == {}
+
+
+def test_apply_survives_chat_attach_failure(monkeypatch):
+    # Attaching the CV in chat failing must NOT fail the (already sent) application.
+    import app.infrastructure.channels.headhunter as hh
+
+    def boom(page, path, debug_dir=None, letter=None):
+        raise ChannelError("chat selector drifted")
+
+    monkeypatch.setattr(hh, "attach_cv_via_chat", boom)
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    # Should return normally (no raise).
+    apply_via_page(page, "https://hh.ru/vacancy/1",
+                   OutreachContent(body="hi", attachment_path="/cv/me.pdf"),
+                   attach_cv_in_chat=True)
+    assert ("click", SEL_SUBMIT) in page.actions

@@ -33,7 +33,8 @@ def build_channel(platform: str, config):
                             config.SMTP_PASSWORD, config.EMAIL_FROM_NAME)
     if platform == "hh":
         return HeadHunterChannel(config.HH_STATE_PATH, config.BROWSER_HEADLESS,
-                                 _hh_answerer(config))
+                                 _hh_answerer(config),
+                                 getattr(config, "HH_ATTACH_CV_IN_CHAT", False))
     if platform == "linkedin":
         return LinkedInChannel(config.LINKEDIN_STATE_PATH, config.BROWSER_HEADLESS)
     if platform == "wellfound":

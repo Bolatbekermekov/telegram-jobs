@@ -45,6 +45,10 @@ def _resolve_cv_path() -> str:
 
 CV_PATH = _resolve_cv_path()
 ATTACH_CV = os.environ.get("ATTACH_CV", "true").lower() == "true"
+# hh has no PDF upload in the response form (it uses your online resume), but the
+# vacancy CHAT does. When true, after responding hh also attaches the CV PDF in
+# the chat. Fail-safe: if it can't, the application still counts as sent.
+HH_ATTACH_CV_IN_CHAT = os.environ.get("HH_ATTACH_CV_IN_CHAT", "true").lower() == "true"
 
 # If true, the sender skips the per-lead prompt and sends everything automatically
 # (always send, then wait the random delay). False (default) = ask send/edit/skip per lead.
