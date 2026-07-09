@@ -13,7 +13,7 @@ from app.application.format_content import format_for_channel
 from app.application.generate_message import GenerateMessage, subject_for
 from app.application.send_outreach import SendOutreach
 from app.application.send_plan import group_leads_by_platform
-from app.domain.lead import STATUS_FAILED, STATUS_SENT, STATUS_SKIPPED
+from app.domain.lead import STATUS_FAILED, STATUS_INVITED, STATUS_SENT, STATUS_SKIPPED
 from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
@@ -139,6 +139,17 @@ def run() -> None:
                     sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                     print(f"✅ Отправлено [{platform}] "
                           f"({sent_per_platform[platform]}/{config.DAILY_SEND_LIMIT}).")
+                    delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
+                    print(f"⏳ Пауза {delay} c (анти-бан)...")
+                    time.sleep(delay)
+                elif result.invited:
+                    # Connection request with a note was sent — a real outreach
+                    # action (counts toward the limit); CV goes after acceptance.
+                    repo.mark_status(lead, STATUS_INVITED, note=result.error)
+                    sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
+                    print(f"📨 Запрос на контакт отправлен [{platform}] "
+                          f"({sent_per_platform[platform]}/{config.DAILY_SEND_LIMIT}). "
+                          "CV — после подтверждения.")
                     delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                     print(f"⏳ Пауза {delay} c (анти-бан)...")
                     time.sleep(delay)

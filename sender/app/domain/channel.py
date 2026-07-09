@@ -11,6 +11,12 @@ class RateLimitedError(ChannelError):
     """The platform throttled/blocked us. The caller should stop THIS platform."""
 
 
+class InvitePendingError(ChannelError):
+    """Not a failure: an outreach step was made but full delivery is deferred —
+    e.g. a LinkedIn connection request with a note was sent, so the CV goes only
+    after the person accepts. The caller records this as its own status."""
+
+
 @dataclass
 class OutreachContent:
     body: str

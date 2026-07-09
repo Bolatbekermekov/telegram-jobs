@@ -1,5 +1,5 @@
 from app.application.send_outreach import SendOutreach
-from app.domain.channel import OutreachContent, RateLimitedError
+from app.domain.channel import InvitePendingError, OutreachContent, RateLimitedError
 from app.domain.lead import Lead
 
 
@@ -46,3 +46,12 @@ def test_flags_rate_limit():
     result = SendOutreach(ch).execute(_lead(), OutreachContent(body="hi"))
     assert not result.ok
     assert result.rate_limited is True
+
+
+def test_flags_invite_pending():
+    # A connection request with a note is a deferred success, not a failure.
+    ch = _FakeChannel(raise_exc=InvitePendingError("invite sent"))
+    result = SendOutreach(ch).execute(_lead(), OutreachContent(body="hi"))
+    assert not result.ok
+    assert result.invited is True
+    assert result.rate_limited is False
