@@ -31,3 +31,6 @@ Thumbs.db
 
 # Real-Chrome profile used for the interactive hh.ru login (login cookies)
 sender/.hh_chrome/
+
+# Playwright MCP browser profile (session data / artifacts, not source)
+.playwright-mcp/
