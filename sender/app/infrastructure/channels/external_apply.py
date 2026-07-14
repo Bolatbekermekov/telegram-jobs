@@ -8,7 +8,7 @@ from urllib.parse import unquote, urlsplit
 
 from app.application.auto_apply import answer_ai_fields, build_plan
 from app.application.classify_apply import classify, known_ats_iframe
-from app.domain.channel import ChannelError, ManualApplyRequired, OutreachContent
+from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 # Broad submit selector, RU + EN, across ATS themes.
@@ -113,12 +113,8 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
         return
     submit = page.locator(SEL_SUBMIT)
     if submit.count() == 0:
-        raise ManualApplyRequired(f"внешняя форма: не нашёл кнопку отправки: {plan_url(plan)}")
+        raise ManualApplyRequired("внешняя форма: не нашёл кнопку отправки, нужен ручной отклик")
     submit.first.click()
-
-
-def plan_url(plan) -> str:                # small helper for messages
-    return plan.actions[0].field.name if plan.actions else ""
 
 
 def external_apply(page, job_url: str, content, profile, cv_path: str,
@@ -150,6 +146,14 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
             f"внешняя форма: не заполнены обязательные поля {missing}, "
             f"нужен ручной отклик: {obs.url}")
 
+    # profile.md tells the AI to emit "[brackets]" when unsure; such a value must
+    # never reach a real employer. unmapped_required() only guards *required*
+    # fields, so an optional field with a placeholder would otherwise slip through.
+    placeholders = [a.field.label or a.field.name for a in plan.actions if "[" in a.value]
+    if placeholders:
+        raise ManualApplyRequired(
+            f"внешняя форма: ИИ оставил плейсхолдер в {placeholders}, нужен ручной отклик: {obs.url}")
+
     fill_and_submit(page, plan, dry_run)
     if dry_run:
         raise ManualApplyRequired(
@@ -160,8 +164,15 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
 def _verify_submitted(page, url: str) -> None:
     try:
         page.wait_for_timeout(2000)
-    except Exception:  # noqa: BLE001 — fake page in tests has no wait_for_timeout
+    except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
         pass
+    try:
+        still_on_form = page.locator(SEL_SUBMIT).count() > 0
+    except Exception:  # noqa: BLE001
+        still_on_form = False
+    if still_on_form:
+        raise ManualApplyRequired(
+            f"внешняя форма: отправка не подтверждена (форма всё ещё открыта), проверь вручную: {url}")
 
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
@@ -191,4 +202,11 @@ def _enter_ats_iframe(page, obs) -> None:
     src = known_ats_iframe(obs.iframes)
     if not src:
         raise ManualApplyRequired(f"встроенный ATS не распознан: {obs.url}")
-    page.goto(src, wait_until="domcontentloaded")
+    # wait_until="domcontentloaded" fires before a client-rendered ATS (Comeet/React)
+    # mounts its form, so a re-scrape can see an empty page. Wait for full load plus a
+    # short settle so the form exists before scrape_form runs again.
+    page.goto(src, wait_until="load")
+    try:
+        page.wait_for_timeout(1500)
+    except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
+        pass

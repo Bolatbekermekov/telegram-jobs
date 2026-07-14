@@ -20,6 +20,10 @@ class FakeLocator:
 
     def click(self):
         self.page.clicks.append(self.sel)
+        # A real submit advances the form, so its button disappears. submit_sticks
+        # simulates client-side validation keeping the form (and button) in place.
+        if self.sel == ea.SEL_SUBMIT and not self.page.submit_sticks:
+            self.page.present.discard(ea.SEL_SUBMIT)
 
     def fill(self, v):
         self.page.filled[self.sel] = v
@@ -35,11 +39,12 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, obs, present=()):
+    def __init__(self, obs, present=(), submit_sticks=False):
         self._obs = obs
         self.present = set(present) | {f'[data-af="{f.ref}"]' for f in obs.fields}
         self.clicks = []
         self.filled = {}
+        self.submit_sticks = submit_sticks
 
     def evaluate(self, js):        # scrape_form calls page.evaluate(_SCRAPE_JS)
         return ea.observation_to_raw(self._obs)
@@ -60,6 +65,15 @@ def test_form_route_fills_and_submits():
     ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert page.filled['[data-af="0"]'] == "a@b.com"
     assert page.filled['[data-af="1"]'] == ("file", "C:/cv.pdf")
+    assert ea.SEL_SUBMIT in page.clicks
+
+
+def test_submit_not_confirmed_when_form_persists_raises_manual():
+    # The submit button is STILL present after clicking (form did not advance ->
+    # likely client-side validation failure). We must not report blind success.
+    page = FakePage(_obs_form(), present=[ea.SEL_SUBMIT], submit_sticks=True)
+    with pytest.raises(ManualApplyRequired, match="не подтверждена"):
+        ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT in page.clicks
 
 
@@ -89,6 +103,25 @@ def test_unmapped_required_raises_manual_before_submit():
     #  an apply-hint word to route a lone field to FORM, hence "experience")
     with pytest.raises(ManualApplyRequired, match="обязательные"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert ea.SEL_SUBMIT not in page.clicks
+
+
+def test_placeholder_in_optional_field_blocks_submit():
+    # An OPTIONAL free-text field whose AI answer still contains a "[bracket]"
+    # placeholder must never be submitted (unmapped_required only guards required
+    # fields, so this is caught by the dedicated placeholder guard).
+    obs = PageObservation(url="https://x", fields=[
+        FieldObs(tag="textarea", type="", label="Why do you want to join?",
+                 required=False, ref="0")])
+    page = FakePage(obs, present=[ea.SEL_SUBMIT])
+
+    def answerer(questions, vacancy_context):
+        return {q["id"]: {"text": "I admire [Company Name] and its mission."}
+                for q in questions}
+
+    with pytest.raises(ManualApplyRequired, match="плейсхолдер"):
+        ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF,
+                          "C:/cv.pdf", answerer=answerer, dry_run=False)
     assert ea.SEL_SUBMIT not in page.clicks
 
 
