@@ -68,3 +68,40 @@ def test_readiness_and_unmapped_required():
     plan = build_plan(obs, PROF, CV)
     assert "Unknown mandatory code" in plan.unmapped_required()
     assert plan.ready_to_submit() is False
+
+
+from app.application.auto_apply import answer_ai_fields
+
+
+def test_answer_ai_fields_fills_text_and_choice_and_readiness():
+    obs = PageObservation(fields=[
+        FieldObs(tag="textarea", type="text", label="Why do you want to work here?",
+                 required=True),
+        FieldObs(tag="select", type="select", label="Preferred team",
+                 options=["Backend", "Frontend"], required=True),
+    ])
+    plan = build_plan(obs, PROF, CV)
+    assert plan.ready_to_submit() is False        # AI fields empty pre-answering
+
+    def answerer(questions, vacancy_context):
+        assert vacancy_context == "JOB TEXT"
+        out = {}
+        for q in questions:
+            if q["type"] == "text":
+                out[q["id"]] = {"text": "Because I build AI agents daily."}
+            else:
+                out[q["id"]] = {"choice": 0}
+        return out
+
+    answer_ai_fields(plan, answerer, "JOB TEXT")
+    vals = [a.value for a in plan.actions]
+    assert "Because I build AI agents daily." in vals
+    assert plan.actions[1].choice_index == 0 and plan.actions[1].value == "Backend"
+    assert plan.ready_to_submit() is True
+
+
+def test_answer_ai_fields_noop_without_answerer():
+    obs = PageObservation(fields=[FieldObs(tag="textarea", label="Why", required=False)])
+    plan = build_plan(obs, PROF, CV)
+    answer_ai_fields(plan, None, "ctx")           # must not raise
+    assert plan.ai_fields[0].value == ""

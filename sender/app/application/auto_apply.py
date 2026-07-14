@@ -145,3 +145,34 @@ def build_plan(obs: PageObservation, profile: ApplyProfile, cv_path: str) -> App
     actions = [map_field(f, profile, cv_path)
                for f in obs.fields if is_fillable_field(f)]
     return ApplyPlan(actions=actions)
+
+
+def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
+    """Fill needs_ai actions using the injected answerer. Reuses hh_questions.fill_plan
+    to clamp choices and normalise text, keeping one answer format across channels."""
+    from app.application.hh_questions import fill_plan
+
+    ai_actions = plan.ai_fields
+    if not ai_actions or answerer is None:
+        return
+    questions = [{
+        "id": str(i),
+        "type": "choice" if a.field.options else "text",
+        "prompt": a.field.label or a.field.name,
+        "options": a.field.options,
+    } for i, a in enumerate(ai_actions)]
+
+    answers = answerer(questions, vacancy_context) or {}
+    tuples = fill_plan(questions, answers)          # [(kind, id, value_or_index), ...]
+    by_id = {t[1]: t for t in tuples}
+    for i, a in enumerate(ai_actions):
+        t = by_id.get(str(i))
+        if not t:
+            continue
+        kind, _, val = t
+        if kind == "text":
+            a.value = str(val)
+        else:
+            a.choice_index = int(val)
+            if a.field.options and 0 <= a.choice_index < len(a.field.options):
+                a.value = a.field.options[a.choice_index]
