@@ -27,6 +27,8 @@ STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
 # A connection request (with note) was sent; CV goes after the person accepts.
 STATUS_INVITED = "invited"
+# Apply couldn't be automated (CAPTCHA/login/unknown form) — do it by hand.
+STATUS_MANUAL = "manual"
 
 # Default platform when the "Платформа" cell is empty (back-compat with old rows).
 DEFAULT_PLATFORM = "telegram"
