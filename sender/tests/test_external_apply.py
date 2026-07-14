@@ -123,3 +123,32 @@ def test_email_route_without_channel_raises_manual():
     page = FakePage(_obs_mailto())
     with pytest.raises(ManualApplyRequired, match="email"):
         ea.external_apply(page, "https://job", OutreachContent(body="x"), PROF, "C:/cv.pdf")
+
+
+class NavFakePage(FakePage):
+    """Fake page whose observation changes after goto() (iframe src -> real form)."""
+    def __init__(self, first_obs, after_goto_obs):
+        super().__init__(first_obs)
+        self._after = after_goto_obs
+        self.goto_url = None
+
+    def goto(self, url, wait_until=None):
+        self.goto_url = url
+        self._obs = self._after
+        self.present |= {f'[data-af="{f.ref}"]' for f in self._after.fields}
+
+
+def test_iframe_ats_navigates_into_frame_then_fills():
+    comeet = "https://www.comeet.co/jobs/28/26/apply?token=x&embedded=true"
+    first = PageObservation(url="https://superplay.co/careers/1", iframes=[comeet],
+                            fields=[FieldObs(tag="input", type="checkbox",
+                                             label="Functional Cookies", ref="0")])
+    inner = PageObservation(url=comeet, fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0")],
+        file_inputs=1)
+    page = NavFakePage(first, inner)
+    page.present.add(ea.SEL_SUBMIT)
+    ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert page.goto_url == comeet
+    assert page.filled['[data-af="0"]'] == "a@b.com"
+    assert ea.SEL_SUBMIT in page.clicks

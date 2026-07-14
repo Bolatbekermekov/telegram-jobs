@@ -7,7 +7,7 @@ Automating third-party ATS violates their ToS and risks bans (accepted by user).
 from urllib.parse import unquote, urlsplit
 
 from app.application.auto_apply import answer_ai_fields, build_plan
-from app.application.classify_apply import classify
+from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.channel import ChannelError, ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -185,5 +185,10 @@ def _mailto_address(mailto: str) -> str:
 
 
 def _enter_ats_iframe(page, obs) -> None:
-    raise ManualApplyRequired(  # implemented in Task 9
-        f"внешняя форма во встроенном ATS (iframe), реализуется отдельно: {obs.url}")
+    """The application form is embedded from a known ATS (e.g. Comeet). Navigate the
+    page directly to the iframe's own URL so a re-scrape sees a plain form. The src
+    already carries the position token, so the form loads standalone."""
+    src = known_ats_iframe(obs.iframes)
+    if not src:
+        raise ManualApplyRequired(f"встроенный ATS не распознан: {obs.url}")
+    page.goto(src, wait_until="domcontentloaded")
