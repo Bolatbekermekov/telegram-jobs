@@ -1,0 +1,38 @@
+# Пример профиля для авто-заполнения внешних форм (external-apply autofill).
+# Скопируй в apply_profile.yml и впиши свои данные:
+#   cp sender/apply_profile.yml.example sender/apply_profile.yml
+# Реальный apply_profile.yml в .gitignore и НИКОГДА не коммитится.
+# Схема: docs/superpowers/specs/2026-07-14-external-apply-autofill-design.md (§8).
+#
+# Правило: факт есть здесь -> вписывается детерминированно; поле свободное и в
+# custom_answers пусто -> отвечает ИИ по CV + profile.md. required-поле, которого
+# здесь нет -> заявка НЕ отправляется (скип + уведомление).
+
+full_name: ""
+first_name: ""
+last_name: ""
+
+email: ""
+phone: ""                # с кодом страны, напр. +7 700 000 0000
+
+city: ""
+country: ""
+
+linkedin: ""
+github: ""
+portfolio: ""
+
+# Право на работу и виза.
+work_authorization: ""   # напр. "Authorized to work in <country>; remote/contract worldwide"
+needs_visa_sponsorship: false
+
+desired_salary: ""       # свободный текст, напр. "from $2000/mo" или "$70,000/year"
+open_to_relocation: false
+notice_period: ""        # напр. "2 weeks" / "Immediately" / "Flexible"
+
+# Ключ — подстрока вопроса в нижнем регистре -> готовый ответ.
+# Пустое значение = ответит ИИ по CV + profile.md.
+custom_answers:
+  "years of experience": ""
+  "how did you hear": ""
+  "why do you want": ""    # пусто -> ИИ

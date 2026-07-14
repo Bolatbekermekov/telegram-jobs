@@ -20,11 +20,12 @@
 #   make search_hh       -> one-shot HeadHunter search (needs make login_hh once)
 #   make bot_menu        -> register the bot's command menu in Telegram (one-time)
 #   make test-unit      -> run the sender test suite
+#   make apply_probe    -> LIVE routing check on the 3 real external-apply URLs (network; no submit)
 
 PYTHON ?= sender/.venv/Scripts/python.exe
 TO ?= @bolatbekermeko_v
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit
+.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit apply_probe
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -78,4 +79,7 @@ bot_menu:
 	$(PYTHON) sender/register_bot_menu.py
 
 test-unit:
-	$(PYTHON) -m pytest sender/tests -v
+	$(PYTHON) -m pytest sender/tests -v -m "not live"
+
+apply_probe:
+	$(PYTHON) -m pytest sender/tests/test_apply_live.py -v -m live

@@ -12,6 +12,13 @@ from app.domain.candidate import linkedin_action_for_url, post_author_profile_ur
 # ("Подать заявку" / "Apply", which open the company's own site) do NOT have it
 # and cannot be automated.
 SEL_EASY_APPLY = "button.jobs-apply-button"
+# External-apply button (no Easy Apply): a link/button that opens the company site.
+# Verified selectors drift; this is best-effort RU+EN and may need live tuning.
+SEL_EXTERNAL_APPLY = (
+    "a.jobs-apply-button, "
+    "a:has-text('Подать заявку'), button:has-text('Подать заявку'), "
+    "a:has-text('Apply'), button:has-text('Apply')"
+)
 # Final submit of the Easy Apply modal, RU + EN.
 SEL_APPLY_SUBMIT = ("button:has-text('Отправить заявку'), "
                     "button[aria-label='Отправить заявку'], "
@@ -127,18 +134,17 @@ def message_or_connect(page, profile_url: str, content: OutreachContent) -> None
         raise ChannelError(f"LinkedIn: ни «Сообщение», ни «Контакт» не найдены на {profile_url}")
 
 
-def easy_apply_via_page(page, job_url: str, content: OutreachContent) -> None:
-    """Open a job and submit via Easy Apply. `page` is a Playwright Page (or fake).
+class _ExternalApplyNeeded(Exception):
+    """Internal: this LinkedIn job has no Easy Apply; the caller runs external apply."""
 
-    Only in-platform Easy Apply is automatable. Jobs whose only apply route is
-    an external site raise a clear ChannelError so the lead is skipped instead
-    of failing with a misleading message.
-    """
+
+def easy_apply_via_page(page, job_url: str, content: OutreachContent) -> None:
+    """Open a job and submit via Easy Apply. Raises _ExternalApplyNeeded when the
+    job's only route is an external company site (handled by the channel)."""
     page.goto(job_url, wait_until="domcontentloaded")
     apply_btn = page.locator(SEL_EASY_APPLY)
     if apply_btn.count() == 0:
-        raise ChannelError(
-            f"внешний отклик LinkedIn (не Easy Apply), нужен ручной отклик: {job_url}")
+        raise _ExternalApplyNeeded()
     apply_btn.first.click()
     # A single-step Easy Apply shows the submit button right away. Multi-step
     # forms (contact → resume → questions) don't, and can't be auto-completed —
@@ -155,9 +161,13 @@ class LinkedInChannel:
     body_limit = 300          # safe for connection notes; messages allow more
     needs_subject = False
 
-    def __init__(self, storage_state_path: str, headless: bool = False):
+    def __init__(self, storage_state_path: str, headless: bool = False,
+                 external_apply_deps=None):
         self._storage_state_path = storage_state_path
         self._headless = headless
+        # {"enabled": bool, "fn": callable, plus kwargs profile/cv_path/answerer/
+        #  dry_run/email_channel/subject_maker} — built in the registry.
+        self._ext = external_apply_deps or {"enabled": False, "fn": None}
         self._pw = None
         self._browser = None
         self._page = None
@@ -189,7 +199,10 @@ class LinkedInChannel:
         target = target.strip()
         action = linkedin_action_for_url(target)
         if action == "easy_apply":
-            easy_apply_via_page(self._page, target, content)
+            try:
+                easy_apply_via_page(self._page, target, content)
+            except _ExternalApplyNeeded:
+                self._external_apply(target, content)
             return
         if action == "post":
             # A hiring post: message its author (id is embedded in the post URL).
@@ -198,3 +211,28 @@ class LinkedInChannel:
                 raise ChannelError(f"LinkedIn пост: не удалось определить автора: {target}")
             target = author
         message_or_connect(self._page, target, content)
+
+    def _external_apply(self, job_url: str, content: OutreachContent) -> None:
+        if not self._ext.get("enabled") or self._ext.get("fn") is None:
+            raise ChannelError(
+                f"внешний отклик LinkedIn (не Easy Apply), нужен ручной отклик: {job_url}")
+        page = self._page
+        try:
+            desc = page.locator("div.jobs-description, main").first.inner_text(timeout=5000)[:6000]
+        except Exception:  # noqa: BLE001
+            desc = ""
+        apply_page = page
+        btn = page.locator(SEL_EXTERNAL_APPLY)
+        if btn.count() > 0:
+            try:
+                with page.context.expect_page(timeout=15000) as popup:
+                    btn.first.click()
+                apply_page = popup.value
+            except Exception:  # noqa: BLE001 — same-tab navigation, no popup
+                apply_page = page
+        fn = self._ext["fn"]
+        fn(apply_page, job_url, content,
+           profile=self._ext.get("profile"), cv_path=self._ext.get("cv_path", ""),
+           answerer=self._ext.get("answerer"), dry_run=self._ext.get("dry_run", False),
+           email_channel=self._ext.get("email_channel"),
+           subject_maker=self._ext.get("subject_maker"), vacancy_context=desc)

@@ -14,6 +14,8 @@ sender/cv/*
 !sender/cv/.gitkeep
 # Personal contacts block (has email/phone/LinkedIn). Keep the .example, ignore the real one.
 sender/signature.txt
+# Personal apply-form answers (phone, salary, visa, custom answers). Keep the .example, ignore the real one.
+sender/apply_profile.yml
 
 # Python
 __pycache__/

@@ -83,6 +83,13 @@ WELLFOUND_STATE_PATH = os.environ.get(
     "WELLFOUND_STATE_PATH", str(_ROOT / "sender" / "wellfound_state.json"))
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
 
+# --- External-apply autofill (LinkedIn jobs whose only route is a company ATS) ---
+EXTERNAL_APPLY_ENABLED = os.environ.get("EXTERNAL_APPLY_ENABLED", "true").lower() == "true"
+# true = fill the form but DO NOT click Submit (dry run for obkatka).
+APPLY_DRY_RUN = os.environ.get("APPLY_DRY_RUN", "false").lower() == "true"
+APPLY_PROFILE_PATH = os.environ.get(
+    "APPLY_PROFILE_PATH", str(_ROOT / "sender" / "apply_profile.yml"))
+
 # Wellfound is behind Cloudflare Turnstile, which loops on any launched/headless
 # browser. The interactive `wellfound` command instead launches the user's real
 # Chrome with a debug port, lets them pass Cloudflare + log in by hand, then

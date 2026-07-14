@@ -13,7 +13,13 @@ from app.application.format_content import format_for_channel
 from app.application.generate_message import GenerateMessage, subject_for
 from app.application.send_outreach import SendOutreach
 from app.application.send_plan import group_leads_by_platform
-from app.domain.lead import STATUS_FAILED, STATUS_INVITED, STATUS_SENT, STATUS_SKIPPED
+from app.domain.lead import (
+    STATUS_FAILED,
+    STATUS_INVITED,
+    STATUS_MANUAL,
+    STATUS_SENT,
+    STATUS_SKIPPED,
+)
 from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
@@ -153,6 +159,10 @@ def run() -> None:
                     delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                     print(f"⏳ Пауза {delay} c (анти-бан)...")
                     time.sleep(delay)
+                elif result.manual:
+                    # Couldn't auto-apply (gate/unknown form); leave for a manual apply.
+                    repo.mark_status(lead, STATUS_MANUAL, note=result.error)
+                    print(f"✋ Нужен ручной отклик [{platform}]: {result.error}")
                 elif result.rate_limited:
                     repo.mark_status(lead, STATUS_SKIPPED, note="rate-limited")
                     print(f"🛑 Платформа '{platform}' ограничила нас — "

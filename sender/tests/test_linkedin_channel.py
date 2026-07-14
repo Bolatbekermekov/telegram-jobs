@@ -162,6 +162,7 @@ from app.infrastructure.channels.linkedin import (
     SEL_EASY_APPLY,
     easy_apply_via_page,
     LinkedInChannel,
+    _ExternalApplyNeeded,
 )
 
 
@@ -201,10 +202,11 @@ def test_easy_apply_single_step_submits():
     assert ("click", SEL_APPLY_SUBMIT) in page.actions
 
 
-def test_easy_apply_external_job_skipped():
-    # No jobs-apply-button = external apply -> skip with a clear reason.
+def test_easy_apply_external_job_signals_handoff():
+    # No jobs-apply-button = external apply -> signal hand-off; the channel then
+    # runs the external-apply driver instead of erroring here.
     page = _FakeApplyPage({})
-    with pytest.raises(ChannelError, match="внешний отклик"):
+    with pytest.raises(_ExternalApplyNeeded):
         easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/1",
                             OutreachContent(body="hi"))
 

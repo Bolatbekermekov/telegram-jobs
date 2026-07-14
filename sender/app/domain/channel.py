@@ -17,6 +17,12 @@ class InvitePendingError(ChannelError):
     after the person accepts. The caller records this as its own status."""
 
 
+class ManualApplyRequired(ChannelError):
+    """Not a hard failure: the application can't be completed automatically (CAPTCHA,
+    login/registration wall, or an unrecognised form). The lead is flagged for a
+    manual apply, with the URL, rather than counted as sent or failed."""
+
+
 @dataclass
 class OutreachContent:
     body: str
