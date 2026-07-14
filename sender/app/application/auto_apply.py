@@ -97,6 +97,10 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
     low = f"{f.label} {f.name}".strip().lower()
 
     if f.type == "file":
+        # Attach the CV only to a resume/CV upload — never to a cover-letter,
+        # portfolio, photo, or other document field we don't have a file for.
+        if re.search(r"cover|portfolio|photo|picture|certificate|transcript|other", low):
+            return FillAction(field=f, source="unmapped")
         return FillAction(field=f, value=cv_path, is_file=True, source="cv")
 
     if re.search(r"gender|race|ethnic|veteran|disabilit|sexual orientation|pronoun", low):
@@ -130,14 +134,20 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
             val = resolver(profile)
             if val:
                 return FillAction(field=f, value=val, source="profile")
+            # Recognised field (linkedin/website/salary/…) but no profile value:
+            # leave it empty rather than dumping AI prose into it.
+            return FillAction(field=f, source="unmapped")
 
-    if f.tag == "textarea" or re.search(r"why|cover|message|about|motivat|tell us", low):
+    # Free text only: a textarea, or an input whose label reads like an open question.
+    if f.tag == "textarea" or re.search(
+            r"why|cover letter|message|motivat|tell us|describe|\bnote\b|question|"
+            r"about you|about yourself|yourself", low):
         return FillAction(field=f, needs_ai=True, source="ai")
     if f.options:                       # unknown select/radio -> let the AI pick
         return FillAction(field=f, needs_ai=True, source="ai")
-    if f.tag == "input" and f.type in ("text", "", "url", "number"):
-        return FillAction(field=f, needs_ai=True, source="ai")
 
+    # A plain short input we don't recognise: leave it empty rather than AI-filling
+    # prose into a name/url/id-type box. If required, the plan flags it -> manual.
     return FillAction(field=f, source="unmapped")
 
 

@@ -105,3 +105,28 @@ def test_answer_ai_fields_noop_without_answerer():
     plan = build_plan(obs, PROF, CV)
     answer_ai_fields(plan, None, "ctx")           # must not raise
     assert plan.ai_fields[0].value == ""
+
+
+def test_cv_only_attached_to_resume_not_cover_letter_or_portfolio():
+    resume = _m("Attach Resume", type="file")
+    assert resume.is_file and resume.value == CV
+    cover = _m("Attach Cover Letter", type="file")
+    assert not cover.is_file and cover.value == "" and cover.source == "unmapped"
+    portfolio = _m("Attach Portfolio", type="file")
+    assert not portfolio.is_file and portfolio.source == "unmapped"
+
+
+def test_recognised_field_without_profile_value_stays_empty_not_ai():
+    # PROF has no portfolio -> a "Personal website" field must not get AI prose.
+    a = _m("Personal website", type="url")
+    assert a.needs_ai is False and a.value == "" and a.source == "unmapped"
+
+
+def test_unknown_plain_input_is_unmapped_not_ai():
+    a = _m("Internal reference number")
+    assert a.needs_ai is False and a.source == "unmapped"
+
+
+def test_note_and_why_inputs_still_go_to_ai():
+    assert _m("Personal note").needs_ai is True
+    assert _m("Why do you want to work here?").needs_ai is True

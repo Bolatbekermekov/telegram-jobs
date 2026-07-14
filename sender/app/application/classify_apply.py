@@ -31,14 +31,18 @@ def is_real_field(f: FieldObs) -> bool:
 
 
 def looks_like_apply_form(real_fields: list[FieldObs], file_inputs: int) -> bool:
+    # A real application form has a resume upload OR several apply-type fields. A
+    # lone email box (e.g. a "get this job by email" / subscribe field on a job-
+    # board listing page, like join.com's "Apply later") is NOT an application form.
     if file_inputs > 0:
         return True
+    hits = 0
     for f in real_fields:
-        if f.type in ("email", "tel", "file"):
-            return True
-        if f.tag in ("input", "textarea") and _APPLY_HINT_RE.search(f"{f.label} {f.name}"):
-            return True
-    return False
+        if f.type in ("email", "tel"):
+            hits += 1
+        elif f.tag in ("input", "textarea") and _APPLY_HINT_RE.search(f"{f.label} {f.name}"):
+            hits += 1
+    return hits >= 2
 
 
 def known_ats_iframe(iframes: list[str]) -> str | None:
@@ -50,7 +54,11 @@ def known_ats_iframe(iframes: list[str]) -> str | None:
 
 
 def classify(obs: PageObservation) -> Route:
-    if obs.captcha or obs.login_required:
+    # Only a real login/registration wall is an automatic skip. reCAPTCHA is NOT
+    # gated: invisible reCAPTCHA (v3) sits on almost every ATS and does not block
+    # filling/submitting, and a visible challenge that truly blocks is caught after
+    # submit by the verification step (form did not advance -> manual).
+    if obs.login_required:
         return Route.GATED
     real = [f for f in obs.fields if is_real_field(f)]
     if looks_like_apply_form(real, obs.file_inputs):
