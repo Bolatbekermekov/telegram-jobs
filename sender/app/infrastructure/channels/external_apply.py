@@ -30,8 +30,10 @@ _SCRAPE_JS = r"""() => {
     if (el.placeholder) return norm(el.placeholder);
     return norm(el.name);
   };
+  const isVisible = e => !e.disabled && e.getClientRects().length > 0
+    && getComputedStyle(e).visibility !== 'hidden';
   const controls = [...document.querySelectorAll('input,select,textarea')]
-    .filter(e => !['hidden','submit','button','reset','image'].includes(e.type));
+    .filter(e => !['hidden','submit','button','reset','image'].includes(e.type) && isVisible(e));
   const fields = controls.map((e, i) => {
     e.setAttribute('data-af', String(i));
     return {
@@ -45,7 +47,6 @@ _SCRAPE_JS = r"""() => {
     };
   });
   const txt = norm(document.body ? document.body.innerText : '');
-  const html = document.documentElement.innerHTML;
   return {
     url: location.href,
     fields,
@@ -54,7 +55,7 @@ _SCRAPE_JS = r"""() => {
     mailto: [...document.querySelectorAll('a[href^="mailto:"]')].map(a=>a.getAttribute('href')).slice(0,4),
     apply_buttons: [...new Set([...document.querySelectorAll('button,a[role=button],a')]
       .map(b=>norm(b.textContent)).filter(t=>/apply|bewerb|отклик|заявк|application|join/i.test(t)))].slice(0,8),
-    captcha: /recaptcha|hcaptcha|turnstile/i.test(html),
+    captcha: !!document.querySelector('iframe[src*="recaptcha/api2/anchor"], iframe[title="reCAPTCHA"], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"], .cf-turnstile'),
     login_required: (document.querySelector('input[type=password]')!=null)
       && /sign in|log in|register|create account|войти|регистрац/i.test(txt),
     text_excerpt: txt.slice(0,240),
@@ -100,15 +101,25 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
         loc = page.locator(f'[data-af="{a.field.ref}"]')
         if loc.count() == 0:
             continue
-        if a.is_file and a.value:
-            loc.first.set_input_files(a.value)
-        elif a.field.tag == "select" and a.choice_index is not None:
-            loc.first.select_option(index=a.choice_index)
-        elif a.field.type in ("checkbox", "radio"):
-            if a.value:
-                loc.first.check()
-        elif a.value:
-            loc.first.fill(a.value)
+        # Bound every fill so a stray/invisible control can never hang 30s or crash
+        # the whole fill. If a REQUIRED field can't be filled, bail to a manual apply
+        # (never submit a partial form); an optional one is just skipped.
+        try:
+            if a.is_file and a.value:
+                loc.first.set_input_files(a.value, timeout=8000)
+            elif a.field.tag == "select" and a.choice_index is not None:
+                loc.first.select_option(index=a.choice_index, timeout=8000)
+            elif a.field.type in ("checkbox", "radio"):
+                if a.value:
+                    loc.first.check(timeout=8000)
+            elif a.value:
+                loc.first.fill(a.value, timeout=8000)
+        except Exception:  # noqa: BLE001 — hidden/odd widget must not hang or crash the fill
+            if a.field.required:
+                raise ManualApplyRequired(
+                    f"внешняя форма: не смог заполнить обязательное поле "
+                    f"«{a.field.label or a.field.name}», нужен ручной отклик")
+            continue
     if dry_run:
         return
     submit = page.locator(SEL_SUBMIT)

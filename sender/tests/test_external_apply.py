@@ -25,16 +25,16 @@ class FakeLocator:
         if self.sel == ea.SEL_SUBMIT and not self.page.submit_sticks:
             self.page.present.discard(ea.SEL_SUBMIT)
 
-    def fill(self, v):
+    def fill(self, v, **kwargs):
         self.page.filled[self.sel] = v
 
-    def set_input_files(self, v):
+    def set_input_files(self, v, **kwargs):
         self.page.filled[self.sel] = ("file", v)
 
-    def select_option(self, index):
+    def select_option(self, index, **kwargs):
         self.page.filled[self.sel] = ("choice", index)
 
-    def check(self):
+    def check(self, **kwargs):
         self.page.filled[self.sel] = ("check", True)
 
 
@@ -87,20 +87,20 @@ def test_dry_run_fills_but_does_not_submit():
 
 
 def test_gated_page_raises_manual():
-    page = FakePage(PageObservation(url="https://join.com/apply/authentication",
-                                    captcha=True))
+    page = FakePage(PageObservation(url="https://x/apply/authentication",
+                                    login_required=True))
     with pytest.raises(ManualApplyRequired, match="гейт"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
 
 
 def test_unmapped_required_raises_manual_before_submit():
     obs = PageObservation(url="https://x", fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),
         FieldObs(tag="input", type="text", label="Mystery required experience",
-                 required=True, ref="0")])
+                 required=True, ref="1")])
     page = FakePage(obs, present=[ea.SEL_SUBMIT])
-    # free-text field (routes to FORM), maps to AI but no answerer -> stays empty
-    # -> required-unfilled -> manual  (brief said "code"; committed classifier needs
-    #  an apply-hint word to route a lone field to FORM, hence "experience")
+    # A real form (email + another field -> FORM). Email maps from the profile; the
+    # mystery field maps to nothing, stays empty -> required-unfilled -> manual, no submit.
     with pytest.raises(ManualApplyRequired, match="обязательные"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT not in page.clicks
@@ -111,8 +111,9 @@ def test_placeholder_in_optional_field_blocks_submit():
     # placeholder must never be submitted (unmapped_required only guards required
     # fields, so this is caught by the dedicated placeholder guard).
     obs = PageObservation(url="https://x", fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),
         FieldObs(tag="textarea", type="", label="Why do you want to join?",
-                 required=False, ref="0")])
+                 required=False, ref="1")])
     page = FakePage(obs, present=[ea.SEL_SUBMIT])
 
     def answerer(questions, vacancy_context):
