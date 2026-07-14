@@ -4,9 +4,11 @@ in app.application (classify_apply / auto_apply) and is tested without a browser
 
 Automating third-party ATS violates their ToS and risks bans (accepted by user).
 """
+from urllib.parse import unquote, urlsplit
+
 from app.application.auto_apply import answer_ai_fields, build_plan
 from app.application.classify_apply import classify
-from app.domain.channel import ChannelError, ManualApplyRequired
+from app.domain.channel import ChannelError, ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 # Broad submit selector, RU + EN, across ATS themes.
@@ -164,8 +166,22 @@ def _verify_submitted(page, url: str) -> None:
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
                      vacancy_context) -> None:
-    raise ManualApplyRequired(  # implemented in Task 8
-        f"внешний отклик по email (mailto), реализуется отдельно: {obs.url}")
+    if email_channel is None:
+        raise ManualApplyRequired(
+            f"внешний отклик по email, но email-канал не настроен (SMTP): {obs.url}")
+    addr = _mailto_address(obs.mailto_links[0])
+    if not addr:
+        raise ManualApplyRequired(f"внешний отклик по email: не разобрал адрес: {obs.url}")
+    subject = (subject_maker(vacancy_context) if subject_maker else "Application").strip()
+    email_channel.send(addr, OutreachContent(
+        subject=subject or "Application", body=content.body, attachment_path=cv_path))
+
+
+def _mailto_address(mailto: str) -> str:
+    # "mailto:hr@x.com?subject=..." -> "hr@x.com"
+    rest = mailto[len("mailto:"):] if mailto.lower().startswith("mailto:") else mailto
+    addr = urlsplit(rest).path or rest.split("?", 1)[0]
+    return unquote(addr).strip()
 
 
 def _enter_ats_iframe(page, obs) -> None:

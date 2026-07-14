@@ -90,3 +90,36 @@ def test_unmapped_required_raises_manual_before_submit():
     with pytest.raises(ManualApplyRequired, match="обязательные"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT not in page.clicks
+
+
+def _obs_mailto():
+    return PageObservation(url="https://ddrive.tech/team/junior",
+                           mailto_links=["mailto:hr@ddrive.tech?subject=Junior%20Dev"],
+                           apply_buttons=["Apply"])
+
+
+class RecordingEmail:
+    def __init__(self):
+        self.sent = []
+
+    def start(self): pass
+    def stop(self): pass
+
+    def send(self, target, content):
+        self.sent.append((target, content.subject, content.attachment_path))
+
+
+def test_email_route_sends_via_email_channel():
+    page = FakePage(_obs_mailto())
+    mail = RecordingEmail()
+    ea.external_apply(page, "https://job", OutreachContent(body="cover letter"),
+                      PROF, "C:/cv.pdf", email_channel=mail,
+                      subject_maker=lambda ctx: "Application: Junior Dev",
+                      vacancy_context="JOB")
+    assert mail.sent == [("hr@ddrive.tech", "Application: Junior Dev", "C:/cv.pdf")]
+
+
+def test_email_route_without_channel_raises_manual():
+    page = FakePage(_obs_mailto())
+    with pytest.raises(ManualApplyRequired, match="email"):
+        ea.external_apply(page, "https://job", OutreachContent(body="x"), PROF, "C:/cv.pdf")
