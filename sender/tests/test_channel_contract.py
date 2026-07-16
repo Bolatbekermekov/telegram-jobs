@@ -11,7 +11,7 @@ _CHANNELS = [
     EmailChannel("h", 587, "u", "p", "Me"),
     HeadHunterChannel("hh.json", True),
     LinkedInChannel("l.json", True),
-    WellfoundChannel("w.json", True),
+    WellfoundChannel("http://127.0.0.1:9222"),
     # TelegramChannel constructs a TelegramClient; skip instantiation, check class attrs.
 ]
 

@@ -61,5 +61,8 @@ def build_channel(platform: str, config):
         return LinkedInChannel(config.LINKEDIN_STATE_PATH, config.BROWSER_HEADLESS,
                                external_apply_deps=_external_apply_deps(config))
     if platform == "wellfound":
-        return WellfoundChannel(config.WELLFOUND_STATE_PATH, config.BROWSER_HEADLESS)
+        # Apply runs through the warm CDP Chrome from `make login_wellfound`
+        # (past Cloudflare + logged in), not a launched browser off storage_state.
+        return WellfoundChannel(config.WELLFOUND_CDP_URL,
+                                dry_run=getattr(config, "APPLY_DRY_RUN", False))
     raise ValueError(f"unknown platform: {platform}")

@@ -23,6 +23,12 @@ class ManualApplyRequired(ChannelError):
     manual apply, with the URL, rather than counted as sent or failed."""
 
 
+class ChannelUnavailable(ChannelError):
+    """Not a hard failure: the channel can't be started right now for a transient
+    setup reason (e.g. the CDP Chrome for Wellfound isn't running). The caller
+    leaves this platform's leads `new` to retry next run — not counted as failed."""
+
+
 @dataclass
 class OutreachContent:
     body: str
