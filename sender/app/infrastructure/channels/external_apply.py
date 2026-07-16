@@ -4,6 +4,7 @@ in app.application (classify_apply / auto_apply) and is tested without a browser
 
 Automating third-party ATS violates their ToS and risks bans (accepted by user).
 """
+import re
 from urllib.parse import unquote, urlsplit
 
 from app.application.auto_apply import answer_ai_fields, build_plan
@@ -128,11 +129,86 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
     submit.first.click()
 
 
+def scrape_until_ready(page, attempts: int = 6, interval_ms: int = 1500):
+    """Re-scrape while the page still classifies as NONE. Many ATS render their
+    apply form client-side, a beat after navigation — a single early scrape sees
+    an empty page and wrongly gives up. Poll until the page is actionable
+    (FORM/EMAIL/IFRAME_ATS/GATED) or the attempts run out; return (obs, route)."""
+    obs = scrape_form(page)
+    route = classify(obs)
+    for _ in range(attempts - 1):
+        if route is not Route.NONE:
+            break
+        page.wait_for_timeout(interval_ms)
+        obs = scrape_form(page)
+        route = classify(obs)
+    return obs, route
+
+
+# Some ATS hide the form behind an "Apply"/"Easy Apply" button that opens it in a
+# modal or a later step (e.g. Ceipal). On an otherwise-empty page we click one and
+# re-scrape for the revealed form.
+_REVEAL_SEL = (
+    "button:has-text('Easy Apply'), a:has-text('Easy Apply'), "
+    "button:has-text('Apply now'), a:has-text('Apply now'), "
+    "button:has-text('Start application'), button:has-text('Подать заявку'), "
+    "button:has-text('Apply'), a:has-text('Apply')"
+)
+
+
+def _reveal_apply_form(page) -> bool:
+    """Click an 'Apply'/'Easy Apply' control to surface a form hidden behind it
+    (often a modal). Best-effort: tries the first few visible candidates, scrolls
+    into view, force-clicks if a normal click is intercepted. Returns True if a
+    click landed (the caller then re-scrapes for the revealed form)."""
+    try:
+        loc = page.locator(_REVEAL_SEL)
+        n = min(loc.count(), 4)
+    except Exception:  # noqa: BLE001
+        return False
+    for i in range(n):
+        el = loc.nth(i)
+        try:
+            if not el.is_visible():
+                continue
+            el.scroll_into_view_if_needed(timeout=2000)
+            el.click(timeout=5000)
+            return True
+        except Exception:  # noqa: BLE001
+            try:
+                el.click(timeout=2000, force=True)
+                return True
+            except Exception:  # noqa: BLE001
+                continue
+    return False
+
+
+# An apply path gated behind account creation / sign-in — the URL or a password
+# field gives it away. We can't auto-fill these; skip with a clear reason so the
+# sheet records "requires Sign Up / Login".
+_AUTH_URL_RE = re.compile(
+    r"/(register|sign[-_]?up|signup|sign[-_]?in|signin|log[-_]?in|login|auth)(/|\?|#|$)",
+    re.I)
+
+
+def _requires_signup_or_login(page) -> bool:
+    try:
+        if _AUTH_URL_RE.search(page.url or ""):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return page.locator("input[type=password]").count() > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
-    obs = scrape_form(page)
-    route = classify(obs)
+    obs, route = scrape_until_ready(page)
+    if route is Route.NONE and _reveal_apply_form(page):
+        obs, route = scrape_until_ready(page)   # form opened in a modal / next step
 
     if route is Route.EMAIL:
         _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
@@ -140,12 +216,15 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         return
     if route is Route.IFRAME_ATS:
         _enter_ats_iframe(page, obs)
-        obs = scrape_form(page)
-        route = classify(obs)
+        obs, route = scrape_until_ready(page)
     if route is Route.GATED:
         raise ManualApplyRequired(
             f"внешний отклик за гейтом (CAPTCHA/логин), нужен ручной отклик: {obs.url}")
     if route is not Route.FORM:
+        if _requires_signup_or_login(page):
+            raise ManualApplyRequired(
+                "внешний отклик требует регистрации/входа (Sign Up / Login) — "
+                f"пропущено, нужен ручной отклик: {obs.url}")
         raise ManualApplyRequired(
             f"внешняя форма не распознана, нужен ручной отклик: {obs.url}")
 
