@@ -101,8 +101,14 @@ def run() -> None:
                 break
             platform = lead.platform
 
+            if platform in rate_limited:
+                # This platform throttled us earlier this run — leave its remaining
+                # leads `new` (write no status) so the next run retries them, matching
+                # the old grouped loop that `break`ed and left them unmarked.
+                continue
+
             reason = skip_reason(lead, _KNOWN, sent_per_platform,
-                                 config.DAILY_SEND_LIMIT, rate_limited, failed_platforms)
+                                 config.DAILY_SEND_LIMIT, failed_platforms)
             if reason is not None:
                 status, note = reason
                 repo.mark_status(lead, status, note=note)
@@ -171,7 +177,7 @@ def run() -> None:
                 repo.mark_status(lead, STATUS_SKIPPED, note="rate-limited")
                 rate_limited.add(platform)
                 print(f"🛑 Платформа '{platform}' ограничила нас — "
-                      "пропускаю её остальные лиды на этот запуск.")
+                      "остальные её лиды оставляю на следующий прогон.")
             else:
                 repo.mark_status(lead, STATUS_FAILED, note=result.error)
                 print(f"❌ Ошибка отправки: {result.error}")
