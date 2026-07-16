@@ -3,7 +3,9 @@
 Automating LinkedIn violates its ToS and risks an account ban (accepted by the
 user). DOM interaction is isolated in fill_and_send() because selectors drift.
 """
-from app.domain.channel import ChannelError, InvitePendingError, OutreachContent
+from app.domain.channel import (
+    ChannelError, InvitePendingError, ManualApplyRequired, OutreachContent,
+)
 from app.domain.candidate import linkedin_action_for_url, post_author_profile_url
 
 
@@ -12,13 +14,6 @@ from app.domain.candidate import linkedin_action_for_url, post_author_profile_ur
 # ("Подать заявку" / "Apply", which open the company's own site) do NOT have it
 # and cannot be automated.
 SEL_EASY_APPLY = "button.jobs-apply-button"
-# External-apply button (no Easy Apply): a link/button that opens the company site.
-# Verified selectors drift; this is best-effort RU+EN and may need live tuning.
-SEL_EXTERNAL_APPLY = (
-    "a.jobs-apply-button, "
-    "a:has-text('Подать заявку'), button:has-text('Подать заявку'), "
-    "a:has-text('Apply'), button:has-text('Apply')"
-)
 # Final submit of the Easy Apply modal, RU + EN.
 SEL_APPLY_SUBMIT = ("button:has-text('Отправить заявку'), "
                     "button[aria-label='Отправить заявку'], "
@@ -134,6 +129,44 @@ def message_or_connect(page, profile_url: str, content: OutreachContent) -> None
         raise ChannelError(f"LinkedIn: ни «Сообщение», ни «Контакт» не найдены на {profile_url}")
 
 
+# LinkedIn's Voyager API holds an offsite job's real apply target as
+# `companyApplyUrl`. We read it directly (an in-page fetch carries the logged-in
+# session + csrf) instead of clicking the "apply on the company site" button,
+# which — like the now-removed jobs-apply-button class — does NOT navigate under
+# browser automation.
+_VOYAGER_APPLY_JS = r"""
+async (jobUrl) => {
+  const m = (jobUrl || location.pathname).match(/jobs\/view\/(\d+)/);
+  if (!m) return null;
+  const jobId = m[1];
+  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || '';
+  const deco = 'com.linkedin.voyager.deco.jobs.web.shared.WebFullJobPosting-65';
+  let txt = '';
+  try {
+    let r = await fetch(`/voyager/api/jobs/jobPostings/${jobId}?decorationId=${deco}`,
+      {headers: {'csrf-token': csrf,
+                 'accept': 'application/vnd.linkedin.normalized+json+2.1'}});
+    if (r.status !== 200)
+      r = await fetch(`/voyager/api/jobs/jobPostings/${jobId}`, {headers: {'csrf-token': csrf}});
+    txt = await r.text();
+  } catch (e) { return null; }
+  const mm = txt.match(/"companyApplyUrl"\s*:\s*("(?:[^"\\]|\\.)*")/);
+  if (!mm) return null;
+  try { return JSON.parse(mm[1]); } catch (e) { return null; }
+}
+"""
+
+
+def fetch_company_apply_url(page, job_url):
+    """Return an offsite LinkedIn job's real company apply URL, or None if it is
+    not an offsite apply (e.g. Easy Apply) or cannot be read. Uses LinkedIn's
+    Voyager API via an in-page fetch, so it runs with the logged-in session."""
+    try:
+        return page.evaluate(_VOYAGER_APPLY_JS, job_url)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class _ExternalApplyNeeded(Exception):
     """Internal: this LinkedIn job has no Easy Apply; the caller runs external apply."""
 
@@ -217,21 +250,22 @@ class LinkedInChannel:
             raise ChannelError(
                 f"внешний отклик LinkedIn (не Easy Apply), нужен ручной отклик: {job_url}")
         page = self._page
+        # Grab the LinkedIn job description for AI context BEFORE navigating away.
         try:
-            desc = page.locator("div.jobs-description, main").first.inner_text(timeout=5000)[:6000]
+            desc = page.locator("main").first.inner_text(timeout=5000)[:6000]
         except Exception:  # noqa: BLE001
             desc = ""
-        apply_page = page
-        btn = page.locator(SEL_EXTERNAL_APPLY)
-        if btn.count() > 0:
-            try:
-                with page.context.expect_page(timeout=15000) as popup:
-                    btn.first.click()
-                apply_page = popup.value
-            except Exception:  # noqa: BLE001 — same-tab navigation, no popup
-                apply_page = page
+        # Read the company's real apply URL from LinkedIn's Voyager API and go
+        # straight there — the on-page "apply on the company site" button does not
+        # navigate under automation, so we never rely on clicking it.
+        company_url = fetch_company_apply_url(page, job_url)
+        if not company_url:
+            raise ManualApplyRequired(
+                "LinkedIn: не удалось получить ссылку внешнего отклика (возможно "
+                f"Easy Apply или изменения в UI), нужен ручной отклик: {job_url}")
+        page.goto(company_url, wait_until="domcontentloaded")
         fn = self._ext["fn"]
-        fn(apply_page, job_url, content,
+        fn(page, job_url, content,
            profile=self._ext.get("profile"), cv_path=self._ext.get("cv_path", ""),
            answerer=self._ext.get("answerer"), dry_run=self._ext.get("dry_run", False),
            email_channel=self._ext.get("email_channel"),

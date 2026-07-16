@@ -1,86 +1,10 @@
-from app.domain.channel import OutreachContent
+from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.infrastructure.channels import linkedin as li
 
 
 class Loc:
-    def __init__(self, n):
-        self._n = n
-        self.first = self
-
-    def count(self):
-        return self._n
-
-    def click(self):
-        pass
-
-
-class Page:
-    def __init__(self, has_easy_apply):
-        self._has = has_easy_apply
-
-    def goto(self, url, wait_until=None):
-        pass
-
-    def locator(self, sel):
-        # No Easy Apply button => external-apply job.
-        return Loc(1 if (self._has and "jobs-apply-button" in sel) else 0)
-
-
-def test_external_job_calls_external_apply_when_enabled():
-    calls = {}
-
-    def fake_external(page, job_url, content, **kw):
-        calls["job_url"] = job_url
-
-    ch = li.LinkedInChannel("state.json", headless=True,
-                            external_apply_deps={"enabled": True, "fn": fake_external})
-    ch._page = Page(has_easy_apply=False)
-    ch.send("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
-    assert calls["job_url"] == "https://www.linkedin.com/jobs/view/123"
-
-
-def test_external_job_raises_when_disabled():
-    ch = li.LinkedInChannel("state.json", headless=True,
-                            external_apply_deps={"enabled": False, "fn": None})
-    ch._page = Page(has_easy_apply=False)
-    try:
-        ch.send("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
-        assert False, "expected ChannelError"
-    except li.ChannelError as exc:
-        assert "внешний отклик" in str(exc)
-
-
-class PopupPage:
-    """The new browser tab LinkedIn opens for an external-apply job (the company
-    site). Distinct object so the test can assert it — not the original page — is
-    the one handed to the external-apply fn."""
-
-
-class ExpectPageCtx:
-    """Mimics playwright's context.expect_page() context manager: `.value` yields
-    the popup page after the block runs."""
-    def __init__(self, popup):
-        self.value = popup
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-class Ctx:
-    def __init__(self, popup):
-        self._popup = popup
-
-    def expect_page(self, timeout=None):
-        return ExpectPageCtx(self._popup)
-
-
-class ExtLoc:
     def __init__(self, n, text=""):
-        self._n = n
-        self._text = text
+        self._n, self._text = n, text
         self.first = self
 
     def count(self):
@@ -93,35 +17,92 @@ class ExtLoc:
         pass
 
 
-class JobPageWithPopup:
-    """External-apply job page: the external-apply button is present and clicking
-    it opens a new tab, surfaced via context.expect_page()."""
-    def __init__(self, popup):
-        self.context = Ctx(popup)
+class JobPage:
+    """Fake LinkedIn job page. `company_url` is what the Voyager fetch
+    (page.evaluate) yields: a company apply URL for an offsite job, or None."""
+
+    def __init__(self, company_url, easy_apply=False):
+        self._company_url = company_url
+        self._easy = easy_apply
+        self.goto_urls = []
+        self.eval_args = []
 
     def goto(self, url, wait_until=None):
-        pass
+        self.goto_urls.append(url)
 
     def locator(self, sel):
-        if sel == li.SEL_EXTERNAL_APPLY:
-            return ExtLoc(1)
-        if "jobs-description" in sel:
-            return ExtLoc(1, "job description text")
-        return ExtLoc(0)
+        if self._easy and "jobs-apply-button" in sel:
+            return Loc(1)            # Easy Apply button present
+        if "main" in sel:
+            return Loc(1, "job description text")
+        return Loc(0)
+
+    def evaluate(self, js, arg=None):
+        self.eval_args.append(arg)
+        return self._company_url
 
 
-def test_external_apply_hands_popup_page_to_fn():
+def test_external_job_routes_to_external_apply_when_enabled():
+    calls = {}
+
+    def fake_external(page, job_url, content, **kw):
+        calls["job_url"] = job_url
+
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": True, "fn": fake_external})
+    ch._page = JobPage(company_url="https://company.example/apply")
+    ch.send("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
+    assert calls["job_url"] == "https://www.linkedin.com/jobs/view/123"
+
+
+def test_external_apply_disabled_raises_channel_error():
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": False, "fn": None})
+    ch._page = JobPage(company_url=None)
+    try:
+        ch.send("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
+        assert False, "expected ChannelError"
+    except li.ChannelError as exc:
+        assert "внешний отклик" in str(exc)
+
+
+def test_external_apply_navigates_to_company_url_then_calls_fn():
+    """The fix: read companyApplyUrl from Voyager, navigate the page there, and
+    hand THAT page (now the company site) to the external-apply fn."""
     calls = {}
 
     def fake_external(page, job_url, content, **kw):
         calls["page"] = page
         calls["job_url"] = job_url
+        calls["ctx"] = kw.get("vacancy_context")
 
-    popup = PopupPage()
+    page = JobPage(company_url="https://boards.greenhouse.io/acme/jobs/1")
     ch = li.LinkedInChannel("state.json", headless=True,
                             external_apply_deps={"enabled": True, "fn": fake_external})
-    ch._page = JobPageWithPopup(popup)
+    ch._page = page
     ch._external_apply("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
-    # The fn must receive the POPUP tab (company site), not the original job page.
-    assert calls["page"] is popup
+    # navigated the page to the company's real apply URL...
+    assert page.goto_urls[-1] == "https://boards.greenhouse.io/acme/jobs/1"
+    # ...and handed that same (now-company) page to the fn, with the LinkedIn desc.
+    assert calls["page"] is page
     assert calls["job_url"] == "https://www.linkedin.com/jobs/view/123"
+    assert calls["ctx"] == "job description text"
+
+
+def test_external_apply_no_company_url_raises_manual():
+    """Not an offsite apply (Voyager yields nothing) -> manual; fn never called."""
+    called = {"fn": False}
+
+    def fake_external(page, job_url, content, **kw):
+        called["fn"] = True
+
+    page = JobPage(company_url=None)
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": True, "fn": fake_external})
+    ch._page = page
+    try:
+        ch._external_apply("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
+        assert False, "expected ManualApplyRequired"
+    except ManualApplyRequired as exc:
+        assert "ручной отклик" in str(exc)
+    assert called["fn"] is False
