@@ -227,3 +227,118 @@ def test_scrape_until_ready_gives_up_after_attempts_when_still_empty():
     obs, route = ea.scrape_until_ready(page, attempts=4, interval_ms=1)
     assert route.name == "NONE"
     assert page.waits == 3                   # bounded: attempts-1 polls
+
+
+# --- reveal-click (form behind an "Apply" button) + signup/login detection ---
+
+class _AuthPage:
+    def __init__(self, url, has_password=False):
+        self.url = url
+        self._pw = has_password
+
+    def locator(self, sel):
+        n = 1 if (sel == "input[type=password]" and self._pw) else 0
+        return type("L", (), {"count": lambda self, _n=n: _n})()
+
+
+def test_requires_signup_login_detects_register_url():
+    assert ea._requires_signup_or_login(_AuthPage("https://x.co/register?job=1")) is True
+
+
+def test_requires_signup_login_detects_login_url():
+    assert ea._requires_signup_or_login(_AuthPage("https://x.co/candidate/sign-in")) is True
+
+
+def test_requires_signup_login_detects_password_field():
+    assert ea._requires_signup_or_login(_AuthPage("https://x.co/apply", has_password=True)) is True
+
+
+def test_requires_signup_login_false_for_plain_apply():
+    assert ea._requires_signup_or_login(_AuthPage("https://x.co/jobs/apply")) is False
+
+
+class _RevealLoc:
+    def __init__(self, page, sel):
+        self.page, self.sel = page, sel
+        self.first = self
+
+    def _is_reveal(self):
+        return "Easy Apply" in self.sel or "Apply now" in self.sel
+
+    def count(self):
+        if self._is_reveal():
+            return 1
+        if self.sel == "input[type=password]":
+            return 0
+        return 1 if self.sel in self.page.present else 0
+
+    def nth(self, i):
+        return self
+
+    def is_visible(self):
+        return True
+
+    def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+    def click(self, timeout=None, force=False):
+        self.page.clicks.append(self.sel)
+        if self._is_reveal():
+            self.page.revealed = True
+        if self.sel == ea.SEL_SUBMIT:
+            self.page.present.discard(ea.SEL_SUBMIT)   # a real submit advances
+
+    def fill(self, v, **kw):
+        self.page.filled[self.sel] = v
+
+    def set_input_files(self, v, **kw):
+        self.page.filled[self.sel] = ("file", v)
+
+    def select_option(self, i, **kw):
+        self.page.filled[self.sel] = ("choice", i)
+
+    def check(self, **kw):
+        self.page.filled[self.sel] = ("check", True)
+
+
+class RevealPage:
+    """Empty (NONE) until _reveal_apply_form clicks an 'Apply' button; then the
+    scrape returns form_obs — models a form that opens in a modal on click. With
+    form_obs=None it stays NONE (a page gated behind sign-up/login)."""
+    def __init__(self, none_obs, form_obs=None, url="https://ats.co/apply"):
+        self._none, self._form = none_obs, form_obs
+        self.revealed = False
+        self.url = url
+        self.filled, self.clicks = {}, []
+        self.present = {ea.SEL_SUBMIT}
+        if form_obs:
+            self.present |= {f'[data-af="{f.ref}"]' for f in form_obs.fields}
+
+    def evaluate(self, js):
+        obs = self._form if (self.revealed and self._form) else self._none
+        return ea.observation_to_raw(obs)
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def goto(self, url, wait_until=None):
+        pass
+
+    def locator(self, sel):
+        return _RevealLoc(self, sel)
+
+
+def test_reveal_click_surfaces_modal_form_and_fills():
+    page = RevealPage(PageObservation(url="https://ceipal.co/apply"), _obs_form())
+    ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert any("Easy Apply" in c or "Apply" in c for c in page.clicks)   # reveal happened
+    assert page.filled['[data-af="0"]'] == "a@b.com"                     # form got filled
+    assert ea.SEL_SUBMIT in page.clicks
+
+
+def test_signup_required_page_skipped_with_reason():
+    page = RevealPage(PageObservation(url="https://x.co/register?job=1"),
+                      form_obs=None, url="https://x.co/register?job=1")
+    with pytest.raises(ManualApplyRequired, match="Sign Up"):
+        ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert ea.SEL_SUBMIT not in page.clicks
