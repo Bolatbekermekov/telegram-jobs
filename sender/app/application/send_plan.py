@@ -2,8 +2,9 @@
 
 Leads are sent in sheet order (by id). Before opening a channel for a lead we
 ask skip_reason() whether it should be skipped (unknown platform, a channel that
-already failed this run, a platform that rate-limited us, or the per-platform
-daily cap) — so a skip never causes a channel switch.
+already failed this run, or the per-platform daily cap) — so a skip never causes
+a channel switch. A platform that rate-limited us mid-run is handled in the loop
+itself (its remaining leads are left `new` to retry next run), not here.
 """
 from app.domain.lead import STATUS_FAILED, STATUS_SKIPPED
 
