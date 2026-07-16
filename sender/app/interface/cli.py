@@ -184,10 +184,10 @@ def run() -> None:
                 repo.mark_status(lead, STATUS_MANUAL, note=result.error)
                 print(f"✋ Нужен ручной отклик [{platform}]: {result.error}")
             elif result.rate_limited:
-                repo.mark_status(lead, STATUS_SKIPPED, note="rate-limited")
+                repo.mark_status(lead, STATUS_SKIPPED, note=result.error or "rate-limited")
                 rate_limited.add(platform)
-                print(f"🛑 Платформа '{platform}' ограничила нас — "
-                      "остальные её лиды оставляю на следующий прогон.")
+                print(f"🛑 Платформа '{platform}' ограничила нас ({result.error or 'rate-limited'}) "
+                      "— остальные её лиды оставляю на следующий прогон.")
             else:
                 repo.mark_status(lead, STATUS_FAILED, note=result.error)
                 print(f"❌ Ошибка отправки: {result.error}")

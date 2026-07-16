@@ -18,7 +18,14 @@ class FakeLocator:
     def count(self):
         return 1 if self.sel in self.page.present else 0
 
-    def click(self):
+    def scroll_into_view_if_needed(self, timeout=None):
+        pass
+
+    def click(self, timeout=None, force=False):
+        # An overlay (e.g. a PrimeNG <p-dialog>) intercepts the submit click:
+        # Playwright would auto-wait then throw. Model that as a raised timeout.
+        if self.sel == ea.SEL_SUBMIT and self.page.submit_intercepted:
+            raise TimeoutError("Locator.click: Timeout — p-dialog intercepts pointer events")
         self.page.clicks.append(self.sel)
         # A real submit advances the form, so its button disappears. submit_sticks
         # simulates client-side validation keeping the form (and button) in place.
@@ -39,12 +46,13 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, obs, present=(), submit_sticks=False):
+    def __init__(self, obs, present=(), submit_sticks=False, submit_intercepted=False):
         self._obs = obs
         self.present = set(present) | {f'[data-af="{f.ref}"]' for f in obs.fields}
         self.clicks = []
         self.filled = {}
         self.submit_sticks = submit_sticks
+        self.submit_intercepted = submit_intercepted
 
     def evaluate(self, js):        # scrape_form calls page.evaluate(_SCRAPE_JS)
         return ea.observation_to_raw(self._obs)
@@ -75,6 +83,15 @@ def test_submit_not_confirmed_when_form_persists_raises_manual():
     with pytest.raises(ManualApplyRequired, match="не подтверждена"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT in page.clicks
+
+
+def test_submit_click_intercepted_by_overlay_raises_manual():
+    # A PrimeNG <p-dialog> overlay intercepts the submit click -> a plain click()
+    # auto-waits 30s then throws. We must cap it and hand off to a manual apply,
+    # not hang and hard-fail the lead.
+    page = FakePage(_obs_form(), present=[ea.SEL_SUBMIT], submit_intercepted=True)
+    with pytest.raises(ManualApplyRequired, match="перехвач|оверлеем|модалк"):
+        ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
 
 
 def test_dry_run_fills_but_does_not_submit():
