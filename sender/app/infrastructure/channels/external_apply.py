@@ -203,6 +203,30 @@ def _requires_signup_or_login(page) -> bool:
         return False
 
 
+# A dead or closed job link — the page is gone (404) or the posting stopped
+# accepting applications. Detected from the title/body so the sheet note reads
+# "страница недоступна / вакансия неактуальна" instead of "форма не распознана".
+_GONE_RE = re.compile(
+    r"no longer (available|accepting|active)"
+    r"|(position|role|job|vacancy|posting) (has been |is )?(closed|filled|expired|removed)"
+    r"|not accepting applications|page (not found|does ?n'?t exist)|404 error"
+    r"|вакансия (снят|закрыт|не найден|неактивн|больше не)|страница не найдена|больше не принима",
+    re.I)
+
+
+def _page_unavailable(page) -> bool:
+    text = ""
+    try:
+        text += (page.title() or "") + " "
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        text += page.locator("body").inner_text(timeout=3000)[:4000]
+    except Exception:  # noqa: BLE001
+        pass
+    return bool(_GONE_RE.search(text))
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
@@ -218,23 +242,20 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         _enter_ats_iframe(page, obs)
         obs, route = scrape_until_ready(page)
     if route is Route.GATED:
-        raise ManualApplyRequired(
-            f"внешний отклик за гейтом (CAPTCHA/логин), нужен ручной отклик: {obs.url}")
+        raise ManualApplyRequired(f"за гейтом (CAPTCHA/логин): {obs.url}")
     if route is not Route.FORM:
         if _requires_signup_or_login(page):
-            raise ManualApplyRequired(
-                "внешний отклик требует регистрации/входа (Sign Up / Login) — "
-                f"пропущено, нужен ручной отклик: {obs.url}")
-        raise ManualApplyRequired(
-            f"внешняя форма не распознана, нужен ручной отклик: {obs.url}")
+            raise ManualApplyRequired(f"требует Sign Up / Login: {obs.url}")
+        if _page_unavailable(page):
+            raise ManualApplyRequired(f"страница недоступна / вакансия неактуальна: {obs.url}")
+        raise ManualApplyRequired(f"форма не распознана: {obs.url}")
 
     plan = build_plan(obs, profile, cv_path)
     answer_ai_fields(plan, answerer, vacancy_context or content.body)
     missing = plan.unmapped_required()
     if missing:
         raise ManualApplyRequired(
-            f"внешняя форма: не заполнены обязательные поля {missing}, "
-            f"нужен ручной отклик: {obs.url}")
+            f"не заполнены обязательные поля {missing}: {obs.url}")
 
     # profile.md tells the AI to emit "[brackets]" when unsure; such a value must
     # never reach a real employer. unmapped_required() only guards *required*
@@ -242,12 +263,12 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     placeholders = [a.field.label or a.field.name for a in plan.actions if "[" in a.value]
     if placeholders:
         raise ManualApplyRequired(
-            f"внешняя форма: ИИ оставил плейсхолдер в {placeholders}, нужен ручной отклик: {obs.url}")
+            f"ИИ оставил плейсхолдер {placeholders}: {obs.url}")
 
     fill_and_submit(page, plan, dry_run)
     if dry_run:
         raise ManualApplyRequired(
-            f"APPLY_DRY_RUN: форма заполнена, но НЕ отправлена (проверь вручную): {obs.url}")
+            f"DRY_RUN: заполнено, НЕ отправлено — проверь вручную: {obs.url}")
     _verify_submitted(page, obs.url)
 
 
@@ -262,7 +283,7 @@ def _verify_submitted(page, url: str) -> None:
         still_on_form = False
     if still_on_form:
         raise ManualApplyRequired(
-            f"внешняя форма: отправка не подтверждена (форма всё ещё открыта), проверь вручную: {url}")
+            f"отправка не подтверждена (форма всё ещё открыта): {url}")
 
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,

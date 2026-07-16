@@ -261,8 +261,7 @@ class LinkedInChannel:
         company_url = fetch_company_apply_url(page, job_url)
         if not company_url:
             raise ManualApplyRequired(
-                "LinkedIn: не удалось получить ссылку внешнего отклика (возможно "
-                f"Easy Apply или изменения в UI), нужен ручной отклик: {job_url}")
+                f"LinkedIn: нет ссылки внешнего отклика (возможно Easy Apply): {job_url}")
         page.goto(company_url, wait_until="domcontentloaded")
         fn = self._ext["fn"]
         fn(page, job_url, content,

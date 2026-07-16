@@ -342,3 +342,58 @@ def test_signup_required_page_skipped_with_reason():
     with pytest.raises(ManualApplyRequired, match="Sign Up"):
         ea.external_apply(page, "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT not in page.clicks
+
+
+# --- page unavailable (dead / closed job) -> short "недоступна/неактуальна" note ---
+
+class _TextPage:
+    def __init__(self, url="https://ats.co/job", body="", title=""):
+        self.url = url
+        self._body, self._title = body, title
+
+    def title(self):
+        return self._title
+
+    def locator(self, sel):
+        body = self._body
+        return type("L", (), {
+            "inner_text": lambda self, timeout=None: body,
+            "count": lambda self: 0,
+        })()
+
+
+def test_page_unavailable_detects_closed_job():
+    assert ea._page_unavailable(_TextPage(body="This position is no longer available.")) is True
+
+
+def test_page_unavailable_detects_not_found():
+    assert ea._page_unavailable(_TextPage(title="Page not found", body="404 error, sorry")) is True
+
+
+def test_page_unavailable_false_for_live_job():
+    assert ea._page_unavailable(_TextPage(body="Apply now — we are hiring a Backend Engineer")) is False
+
+
+class _GonePage:
+    url = "https://ats.co/job/123"
+
+    def evaluate(self, js):
+        return ea.observation_to_raw(PageObservation(url="https://ats.co/job/123"))
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def title(self):
+        return "Job Not Found"
+
+    def locator(self, sel):
+        if sel == "body":
+            return type("L", (), {
+                "inner_text": lambda self, timeout=None: "This position is no longer available.",
+                "count": lambda self: 0})()
+        return type("L", (), {"count": lambda self: 0})()
+
+
+def test_external_apply_gone_page_gets_short_unavailable_note():
+    with pytest.raises(ManualApplyRequired, match="недоступна|неактуальна"):
+        ea.external_apply(_GonePage(), "https://job", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
