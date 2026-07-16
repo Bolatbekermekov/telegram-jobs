@@ -1,16 +1,28 @@
-"""Ordering for the send loop: process leads one platform at a time.
+"""Per-lead gating for the id-order send loop.
 
-Browser channels (Playwright) and the Telegram userbot (Telethon, asyncio)
-cannot run at the same time in one process — a second live channel collides
-with the first one's event loop. So the send loop must open a single channel,
-send all of that platform's leads, close it, and only then move on. This
-module turns a flat lead list into those per-platform batches.
+Leads are sent in sheet order (by id). Before opening a channel for a lead we
+ask skip_reason() whether it should be skipped (unknown platform, a channel that
+already failed this run, or the per-platform daily cap) — so a skip never causes
+a channel switch. A platform that rate-limited us mid-run is handled in the loop
+itself (its remaining leads are left `new` to retry next run), not here.
 """
+from app.domain.lead import STATUS_FAILED, STATUS_SKIPPED
 
 
-def group_leads_by_platform(leads) -> list:
-    """[(platform, [leads...]), ...] with platforms in first-appearance order."""
-    groups: dict[str, list] = {}
-    for lead in leads:
-        groups.setdefault(lead.platform, []).append(lead)
-    return list(groups.items())
+def skip_reason(lead, known, sent_per_platform, daily_limit,
+                failed_platforms) -> tuple[str, str] | None:
+    """Why this lead can't be sent right now, as (status, note), or None to send.
+
+    Order: unknown platform, then a platform whose channel already failed this
+    run, then the per-platform daily cap. A platform that rate-limited us mid-run
+    is handled in the send loop, not here — its remaining leads are left untouched
+    (status stays `new`) so the next run retries them.
+    """
+    p = lead.platform
+    if p not in known:
+        return (STATUS_SKIPPED, f"unknown platform: {p}")
+    if p in failed_platforms:
+        return (STATUS_FAILED, "channel start failed earlier this run")
+    if sent_per_platform.get(p, 0) >= daily_limit:
+        return (STATUS_SKIPPED, "daily limit reached")
+    return None
