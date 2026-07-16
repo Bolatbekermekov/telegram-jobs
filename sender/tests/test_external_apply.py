@@ -186,3 +186,44 @@ def test_iframe_ats_navigates_into_frame_then_fills():
     assert page.goto_url == comeet
     assert page.filled['[data-af="0"]'] == "a@b.com"
     assert ea.SEL_SUBMIT in page.clicks
+
+
+class SpaPage:
+    """Fake client-rendered ATS whose apply form only appears after a couple of
+    re-scrapes (like Gem). Each wait_for_timeout advances to the next observation."""
+    def __init__(self, obs_sequence):
+        self._seq = list(obs_sequence)
+        self._i = 0
+        self.waits = 0
+
+    def evaluate(self, js):
+        return ea.observation_to_raw(self._seq[min(self._i, len(self._seq) - 1)])
+
+    def wait_for_timeout(self, ms):
+        self.waits += 1
+        self._i += 1
+
+
+def _spa_none():
+    return PageObservation(url="https://spa.ats/apply")            # empty -> NONE
+
+
+def _spa_form():
+    return PageObservation(url="https://spa.ats/apply", fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),
+        FieldObs(tag="input", type="text", label="First Name", required=True, ref="1")],
+        file_inputs=1)
+
+
+def test_scrape_until_ready_waits_for_late_rendered_form():
+    page = SpaPage([_spa_none(), _spa_none(), _spa_form()])
+    obs, route = ea.scrape_until_ready(page, attempts=6, interval_ms=1)
+    assert route.name == "FORM"
+    assert page.waits == 2                  # re-scraped twice, then found the form
+
+
+def test_scrape_until_ready_gives_up_after_attempts_when_still_empty():
+    page = SpaPage([_spa_none()])
+    obs, route = ea.scrape_until_ready(page, attempts=4, interval_ms=1)
+    assert route.name == "NONE"
+    assert page.waits == 3                   # bounded: attempts-1 polls

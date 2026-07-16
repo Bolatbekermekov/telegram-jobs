@@ -128,11 +128,26 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
     submit.first.click()
 
 
+def scrape_until_ready(page, attempts: int = 6, interval_ms: int = 1500):
+    """Re-scrape while the page still classifies as NONE. Many ATS render their
+    apply form client-side, a beat after navigation — a single early scrape sees
+    an empty page and wrongly gives up. Poll until the page is actionable
+    (FORM/EMAIL/IFRAME_ATS/GATED) or the attempts run out; return (obs, route)."""
+    obs = scrape_form(page)
+    route = classify(obs)
+    for _ in range(attempts - 1):
+        if route is not Route.NONE:
+            break
+        page.wait_for_timeout(interval_ms)
+        obs = scrape_form(page)
+        route = classify(obs)
+    return obs, route
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
-    obs = scrape_form(page)
-    route = classify(obs)
+    obs, route = scrape_until_ready(page)
 
     if route is Route.EMAIL:
         _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
@@ -140,8 +155,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         return
     if route is Route.IFRAME_ATS:
         _enter_ats_iframe(page, obs)
-        obs = scrape_form(page)
-        route = classify(obs)
+        obs, route = scrape_until_ready(page)
     if route is Route.GATED:
         raise ManualApplyRequired(
             f"внешний отклик за гейтом (CAPTCHA/логин), нужен ручной отклик: {obs.url}")
