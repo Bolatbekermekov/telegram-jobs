@@ -35,14 +35,58 @@ def _no_apply_reason(page, job_url: str) -> str:
     return f"Wellfound: кнопка Apply не найдена (возможно уже подано/закрыто): {job_url}"
 
 
-def _fill_note(page, body: str) -> None:
-    """Best-effort: some Wellfound applications have a message box, some don't."""
-    box = page.get_by_placeholder("Write a note…").first
+def _gated_reason(page, job_url: str) -> str:
+    """Short note for why the application can't be submitted (Send disabled)."""
     try:
-        box.wait_for(state="visible", timeout=6000)
-        box.fill(body)
-    except Exception:  # noqa: BLE001 — no note box on this application
-        pass
+        txt = (page.get_by_role("dialog").first.inner_text(timeout=2000) or "").lower()
+    except Exception:  # noqa: BLE001
+        txt = ""
+    if any(k in txt for k in ("not accepting applications", "current location",
+                              "timezone", "relocation", "не принима")):
+        return f"Wellfound: работодатель не принимает заявку (локация/таймзона): {job_url}"
+    if "already applied" in txt or "you applied" in txt or "ты уже" in txt:
+        return f"Wellfound: ты уже откликался на эту вакансию: {job_url}"
+    if "profile" in txt and any(k in txt for k in ("complete", "up to date", "verify")):
+        return f"Wellfound: требуется дополнить профиль перед откликом: {job_url}"
+    return f"Wellfound: подать заявку нельзя — кнопка Send заблокирована: {job_url}"
+
+
+def _send_ready(page, send, attempts: int = 5, interval_ms: int = 800) -> bool:
+    """Poll until the Send button is enabled. Wellfound may re-enable it a beat
+    after the message is typed, so don't declare a job gated on the first read."""
+    for _ in range(attempts):
+        try:
+            if send.is_enabled():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(interval_ms)
+    return False
+
+
+def _fill_note(page, body: str) -> None:
+    """Fill the first EDITABLE message textarea (best-effort).
+
+    Wellfound's apply form has no fixed placeholder — the field is a <textarea>
+    inside the dialog (verified live 2026-07-17), and custom-question fields are
+    often `disabled`. Only touch an editable one, with a short timeout, so a
+    disabled field never blocks the run. No message field at all → just skip.
+    """
+    for scope in (page.get_by_role("dialog"), page):
+        loc = scope.locator("textarea")
+        try:
+            n = loc.count()
+        except Exception:  # noqa: BLE001
+            n = 0
+        for i in range(n):
+            field = loc.nth(i)
+            try:
+                if not field.is_editable():
+                    continue
+                field.fill(body, timeout=4000)
+                return
+            except Exception:  # noqa: BLE001 — try the next textarea
+                continue
 
 
 def apply_via_page(page, job_url: str, content: OutreachContent,
@@ -57,10 +101,20 @@ def apply_via_page(page, job_url: str, content: OutreachContent,
         raise ManualApplyRequired(_no_apply_reason(page, job_url))
     apply_btn.click()
     _fill_note(page, content.body)
+    # The apply dialog's submit control is "Send application" (verified live).
+    send = page.get_by_role("button", name="Send application").first
+    try:
+        send.wait_for(state="visible", timeout=10000)
+    except Exception:  # noqa: BLE001 — modal never opened / different flow
+        raise ManualApplyRequired(f"Wellfound: форма отклика не открылась: {job_url}")
+    if not _send_ready(page, send):
+        # Send stays disabled => the job is gated (location/timezone, already applied,
+        # incomplete profile, unanswered required questions). Hand to a manual apply.
+        raise ManualApplyRequired(_gated_reason(page, job_url))
     if dry_run:
         raise ManualApplyRequired(
             f"Wellfound DRY_RUN: заполнено, НЕ отправлено — проверь вручную: {job_url}")
-    page.get_by_role("button", name="Submit application").first.click()
+    send.click()
 
 
 class WellfoundChannel:

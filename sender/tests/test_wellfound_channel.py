@@ -8,42 +8,74 @@ from app.domain.channel import (
 from app.infrastructure.channels.wellfound import WellfoundChannel, apply_via_page
 
 
-# --- Fakes for apply_via_page (a Playwright page, driven by locators) ----------
+# --- Fakes for apply_via_page --------------------------------------------------
+#
+# Modelled on the real Wellfound apply DOM (verified live 2026-07-17): clicking
+# "Apply" opens a dialog whose message field is a <textarea> (often disabled) and
+# whose submit control is a button "Send application" (disabled when the job is
+# gated — e.g. not accepting applications from your location).
 
-class _FakeLocator:
-    """A Playwright-locator stand-in. `present=False` makes wait_for() time out,
-    simulating an element that never rendered."""
-
-    def __init__(self, page, key, present):
-        self._page, self._key, self._present = page, key, present
+class _FakeLoc:
+    def __init__(self, page, key, present=True, editable=True, enabled=True,
+                 count=1, text=""):
+        self._p, self._key = page, key
+        self._present, self._editable, self._enabled = present, editable, enabled
+        self._count, self._text = count, text
 
     @property
     def first(self):
         return self
 
+    def nth(self, i):
+        return self
+
+    def count(self):
+        return self._count
+
     def wait_for(self, state=None, timeout=None):
         if not self._present:
             raise TimeoutError(f"{self._key} not visible")
 
-    def click(self):
-        self._page.actions.append(("click", self._key))
+    def is_editable(self):
+        return self._editable
 
-    def fill(self, value):
-        self._page.actions.append(("fill", value))
+    def is_enabled(self):
+        return self._enabled
+
+    def inner_text(self, timeout=None):
+        return self._text
+
+    def click(self):
+        self._p.actions.append(("click", self._key))
+
+    def fill(self, value, timeout=None):
+        if not self._editable:
+            raise TimeoutError("element is not enabled")
+        self._p.actions.append(("fill", value))
+
+    def locator(self, selector):
+        if "textarea" in selector:
+            return self._p._textarea_loc()
+        return _FakeLoc(self._p, selector, present=False, count=0)
 
 
 class _FakePage:
-    def __init__(self, has_apply=True, has_note=True,
+    def __init__(self, has_apply=True, note="editable", send_enabled=True,
+                 dialog_text="YOUR APPLICATION",
                  title="Full Stack — Wellfound",
                  url="https://wellfound.com/jobs/123"):
         self.actions = []
         self._has_apply = has_apply
-        self._has_note = has_note
-        self._title = title
-        self._url = url
+        self._note = note            # "editable" | "disabled" | None (absent)
+        self._send_enabled = send_enabled
+        self._dialog_text = dialog_text
+        self._title, self._url = title, url
 
     def goto(self, url, **kw):
         self.actions.append(("goto", url))
+
+    def wait_for_timeout(self, ms):
+        pass   # no-op: the poll must not actually sleep in tests
 
     def title(self):
         return self._title
@@ -52,31 +84,45 @@ class _FakePage:
     def url(self):
         return self._url
 
+    def _textarea_loc(self):
+        if self._note is None:
+            return _FakeLoc(self, "note", present=False, count=0)
+        return _FakeLoc(self, "note", present=True,
+                        editable=(self._note == "editable"), count=1)
+
     def get_by_role(self, role, name=None):
-        present = self._has_apply if name == "Apply" else True
-        return _FakeLocator(self, name, present)
+        if role == "dialog":
+            return _FakeLoc(self, "dialog", text=self._dialog_text)
+        if name == "Apply":
+            return _FakeLoc(self, "Apply", present=self._has_apply)
+        if name == "Send application":
+            return _FakeLoc(self, "Send application", present=True,
+                            enabled=self._send_enabled)
+        return _FakeLoc(self, name)
 
-    def get_by_placeholder(self, text):
-        return _FakeLocator(self, "note", self._has_note)
+    def locator(self, selector):
+        if "textarea" in selector:
+            return self._textarea_loc()
+        return _FakeLoc(self, selector, present=False, count=0)
 
 
-def test_apply_fills_message_and_submits():
-    page = _FakePage(has_apply=True, has_note=True)
+def test_apply_fills_message_and_submits_when_open():
+    page = _FakePage(note="editable", send_enabled=True)
     apply_via_page(page, "https://wellfound.com/jobs/123", OutreachContent(body="Hi team"))
     assert ("goto", "https://wellfound.com/jobs/123") in page.actions
     assert ("click", "Apply") in page.actions
     assert ("fill", "Hi team") in page.actions
-    assert ("click", "Submit application") in page.actions
+    assert ("click", "Send application") in page.actions
 
 
 def test_apply_dry_run_fills_but_does_not_submit():
-    page = _FakePage(has_apply=True, has_note=True)
+    page = _FakePage(note="editable", send_enabled=True)
     with pytest.raises(ManualApplyRequired) as exc:
         apply_via_page(page, "https://wellfound.com/jobs/9",
                        OutreachContent(body="Hi"), dry_run=True)
     assert "DRY_RUN" in str(exc.value)
     assert ("fill", "Hi") in page.actions
-    assert ("click", "Submit application") not in page.actions
+    assert ("click", "Send application") not in page.actions
 
 
 def test_apply_manual_when_apply_button_never_renders():
@@ -85,13 +131,24 @@ def test_apply_manual_when_apply_button_never_renders():
         apply_via_page(page, "https://wellfound.com/jobs/1", OutreachContent(body="Hi"))
 
 
-def test_apply_survives_missing_note_box():
-    # Some Wellfound applications have no message box — that must not abort the apply.
-    page = _FakePage(has_apply=True, has_note=False)
-    apply_via_page(page, "https://wellfound.com/jobs/2", OutreachContent(body="Hi"))
-    assert ("click", "Apply") in page.actions
+def test_apply_manual_when_send_disabled_gated_by_location():
+    # Real case: "Trace IP is not accepting applications from your current location".
+    page = _FakePage(
+        note="disabled", send_enabled=False,
+        dialog_text=("YOUR APPLICATION Trace IP is not accepting applications from "
+                     "your current location due to timezone or relocation constraints"))
+    with pytest.raises(ManualApplyRequired) as exc:
+        apply_via_page(page, "https://wellfound.com/jobs/4356164", OutreachContent(body="Hi"))
+    assert "локац" in str(exc.value).lower()
+    assert ("fill", "Hi") not in page.actions          # never blocked on the disabled field
+    assert ("click", "Send application") not in page.actions   # nothing submitted
+
+
+def test_apply_submits_one_click_job_with_no_message_field():
+    page = _FakePage(note=None, send_enabled=True)
+    apply_via_page(page, "https://wellfound.com/jobs/7", OutreachContent(body="Hi"))
     assert ("fill", "Hi") not in page.actions
-    assert ("click", "Submit application") in page.actions
+    assert ("click", "Send application") in page.actions
 
 
 # --- Fakes for the CDP attach (start/stop) ------------------------------------
@@ -188,7 +245,7 @@ def test_stop_leaves_the_users_chrome_running(monkeypatch):
 
 
 def test_send_honours_dry_run_flag(monkeypatch):
-    warm = _FakePage(has_apply=True, has_note=True)
+    warm = _FakePage(note="editable", send_enabled=True)
     browser = _FakeBrowser(pages=[warm])
     pw = _FakePW(browser)
     _install_fake_pw(monkeypatch, pw)
@@ -198,4 +255,4 @@ def test_send_honours_dry_run_flag(monkeypatch):
     with pytest.raises(ManualApplyRequired) as exc:
         ch.send("https://wellfound.com/jobs/123", OutreachContent(body="Hi"))
     assert "DRY_RUN" in str(exc.value)
-    assert ("click", "Submit application") not in warm.actions
+    assert ("click", "Send application") not in warm.actions
