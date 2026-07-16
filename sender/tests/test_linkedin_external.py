@@ -104,5 +104,5 @@ def test_external_apply_no_company_url_raises_manual():
         ch._external_apply("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
         assert False, "expected ManualApplyRequired"
     except ManualApplyRequired as exc:
-        assert "ручной отклик" in str(exc)
+        assert "Easy Apply" in str(exc)
     assert called["fn"] is False
