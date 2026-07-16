@@ -35,6 +35,41 @@ def _no_apply_reason(page, job_url: str) -> str:
     return f"Wellfound: кнопка Apply не найдена (возможно уже подано/закрыто): {job_url}"
 
 
+def _button_enabled(loc) -> bool:
+    """Non-blocking enabled-check. is_enabled() AUTO-WAITS ~30s when the locator
+    matches nothing (Wellfound re-renders the button mid-poll), so guard with
+    count() first — which returns instantly — and cap is_enabled() with a short
+    timeout for the rare vanish-between-calls race."""
+    try:
+        return loc.count() > 0 and loc.first.is_enabled(timeout=1500)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _wait_button_enabled(page, loc, attempts: int, interval_ms: int = 800) -> bool:
+    """Poll (bounded) until `loc`'s button is enabled. Wellfound renders Apply/Send
+    `disabled` while the page hydrates / after a message is typed."""
+    for _ in range(attempts):
+        if _button_enabled(loc):
+            return True
+        page.wait_for_timeout(interval_ms)
+    return False
+
+
+def _apply_disabled_reason(page, job_url: str) -> str:
+    """Short note for why the top-level Apply button stayed disabled."""
+    try:
+        body = (page.locator("body").inner_text(timeout=2500) or "").lower()
+    except Exception:  # noqa: BLE001
+        body = ""
+    if "not accepting applications" in body or "current location" in body:
+        return f"Wellfound: работодатель не принимает заявку (локация/таймзона): {job_url}"
+    if "no longer active" in body or "no longer accepting" in body or "position filled" in body:
+        return f"Wellfound: вакансия закрыта / больше не активна: {job_url}"
+    return (f"Wellfound: кнопка Apply заблокирована — отклик недоступен "
+            f"(уже откликался / закрыта / не проходишь фильтр): {job_url}")
+
+
 def _gated_reason(page, job_url: str) -> str:
     """Short note for why the application can't be submitted (Send disabled)."""
     try:
@@ -49,19 +84,6 @@ def _gated_reason(page, job_url: str) -> str:
     if "profile" in txt and any(k in txt for k in ("complete", "up to date", "verify")):
         return f"Wellfound: требуется дополнить профиль перед откликом: {job_url}"
     return f"Wellfound: подать заявку нельзя — кнопка Send заблокирована: {job_url}"
-
-
-def _send_ready(page, send, attempts: int = 5, interval_ms: int = 800) -> bool:
-    """Poll until the Send button is enabled. Wellfound may re-enable it a beat
-    after the message is typed, so don't declare a job gated on the first read."""
-    for _ in range(attempts):
-        try:
-            if send.is_enabled():
-                return True
-        except Exception:  # noqa: BLE001
-            pass
-        page.wait_for_timeout(interval_ms)
-    return False
 
 
 def _fill_note(page, body: str) -> None:
@@ -94,20 +116,26 @@ def apply_via_page(page, job_url: str, content: OutreachContent,
     page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
     # Wellfound is a React SPA: the Apply button renders after load, so wait for
     # it instead of an immediate count() (which raced and always saw zero).
-    apply_btn = page.get_by_role("button", name="Apply").first
+    apply_loc = page.get_by_role("button", name="Apply")
+    apply_btn = apply_loc.first
     try:
         apply_btn.wait_for(state="visible", timeout=15000)
     except Exception:  # noqa: BLE001 — not logged in / Cloudflare / posting gone
         raise ManualApplyRequired(_no_apply_reason(page, job_url))
+    if not _wait_button_enabled(page, apply_loc, attempts=10):
+        # Apply is visible but stays `disabled` (job closed, already applied,
+        # profile/eligibility filter). Bail fast — never auto-wait 30s on click().
+        raise ManualApplyRequired(_apply_disabled_reason(page, job_url))
     apply_btn.click()
     _fill_note(page, content.body)
     # The apply dialog's submit control is "Send application" (verified live).
-    send = page.get_by_role("button", name="Send application").first
+    send_loc = page.get_by_role("button", name="Send application")
+    send = send_loc.first
     try:
         send.wait_for(state="visible", timeout=10000)
     except Exception:  # noqa: BLE001 — modal never opened / different flow
         raise ManualApplyRequired(f"Wellfound: форма отклика не открылась: {job_url}")
-    if not _send_ready(page, send):
+    if not _wait_button_enabled(page, send_loc, attempts=5):
         # Send stays disabled => the job is gated (location/timezone, already applied,
         # incomplete profile, unanswered required questions). Hand to a manual apply.
         raise ManualApplyRequired(_gated_reason(page, job_url))
