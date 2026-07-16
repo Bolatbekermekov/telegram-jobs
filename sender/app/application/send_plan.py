@@ -1,28 +1,17 @@
-"""Ordering for the send loop: process leads one platform at a time.
+"""Per-lead gating for the id-order send loop.
 
-Browser channels (Playwright) and the Telegram userbot (Telethon, asyncio)
-cannot run at the same time in one process — a second live channel collides
-with the first one's event loop. So the send loop must open a single channel,
-send all of that platform's leads, close it, and only then move on. This
-module turns a flat lead list into those per-platform batches.
+Leads are sent in sheet order (by id). Before opening a channel for a lead we
+ask skip_reason() whether it should be skipped (unknown platform, a channel that
+already failed this run, a platform that rate-limited us, or the per-platform
+daily cap) — so a skip never causes a channel switch.
 """
-
 from app.domain.lead import STATUS_FAILED, STATUS_SKIPPED
-
-
-def group_leads_by_platform(leads) -> list:
-    """[(platform, [leads...]), ...] with platforms in first-appearance order."""
-    groups: dict[str, list] = {}
-    for lead in leads:
-        groups.setdefault(lead.platform, []).append(lead)
-    return list(groups.items())
 
 
 def skip_reason(lead, known, sent_per_platform, daily_limit,
                 rate_limited, failed_platforms):
     """Why this lead can't be sent right now, as (status, note), or None to send.
 
-    Checked before any channel opens, so a skip never triggers a channel switch.
     Order: unknown platform, then a platform whose channel already failed this
     run, then one that rate-limited us, then the per-platform daily cap.
     """
