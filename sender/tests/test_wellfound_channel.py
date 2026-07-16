@@ -5,7 +5,35 @@ from app.domain.channel import (
     ManualApplyRequired,
     OutreachContent,
 )
-from app.infrastructure.channels.wellfound import WellfoundChannel, apply_via_page
+from app.infrastructure.channels.wellfound import (
+    WellfoundChannel,
+    _button_enabled,
+    apply_via_page,
+)
+
+
+def test_button_enabled_skips_is_enabled_when_locator_is_empty():
+    # Regression: is_enabled() auto-waits ~30s when the locator matches nothing
+    # (Wellfound re-renders the button mid-poll). The count() guard MUST short-
+    # circuit so is_enabled() — which would block — is never called.
+    class _Loc:
+        def __init__(self):
+            self.is_enabled_called = False
+
+        def count(self):
+            return 0
+
+        @property
+        def first(self):
+            return self
+
+        def is_enabled(self, timeout=None):
+            self.is_enabled_called = True
+            raise TimeoutError("would block ~30s on a missing element")
+
+    loc = _Loc()
+    assert _button_enabled(loc) is False
+    assert loc.is_enabled_called is False
 
 
 # --- Fakes for apply_via_page --------------------------------------------------
@@ -17,10 +45,11 @@ from app.infrastructure.channels.wellfound import WellfoundChannel, apply_via_pa
 
 class _FakeLoc:
     def __init__(self, page, key, present=True, editable=True, enabled=True,
-                 count=1, text=""):
+                 count=None, text=""):
         self._p, self._key = page, key
         self._present, self._editable, self._enabled = present, editable, enabled
-        self._count, self._text = count, text
+        self._count = count if count is not None else (1 if present else 0)
+        self._text = text
 
     @property
     def first(self):
@@ -39,7 +68,7 @@ class _FakeLoc:
     def is_editable(self):
         return self._editable
 
-    def is_enabled(self):
+    def is_enabled(self, timeout=None):
         return self._enabled
 
     def inner_text(self, timeout=None):
@@ -60,12 +89,13 @@ class _FakeLoc:
 
 
 class _FakePage:
-    def __init__(self, has_apply=True, note="editable", send_enabled=True,
-                 dialog_text="YOUR APPLICATION",
+    def __init__(self, has_apply=True, apply_enabled=True, note="editable",
+                 send_enabled=True, dialog_text="YOUR APPLICATION",
                  title="Full Stack — Wellfound",
                  url="https://wellfound.com/jobs/123"):
         self.actions = []
         self._has_apply = has_apply
+        self._apply_enabled = apply_enabled
         self._note = note            # "editable" | "disabled" | None (absent)
         self._send_enabled = send_enabled
         self._dialog_text = dialog_text
@@ -94,7 +124,8 @@ class _FakePage:
         if role == "dialog":
             return _FakeLoc(self, "dialog", text=self._dialog_text)
         if name == "Apply":
-            return _FakeLoc(self, "Apply", present=self._has_apply)
+            return _FakeLoc(self, "Apply", present=self._has_apply,
+                            enabled=self._apply_enabled)
         if name == "Send application":
             return _FakeLoc(self, "Send application", present=True,
                             enabled=self._send_enabled)
@@ -129,6 +160,16 @@ def test_apply_manual_when_apply_button_never_renders():
     page = _FakePage(has_apply=False)
     with pytest.raises(ManualApplyRequired):
         apply_via_page(page, "https://wellfound.com/jobs/1", OutreachContent(body="Hi"))
+
+
+def test_apply_manual_when_apply_button_visible_but_disabled():
+    # Real case (#24): <button disabled>Apply</button> — never clickable. Must NOT
+    # hang 30s on click(); bail fast to a manual note.
+    page = _FakePage(has_apply=True, apply_enabled=False)
+    with pytest.raises(ManualApplyRequired) as exc:
+        apply_via_page(page, "https://wellfound.com/jobs/3543679", OutreachContent(body="Hi"))
+    assert "Apply" in str(exc.value)
+    assert ("click", "Apply") not in page.actions   # never attempted the disabled click
 
 
 def test_apply_manual_when_send_disabled_gated_by_location():
