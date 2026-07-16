@@ -89,13 +89,14 @@ class _FakeLoc:
 
 
 class _FakePage:
-    def __init__(self, has_apply=True, apply_enabled=True, note="editable",
-                 send_enabled=True, dialog_text="YOUR APPLICATION",
+    def __init__(self, has_apply=True, apply_enabled=True, apply_text="Apply",
+                 note="editable", send_enabled=True, dialog_text="YOUR APPLICATION",
                  title="Full Stack — Wellfound",
                  url="https://wellfound.com/jobs/123"):
         self.actions = []
         self._has_apply = has_apply
         self._apply_enabled = apply_enabled
+        self._apply_text = apply_text
         self._note = note            # "editable" | "disabled" | None (absent)
         self._send_enabled = send_enabled
         self._dialog_text = dialog_text
@@ -125,7 +126,10 @@ class _FakePage:
             return _FakeLoc(self, "dialog", text=self._dialog_text)
         if name == "Apply":
             return _FakeLoc(self, "Apply", present=self._has_apply,
-                            enabled=self._apply_enabled)
+                            enabled=self._apply_enabled, text=self._apply_text)
+        if name == "Applied":
+            has = "applied" in (self._apply_text or "").lower()
+            return _FakeLoc(self, "Applied", present=has, count=1 if has else 0)
         if name == "Send application":
             return _FakeLoc(self, "Send application", present=True,
                             enabled=self._send_enabled)
@@ -170,6 +174,17 @@ def test_apply_manual_when_apply_button_visible_but_disabled():
         apply_via_page(page, "https://wellfound.com/jobs/3543679", OutreachContent(body="Hi"))
     assert "Apply" in str(exc.value)
     assert ("click", "Apply") not in page.actions   # never attempted the disabled click
+
+
+def test_apply_disabled_because_already_applied_gets_specific_note():
+    # Real case (#24): after applying, Wellfound relabels the button "✓ Applied"
+    # and disables it. Say exactly that, not the generic reason.
+    page = _FakePage(has_apply=True, apply_enabled=False, apply_text="✓ Applied")
+    with pytest.raises(ManualApplyRequired) as exc:
+        apply_via_page(page, "https://wellfound.com/jobs/3543679", OutreachContent(body="Hi"))
+    msg = str(exc.value)
+    assert "ты уже откликался на эту вакансию" in msg   # specific, not the generic fallback
+    assert "заблокирована" not in msg
 
 
 def test_apply_manual_when_send_disabled_gated_by_location():

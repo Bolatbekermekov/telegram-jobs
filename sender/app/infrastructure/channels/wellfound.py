@@ -59,6 +59,14 @@ def _wait_button_enabled(page, loc, attempts: int, interval_ms: int = 800) -> bo
 def _apply_disabled_reason(page, job_url: str) -> str:
     """Short note for why the top-level Apply button stayed disabled."""
     try:
+        # Wellfound relabels the apply control "✓ Applied" (disabled) once you've
+        # applied. name="Applied" matches that but not a plain "Apply" button.
+        already = page.get_by_role("button", name="Applied").count() > 0
+    except Exception:  # noqa: BLE001
+        already = False
+    if already:
+        return f"Wellfound: ты уже откликался на эту вакансию: {job_url}"
+    try:
         body = (page.locator("body").inner_text(timeout=2500) or "").lower()
     except Exception:  # noqa: BLE001
         body = ""
