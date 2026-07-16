@@ -126,7 +126,19 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
     submit = page.locator(SEL_SUBMIT)
     if submit.count() == 0:
         raise ManualApplyRequired("внешняя форма: не нашёл кнопку отправки, нужен ручной отклик")
-    submit.first.click()
+    btn = submit.first
+    try:
+        btn.scroll_into_view_if_needed(timeout=2000)
+    except Exception:  # noqa: BLE001 — best-effort; some fakes/pages have no scroll
+        pass
+    try:
+        # Cap the click: on some ATS (e.g. Angular/PrimeNG) a <p-dialog> overlay
+        # intercepts pointer events, and a default click auto-waits 30s then fails,
+        # burning the lead. Bounded click -> manual apply instead of a 30s hang.
+        btn.click(timeout=8000)
+    except Exception:  # noqa: BLE001 — intercepted by an overlay / not actionable
+        raise ManualApplyRequired(
+            "внешняя форма: кнопка отправки перехвачена оверлеем (модалка ATS), нужен ручной отклик")
 
 
 def scrape_until_ready(page, attempts: int = 6, interval_ms: int = 1500):
