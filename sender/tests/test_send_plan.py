@@ -1,4 +1,5 @@
-from app.application.send_plan import group_leads_by_platform
+from app.application.send_plan import group_leads_by_platform, skip_reason
+from app.domain.lead import STATUS_FAILED, STATUS_SKIPPED
 
 
 class _Lead:
@@ -29,3 +30,39 @@ def test_single_platform_one_group():
     assert len(groups) == 1
     assert groups[0][0] == "hh"
     assert len(groups[0][1]) == 2
+
+
+_KNOWN_T = {"telegram", "linkedin", "hh"}
+
+
+def _lead(platform):
+    return _Lead(0, platform)   # _Lead is defined at the top of this file
+
+
+def test_skip_unknown_platform():
+    assert skip_reason(_lead("myspace"), _KNOWN_T, {}, 10, set(), set()) == (
+        STATUS_SKIPPED, "unknown platform: myspace")
+
+
+def test_skip_platform_whose_channel_failed():
+    assert skip_reason(_lead("linkedin"), _KNOWN_T, {}, 10, set(), {"linkedin"}) == (
+        STATUS_FAILED, "channel start failed earlier this run")
+
+
+def test_skip_rate_limited_platform():
+    assert skip_reason(_lead("hh"), _KNOWN_T, {}, 10, {"hh"}, set()) == (
+        STATUS_SKIPPED, "rate-limited earlier this run")
+
+
+def test_skip_when_daily_limit_reached():
+    assert skip_reason(_lead("telegram"), _KNOWN_T, {"telegram": 10}, 10, set(), set()) == (
+        STATUS_SKIPPED, "daily limit reached")
+
+
+def test_no_skip_when_healthy_and_under_limit():
+    assert skip_reason(_lead("telegram"), _KNOWN_T, {"telegram": 3}, 10, set(), set()) is None
+
+
+def test_unknown_takes_precedence_over_failed():
+    assert skip_reason(_lead("x"), _KNOWN_T, {}, 10, set(), {"x"}) == (
+        STATUS_SKIPPED, "unknown platform: x")
