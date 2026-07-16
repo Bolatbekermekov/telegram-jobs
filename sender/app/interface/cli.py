@@ -16,6 +16,7 @@ from app.application.generate_message import GenerateMessage, subject_for
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import skip_reason
+from app.domain.channel import ChannelUnavailable
 from app.domain.lead import (
     STATUS_FAILED,
     STATUS_INVITED,
@@ -87,6 +88,7 @@ def run() -> None:
 
     sent_per_platform: dict[str, int] = {}
     rate_limited: set[str] = set()       # platforms that rate-limited us this run
+    unavailable: set[str] = set()        # platforms whose channel can't start (retry next run)
     failed_platforms: set[str] = set()   # platforms whose channel failed to start
     quit_requested = False
 
@@ -101,8 +103,9 @@ def run() -> None:
                 break
             platform = lead.platform
 
-            if platform in rate_limited:
-                # This platform throttled us earlier this run — leave its remaining
+            if platform in rate_limited or platform in unavailable:
+                # Platform threw us off earlier this run (rate-limit) or its channel
+                # can't start (e.g. Wellfound CDP Chrome down) — leave its remaining
                 # leads `new` (write no status) so the next run retries them, matching
                 # the old grouped loop that `break`ed and left them unmarked.
                 continue
@@ -117,6 +120,13 @@ def run() -> None:
 
             try:
                 channel = switcher.for_platform(platform)
+            except ChannelUnavailable as exc:
+                # Transient setup issue (e.g. Wellfound Chrome not running): leave this
+                # lead and the platform's remaining leads `new` (no status) for next run.
+                unavailable.add(platform)
+                print(f"⏭  Канал '{platform}' недоступен: {exc} — "
+                      "оставляю его лиды на следующий прогон.")
+                continue
             except Exception as exc:  # noqa: BLE001
                 repo.mark_status(lead, STATUS_FAILED, note=f"channel start failed: {exc}")
                 failed_platforms.add(platform)
