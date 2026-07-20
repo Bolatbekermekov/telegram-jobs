@@ -3,3 +3,6 @@ openai==1.59.6
 gspread==6.1.4
 google-auth==2.37.0
 python-dotenv==1.0.1
+# Reading a vacancy page when the message is a bare link. Already present as an
+# openai dependency; pinned here because we import it directly.
+httpx==0.28.1

@@ -1,0 +1,98 @@
+"""Fetch a vacancy page so a link-only message still gets a real description.
+
+Both sites are read anonymously, with a plain GET:
+
+* hh — its public API answers 403 to an unauthenticated client (checked
+  2026-07-20 on api.hh.ru/vacancies/<id>, every User-Agent), but the ordinary
+  page comes back in well under a second.
+* LinkedIn — the public job view is served without a login, so this needs no
+  session and carries none of the ban risk that automating a logged-in LinkedIn
+  does. Only `/jobs/view/` is supported; `/posts/` answers 404 to a plain GET.
+
+Best-effort by design: the bot runs on a serverless function with a short budget
+and a datacenter IP that either site may throttle, so every failure returns "" and
+the caller falls back to summarising whatever the message itself contained.
+"""
+import re
+
+from app.domain.vacancy_text import extract_hh_vacancy, extract_linkedin_vacancy
+
+# A browser UA: a bot-looking one gets throttled by both sites.
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+_HH_VACANCY_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)/vacancy/\d+", re.IGNORECASE)
+_LINKEDIN_JOB_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?linkedin\.com/jobs/view/\d+", re.IGNORECASE)
+
+# hh answers in ~0.6s and LinkedIn in ~2-3s, so this is head-room, not the norm.
+# It stays small on purpose: the bot runs on a serverless function whose own
+# budget is around 10s, and a fetch that outlives the function just turns a
+# saved-without-description lead into a killed request that Telegram retries.
+_TIMEOUT_SECONDS = 8.0
+
+# Both sites throttle a burst of requests, which is what a backfill over many
+# leads looks like. The pages come back fine a moment later, so one retry
+# recovers most of it — three rows of an 11-row backfill, in the run that
+# prompted this.
+_RETRY_ATTEMPTS = 2
+_RETRY_DELAY_SECONDS = 2.0
+
+
+def is_hh_vacancy_url(url: str) -> bool:
+    return bool(_HH_VACANCY_RE.match((url or "").strip()))
+
+
+def is_linkedin_job_url(url: str) -> bool:
+    return bool(_LINKEDIN_JOB_RE.match((url or "").strip()))
+
+
+def is_fetchable_vacancy_url(url: str) -> bool:
+    return is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+
+
+def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None) -> str:
+    """GET `url`, retrying once on throttling or a network blip.
+
+    A 403/404 is the site's final answer (restricted or removed vacancy) — retry
+    it and you only wait longer for the same nothing.
+    """
+    import time
+
+    import httpx
+
+    _sleep = time.sleep if sleep is None else sleep
+    for attempt in range(attempts):
+        try:
+            resp = httpx.get(url, headers={"User-Agent": _UA}, timeout=timeout,
+                             follow_redirects=True)
+            if resp.status_code == 200:
+                return resp.text
+            if resp.status_code in (403, 404, 410):
+                return ""
+        except Exception:  # noqa: BLE001 — a timeout or reset is worth one retry
+            if attempt == attempts - 1:
+                return ""
+        if attempt < attempts - 1:
+            _sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
+    return ""
+
+
+def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
+    """Vacancy text behind `url`, or "" if it can't be read for any reason."""
+    url = (url or "").strip()
+    if is_hh_vacancy_url(url):
+        extract = extract_hh_vacancy
+    elif is_linkedin_job_url(url):
+        extract = extract_linkedin_vacancy
+    else:
+        return ""
+    try:
+        return extract(_get(url, timeout))
+    except Exception:  # noqa: BLE001 — never let intake fail over a missing description
+        return ""
+
+
+# Kept so an older import keeps working; new code should call fetch_vacancy_text.
+fetch_hh_vacancy_text = fetch_vacancy_text
