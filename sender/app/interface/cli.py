@@ -16,7 +16,6 @@ from app.application.generate_message import GenerateMessage, subject_for
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import skip_reason
-from app.domain.channel import ChannelUnavailable
 from app.domain.lead import (
     STATUS_FAILED,
     STATUS_INVITED,
@@ -60,7 +59,8 @@ def _relevance_args() -> dict:
     from app.infrastructure.cv_loader import load_text_file
     from app.infrastructure.openai_relevance import OpenAIRelevanceScorer
     return dict(
-        scorer=OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL),
+        scorer=OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL_CHEAP,
+                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS),
         profile=load_text_file(config.SEARCH_PROFILE_PATH),
         threshold=config.MATCH_THRESHOLD,
         max_jobs=config.MATCH_MAX_JOBS,
@@ -74,7 +74,8 @@ def run() -> None:
 
     repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID, config.SHEET_TAB)
     generator = GenerateMessage(
-        OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
+        OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL,
+                               max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS),
         cv_text, profile_text, config.SIGNATURE_TEXT,
     )
 
@@ -84,12 +85,10 @@ def run() -> None:
         return
 
     mode = "АВТО (без подтверждения)" if config.AUTO_SEND else "ручной"
-    print(f"Новых лидов: {len(leads)}. Лимит/платформа: {config.DAILY_SEND_LIMIT}. Режим: {mode}.")
+    print(f"Новых лидов: {len(leads)}. Режим: {mode}.")
 
     sent_per_platform: dict[str, int] = {}
     rate_limited: set[str] = set()       # platforms that rate-limited us this run
-    unavailable: set[str] = set()        # platforms whose channel can't start (retry next run)
-    failed_platforms: set[str] = set()   # platforms whose channel failed to start
     quit_requested = False
 
     # Strict id order: walk leads top-to-bottom. ChannelSwitcher keeps a single
@@ -103,15 +102,13 @@ def run() -> None:
                 break
             platform = lead.platform
 
-            if platform in rate_limited or platform in unavailable:
-                # Platform threw us off earlier this run (rate-limit) or its channel
-                # can't start (e.g. Wellfound CDP Chrome down) — leave its remaining
-                # leads `new` (write no status) so the next run retries them, matching
-                # the old grouped loop that `break`ed and left them unmarked.
+            if platform in rate_limited:
+                # Platform threw us off earlier this run (rate-limit) — leave its
+                # remaining leads `new` (write no status) so the next run retries them,
+                # matching the old grouped loop that `break`ed and left them unmarked.
                 continue
 
-            reason = skip_reason(lead, _KNOWN, sent_per_platform,
-                                 config.DAILY_SEND_LIMIT, failed_platforms)
+            reason = skip_reason(lead, _KNOWN)
             if reason is not None:
                 status, note = reason
                 repo.mark_status(lead, status, note=note)
@@ -120,18 +117,20 @@ def run() -> None:
 
             try:
                 channel = switcher.for_platform(platform)
-            except ChannelUnavailable as exc:
-                # Transient setup issue (e.g. Wellfound Chrome not running): leave this
-                # lead and the platform's remaining leads `new` (no status) for next run.
-                unavailable.add(platform)
-                print(f"⏭  Канал '{platform}' недоступен: {exc} — "
-                      "оставляю его лиды на следующий прогон.")
-                continue
             except Exception as exc:  # noqa: BLE001
-                repo.mark_status(lead, STATUS_FAILED, note=f"channel start failed: {exc}")
-                failed_platforms.add(platform)
-                print(f"❌ Не удалось поднять канал '{platform}': {exc} — пропускаю его лиды.")
-                continue
+                # A channel that won't start is a setup problem (dead session, Chrome
+                # not running, bad config) — never the lead's fault, it was never even
+                # attempted. Write no status, so this lead and every lead after it stay
+                # `new`. Stop the whole run: leads are walked in sheet-id order, so the
+                # queue is interleaved across platforms and limping on would drain the
+                # healthy ones while the broken session goes unnoticed.
+                sent_so_far = sum(sent_per_platform.values())
+                print(f"\n❌ Канал '{platform}' не поднялся: {exc}")
+                print(f"   Лид #{lead.lead_id} и все следующие остаются 'new'.")
+                print(f"   Отправлено до остановки: {sent_so_far}. По платформам: {sent_per_platform}")
+                print(f"   Причина: {type(exc).__name__}. Если это протухшая сессия — "
+                      "`make login`; иначе смотри сообщение выше.")
+                raise SystemExit(1) from exc
             sender = SendOutreach(channel)
 
             print("\n" + "=" * 60)
@@ -164,17 +163,17 @@ def run() -> None:
                 repo.mark_sent(lead, content.body, STATUS_SENT)
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"✅ Отправлено [{platform}] "
-                      f"({sent_per_platform[platform]}/{config.DAILY_SEND_LIMIT}).")
+                      f"(всего за прогон: {sent_per_platform[platform]}).")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
             elif result.invited:
                 # Connection request with a note was sent — a real outreach
-                # action (counts toward the limit); CV goes after acceptance.
+                # action (counted in the run total); CV goes after acceptance.
                 repo.mark_status(lead, STATUS_INVITED, note=result.error)
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"📨 Запрос на контакт отправлен [{platform}] "
-                      f"({sent_per_platform[platform]}/{config.DAILY_SEND_LIMIT}). "
+                      f"(всего за прогон: {sent_per_platform[platform]}). "
                       "CV — после подтверждения.")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
