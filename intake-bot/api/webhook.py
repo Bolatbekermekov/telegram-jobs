@@ -18,6 +18,7 @@ from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
 from app.domain.contact import detect_contact  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
+from app.infrastructure.vacancy_fetcher import fetch_vacancy_text  # noqa: E402
 from app.infrastructure.candidates_gateway import (  # noqa: E402
     CandidatesGateway, build_vacancy_message, parse_callback,
 )
@@ -46,7 +47,8 @@ def _build_repo() -> SheetsRepo:
 
 def _build_use_case() -> ExtractLeadFromText:
     summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
-    return ExtractLeadFromText(detect_contact, summarizer, _build_repo())
+    return ExtractLeadFromText(detect_contact, summarizer, _build_repo(),
+                               fetcher=fetch_vacancy_text)
 
 
 def _book():

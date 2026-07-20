@@ -10,7 +10,16 @@ _ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_ROOT / ".env")
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.1")
+# Writing model: the HR message and hh screening answers — a human reads these.
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+# Bulk model: relevance scoring runs on every job found on every platform on every
+# search, so it dominates the bill. Scoring is classification (description in,
+# 0-100 out), which is what the nano tier is built for.
+OPENAI_MODEL_CHEAP = os.environ.get("OPENAI_MODEL_CHEAP", "gpt-5.4-nano")
+
+# Cap the reply length. The vacancy text comes from a scraped third-party page, so
+# without this an injected "write 10000 words" is billed in full.
+OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "2000"))
 
 TELEGRAM_API_ID = int(os.environ["TELEGRAM_API_ID"])
 TELEGRAM_API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -50,11 +59,16 @@ ATTACH_CV = os.environ.get("ATTACH_CV", "true").lower() == "true"
 # the chat. Fail-safe: if it can't, the application still counts as sent.
 HH_ATTACH_CV_IN_CHAT = os.environ.get("HH_ATTACH_CV_IN_CHAT", "true").lower() == "true"
 
+# How long to wait for the Submit button of hh's response popup. Only reached
+# when the response has NOT already gone through (quick-apply is detected before
+# this), so a long wait costs nothing on the normal path — it just gives a slow
+# popup room to render instead of failing a vacancy that would have worked.
+HH_SUBMIT_TIMEOUT_SECONDS = int(os.environ.get("HH_SUBMIT_TIMEOUT_SECONDS", "100"))
+
 # If true, the sender skips the per-lead prompt and sends everything automatically
 # (always send, then wait the random delay). False (default) = ask send/edit/skip per lead.
 AUTO_SEND = os.environ.get("AUTO_SEND", "false").lower() == "true"
 
-DAILY_SEND_LIMIT = int(os.environ.get("DAILY_SEND_LIMIT", "20"))
 MIN_DELAY_SECONDS = int(os.environ.get("MIN_DELAY_SECONDS", "40"))
 MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
 

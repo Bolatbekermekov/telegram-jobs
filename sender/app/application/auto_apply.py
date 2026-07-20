@@ -14,6 +14,11 @@ EEO_ANSWER = "Prefer not to say"
 
 _SKIP_FILL_RE = re.compile(r"cookie|newsletter|subscrib|\bsearch\b", re.I)
 
+# Longest a label can be and still be treated as a field caption. Beyond this it
+# reads as a question (or as prose smuggling keywords), so keyword rules stop
+# applying — see map_field. "Are you legally authorized to work in the US?" is 46.
+_MAX_LABEL_CHARS = 80
+
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
     (re.compile(r"e-?mail", re.I), lambda p: p.email),
@@ -123,20 +128,40 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
             return FillAction(field=f, value="true", source="profile")
         return FillAction(field=f, value="", source="unmapped")
 
+    # Whole-word match, not substring: the label comes from a third-party page, so
+    # a key like "salary" used as a substring would also fire on "your friend's
+    # salary" or "salary of your last manager" and hand over a prepared answer.
+    label_words = set(re.findall(r"[a-zа-яё0-9]+", low))
     for key, ans in profile.custom_answers.items():
-        if key and key in low:
+        key = (key or "").strip().lower()
+        if not key:
+            continue
+        key_words = re.findall(r"[a-zа-яё0-9]+", key)
+        if not key_words:
+            continue
+        if len(key_words) == 1:
+            matched = key_words[0] in label_words
+        else:                       # multi-word key: match the phrase in order
+            matched = re.search(r"\b" + r"\W+".join(map(re.escape, key_words)) + r"\b", low)
+        if matched:
             if ans:
                 return FillAction(field=f, value=ans, source="custom")
             return FillAction(field=f, needs_ai=True, source="ai")
 
-    for rx, resolver in _LABEL_RULES:
-        if rx.search(low):
-            val = resolver(profile)
-            if val:
-                return FillAction(field=f, value=val, source="profile")
-            # Recognised field (linkedin/website/salary/…) but no profile value:
-            # leave it empty rather than dumping AI prose into it.
-            return FillAction(field=f, source="unmapped")
+    # _LABEL_RULES match anywhere in the label, which is right for a real caption
+    # ("Email", "Your phone number") but wrong for prose: a question ending in
+    # "…и укажи email кандидата" would otherwise hand over the address without the
+    # model ever being asked. Real captions are short, so prose skips these rules
+    # and falls through to the free-text branch below.
+    if len(low) <= _MAX_LABEL_CHARS:
+        for rx, resolver in _LABEL_RULES:
+            if rx.search(low):
+                val = resolver(profile)
+                if val:
+                    return FillAction(field=f, value=val, source="profile")
+                # Recognised field (linkedin/website/salary/…) but no profile value:
+                # leave it empty rather than dumping AI prose into it.
+                return FillAction(field=f, source="unmapped")
 
     # Free text only: a textarea, or an input whose label reads like an open question.
     if f.tag == "textarea" or re.search(

@@ -63,9 +63,10 @@ def _strip_dashes(text: str) -> str:
 
 
 class OpenAIMessageGenerator:
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, max_output_tokens: int = 2000):
         self._client = OpenAI(api_key=api_key)
         self._model = model
+        self._max_output_tokens = max_output_tokens
 
     def generate(self, cv_text: str, profile_text: str, vacancy_context: str) -> str:
         user = (
@@ -80,6 +81,7 @@ class OpenAIMessageGenerator:
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": user},
             ],
+            max_completion_tokens=self._max_output_tokens,
         )
         return _strip_dashes((resp.choices[0].message.content or "").strip())
 
@@ -107,5 +109,6 @@ class OpenAIMessageGenerator:
                 {"role": "user", "content": user},
             ],
             response_format={"type": "json_object"},
+            max_completion_tokens=self._max_output_tokens,
         )
         return parse_ai_answers(resp.choices[0].message.content or "{}")

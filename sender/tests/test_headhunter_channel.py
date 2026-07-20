@@ -64,9 +64,14 @@ class _FakePage:
             def nth(self_inner, i):
                 return self_inner
 
-            def click(self_inner):
+            def click(self_inner, timeout=None):
+                # Playwright raises when the element isn't there; the real submit
+                # click is bounded, so the fake must be able to fail the same way.
+                if page._counts.get(selector, 1) == 0:
+                    raise TimeoutError(f"Locator.click: no {selector}")
                 if selector == SEL_SUBMIT:
                     page._submitted = True
+                    page.submit_timeout = timeout      # recorded, not in `actions`
                 page.actions.append(("click", selector))
 
             def fill(self_inner, value):
@@ -216,7 +221,32 @@ def test_apply_raises_when_already_applied():
 
 def test_apply_raises_without_apply_button():
     page = _FakePage({})
-    with pytest.raises(ChannelError, match="no apply button"):
+    with pytest.raises(ChannelError, match="нет кнопки отклика"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+
+class _Resp:
+    def __init__(self, status):
+        self.status = status
+
+
+def test_inaccessible_vacancy_reports_the_http_status():
+    """hh answers 403 for an archived or restricted vacancy (seen live on
+    vacancy/133978075). Reporting "no apply button" there reads like a broken
+    selector and sends you hunting through the DOM for nothing."""
+    page = _FakePage({})
+    page.goto = lambda url, **kw: _Resp(403)
+
+    with pytest.raises(ChannelError, match="недоступна.*403"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+
+def test_a_200_response_proceeds_to_the_normal_checks():
+    """The status guard must not swallow the ordinary path."""
+    page = _FakePage({})
+    page.goto = lambda url, **kw: _Resp(200)
+
+    with pytest.raises(ChannelError, match="нет кнопки отклика"):
         apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
 
 
@@ -309,3 +339,204 @@ def test_apply_survives_chat_attach_failure(monkeypatch):
                    OutreachContent(body="hi", attachment_path="/cv/me.pdf"),
                    attach_cv_in_chat=True)
     assert ("click", SEL_SUBMIT) in page.actions
+
+
+# --- regional HeadHunter domains --------------------------------------------
+
+def test_regional_link_is_rewritten_to_the_session_domain():
+    """Cookies from `make login_hh` are hh.ru-only; opening hh.kz browses
+    anonymously and dead-ends at the login wall on Apply (verified live)."""
+    from app.infrastructure.channels.headhunter import to_session_domain
+
+    assert to_session_domain("https://hh.kz/vacancy/135297431?from=share_ios") == \
+        "https://hh.ru/vacancy/135297431?from=share_ios"
+
+
+def test_regional_subdomain_is_rewritten_too():
+    from app.infrastructure.channels.headhunter import to_session_domain
+
+    assert to_session_domain("https://astana.hh.kz/vacancy/1") == "https://hh.ru/vacancy/1"
+
+
+def test_hh_ru_link_is_left_alone():
+    from app.infrastructure.channels.headhunter import to_session_domain
+
+    url = "https://hh.ru/vacancy/1?query=x"
+    assert to_session_domain(url) == url
+
+
+def test_a_foreign_host_is_not_rewritten():
+    """Guard the regex: only HeadHunter's own domains get rebased."""
+    from app.infrastructure.channels.headhunter import to_session_domain
+
+    url = "https://not-hh.kz/vacancy/1"
+    assert to_session_domain(url) == url
+
+
+# --- chat entry point --------------------------------------------------------
+
+def test_chat_opener_accepts_the_post_response_button():
+    """hh stopped rendering `open-vacancy-chat`; after a response the chat opens
+    from `vacancy-response-link-view-topic` (verified live on vacancy/135297431,
+    where the old selector matched 0 and the new one 2). Without this the CV was
+    never delivered — the application went through, the attachment did not."""
+    from app.infrastructure.channels.headhunter import SEL_CHAT_OPEN_BTN
+
+    assert "vacancy-response-link-view-topic" in SEL_CHAT_OPEN_BTN
+    assert "open-vacancy-chat" in SEL_CHAT_OPEN_BTN     # kept as the first choice
+
+
+def test_attach_cv_opens_the_chat_via_the_post_response_button():
+    """A page that only has the new button must still reach the file input."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_CHAT_FILE_INPUT, SEL_CHAT_OPEN_BTN, attach_cv_via_chat,
+    )
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_FILE_INPUT: 1})
+    attach_cv_via_chat(page, "C:/cv.pdf")
+
+    assert ("click", SEL_CHAT_OPEN_BTN) in page.actions
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "C:/cv.pdf") in page.actions
+
+
+def test_attach_cv_reports_when_no_chat_button_exists_at_all():
+    from app.infrastructure.channels.headhunter import attach_cv_via_chat
+
+    page = _FakePage({})
+    with pytest.raises(ChannelError, match="кнопка чата"):
+        attach_cv_via_chat(page, "C:/cv.pdf")
+
+
+# --- hh quick apply (response sent on the Apply click) -----------------------
+
+def test_quick_apply_is_not_reported_as_failed():
+    """hh sends the response on the Apply click, then offers a cover-letter popup
+    whose submit control is not `vacancy-response-submit-popup`. Checking the
+    letter form before the applied-state made us fill that popup, time out on a
+    missing button, and mark a sent application `failed` (live: vacancy/135269482)."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_ALREADY_APPLIED, SEL_APPLY, SEL_LETTER_INPUT, apply_via_page,
+    )
+
+    # Apply button present, response already registered, and a letter popup open.
+    page = _FakePage({SEL_APPLY: 1, SEL_ALREADY_APPLIED: 0, SEL_LETTER_INPUT: 1})
+    original = page.locator
+
+    def _locator(sel):
+        # After the apply click hh marks the vacancy as responded.
+        if ("click", SEL_APPLY) in page.actions:
+            page._counts[SEL_ALREADY_APPLIED] = 1
+        return original(sel)
+
+    page.locator = _locator
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+    # Never hunted for the submit button, never reported a failure.
+    assert not any(a[0] == "click" and SEL_SUBMIT in str(a) for a in page.actions)
+
+
+def test_submit_click_failure_rechecks_before_declaring_failure():
+    """Belt and braces: if the click does fail, a response that went through
+    anyway must not be reported as an error."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_ALREADY_APPLIED, SEL_APPLY, SEL_LETTER_INPUT, apply_via_page,
+    )
+
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 0,
+                      SEL_ALREADY_APPLIED: 0})
+    original = page.locator
+
+    def _locator(sel):
+        # The response lands while the letter popup is still open.
+        if ("fill", SEL_LETTER_INPUT, "hi") in page.actions:
+            page._counts[SEL_ALREADY_APPLIED] = 1
+        return original(sel)
+
+    page.locator = _locator
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+
+def test_unknown_popup_without_a_response_still_fails_loudly():
+    """The recheck must not turn every broken layout into a silent success."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_APPLY, SEL_LETTER_INPUT, apply_via_page,
+    )
+
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 0})
+    with pytest.raises(ChannelError, match="кнопка отправки"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+# --- the cover letter must not depend on the CV setting ---------------------
+
+def test_letter_is_sent_even_when_cv_attaching_is_off():
+    """The letter is the point of the tool. Gating it on the CV switch meant
+    turning off the PDF silently dropped the letter on quick-apply vacancies,
+    where the chat is the only way it reaches the employer."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_CHAT_FILE_INPUT, SEL_CHAT_MSG, SEL_CHAT_OPEN_BTN, _maybe_attach_cv,
+    )
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_FILE_INPUT: 1})
+    content = OutreachContent(body="hi", attachment_path="C:/cv.pdf")
+
+    _maybe_attach_cv(page, content, attach_cv_in_chat=False, debug_dir=None,
+                     letter="Здравствуйте, меня заинтересовала вакансия")
+
+    assert ("fill", SEL_CHAT_MSG, "Здравствуйте, меня заинтересовала вакансия") in page.actions
+    # CV explicitly disabled -> the PDF must not be uploaded.
+    assert not any(a[0] == "set_input_files" for a in page.actions)
+
+
+def test_letter_and_cv_both_go_when_enabled():
+    from app.infrastructure.channels.headhunter import (
+        SEL_CHAT_FILE_INPUT, SEL_CHAT_MSG, SEL_CHAT_OPEN_BTN, _maybe_attach_cv,
+    )
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_FILE_INPUT: 1})
+    content = OutreachContent(body="hi", attachment_path="C:/cv.pdf")
+
+    _maybe_attach_cv(page, content, attach_cv_in_chat=True, debug_dir=None, letter="письмо")
+
+    assert ("fill", SEL_CHAT_MSG, "письмо") in page.actions
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "C:/cv.pdf") in page.actions
+
+
+def test_nothing_is_opened_when_there_is_neither_letter_nor_cv():
+    from app.infrastructure.channels.headhunter import SEL_CHAT_OPEN_BTN, _maybe_attach_cv
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1})
+    _maybe_attach_cv(page, OutreachContent(body="hi"), attach_cv_in_chat=True,
+                     debug_dir=None, letter=None)
+    assert page.actions == []
+
+
+def test_a_failed_letter_is_reported_loudly(capsys):
+    """A delivered application with no letter is the failure mode that matters."""
+    from app.infrastructure.channels.headhunter import _maybe_attach_cv
+
+    page = _FakePage({})           # no chat button at all -> chat step raises
+    _maybe_attach_cv(page, OutreachContent(body="hi"), attach_cv_in_chat=False,
+                     debug_dir=None, letter="письмо")
+
+    out = capsys.readouterr().out
+    assert "ПИСЬМО НЕ ДОШЛО" in out
+
+
+def test_submit_wait_is_configurable():
+    """Tunable from .env: a slow popup should get room to render without editing code."""
+    from app.infrastructure.channels.headhunter import (
+        SEL_APPLY, SEL_LETTER_INPUT, SUBMIT_TIMEOUT_MS, apply_via_page,
+    )
+
+    assert SUBMIT_TIMEOUT_MS == 100_000
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"),
+                   submit_timeout_ms=45_000)
+    assert page.submit_timeout == 45_000
+
+
+def test_the_channel_passes_its_configured_wait_through():
+    from app.infrastructure.channels.headhunter import HeadHunterChannel
+
+    ch = HeadHunterChannel("/nonexistent", submit_timeout_ms=12_345)
+    assert ch._submit_timeout_ms == 12_345

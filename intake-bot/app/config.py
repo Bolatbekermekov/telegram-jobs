@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()  # local .env; on Vercel the vars are injected and this is a no-op
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.1")
+# Summarising a pasted vacancy is extraction, not writing — the cheap tier is
+# enough, and this runs on every message forwarded to the bot.
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL_CHEAP", "gpt-5.4-nano")
+OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "1000"))
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 # Optional shared secret to validate Telegram webhook calls.

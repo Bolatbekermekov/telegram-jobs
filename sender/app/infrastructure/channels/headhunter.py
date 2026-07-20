@@ -15,6 +15,19 @@ _VACANCY_RE = re.compile(r"hh\.(?:ru|kz)/vacancy/(\d+)")
 # hh.ru data-qa hooks. Verified live 2026-07-08 on a real vacancy detail page;
 # fix HERE when they drift. `:visible` on the apply link avoids a hidden
 # duplicate (y=0) that would hang the click waiting to become actionable.
+# The saved session belongs to hh.ru, and cookies don't cross to hh.kz / hh.uz —
+# opening a regional link would browse anonymously and hit the login wall on Apply.
+# Vacancy ids are shared network-wide, so the same id on hh.ru resolves to the same
+# vacancy, logged in (verified live on vacancy/135297431: hh.kz anonymous, hh.ru not).
+_HH_REGIONAL_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?hh\.(?:kz|uz|by|kg|az|tj)/", re.IGNORECASE)
+
+
+def to_session_domain(url: str) -> str:
+    """Rewrite a regional HeadHunter link onto hh.ru, where our session lives."""
+    return _HH_REGIONAL_RE.sub("https://hh.ru/", url, count=1)
+
+
 SEL_APPLY = "[data-qa='vacancy-response-link-top']:visible"
 SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
 # Consent popup shown when applying to a vacancy in another country (KZ↔RU).
@@ -22,6 +35,8 @@ SEL_COUNTRY_CONFIRM = "[data-qa='countries-profile-visibility-popup-confirm']"
 SEL_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
 SEL_LETTER_INPUT = "[data-qa='vacancy-response-popup-form-letter-input']"
 SEL_SUBMIT = "[data-qa='vacancy-response-submit-popup']"
+# Default wait for that Submit button; the channel passes HH_SUBMIT_TIMEOUT_SECONDS.
+SUBMIT_TIMEOUT_MS = 100_000
 # Employer screening questions: free-text <textarea name="task_<id>_text"> and
 # single-choice radio groups <input type=radio name="task_<id>">. Mandatory, so
 # without an AI answerer we skip; with one we answer and submit (see below).
@@ -39,7 +54,13 @@ _LOGIN_MARKERS = ("/account/login", "/login", "captcha")
 # hidden <input data-qa=upload-file-input> (accepts pdf) with set_input_files —
 # no "+" click, so no native OS picker can hang the run. The send button has a
 # disabled duplicate (global widget), so we click only the ENABLED one.
-SEL_CHAT_OPEN_BTN = "[data-qa='open-vacancy-chat']"
+# Entry point into the employer chat, after a response has been sent. hh now
+# renders it as `vacancy-response-link-view-topic` (a button labelled "Chat" /
+# "Перейти в чат") — the same data-qa that marks an already-applied vacancy, which
+# is consistent: the element only exists once a response exists. `open-vacancy-chat`
+# is kept first because it is still the one some flows render.
+SEL_CHAT_OPEN_BTN = ("[data-qa='open-vacancy-chat']:visible, "
+                     "[data-qa='vacancy-response-link-view-topic']:visible")
 SEL_CHAT_NEWTAB_BTN = "[data-qa='chatik-open-in-new-tab-button']"
 SEL_CHAT_MSG = "textarea[data-qa='chatik-new-message-text']:visible"
 SEL_CHAT_FILE_INPUT = "input[data-qa='upload-file-input']"
@@ -140,7 +161,8 @@ def _chat_send(chat) -> None:
         chat.locator(SEL_CHAT_MSG).first.press("Enter")
 
 
-def attach_cv_via_chat(page, attachment_path: str, debug_dir=None, letter=None) -> None:
+def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
+                       letter=None) -> None:
     """In the vacancy chat, send the cover `letter` (if given) and the CV PDF,
     AFTER a successful response.
 
@@ -180,7 +202,10 @@ def attach_cv_via_chat(page, attachment_path: str, debug_dir=None, letter=None) 
             chat.wait_for_timeout(2500)
 
     # 2) The CV PDF via chatik's pre-rendered hidden file input (accepts pdf) —
-    #    no "+" click, so no native OS picker can hang the run.
+    #    no "+" click, so no native OS picker can hang the run. Optional: with the
+    #    PDF turned off the letter above is still the delivery that mattered.
+    if not attachment_path:
+        return
     file_input = chat.locator(SEL_CHAT_FILE_INPUT)
     if file_input.count() == 0:
         _dump_chat_debug(chat, debug_dir, "hh_chat_no_file_input")
@@ -228,21 +253,43 @@ def _already_applied(page) -> bool:
 
 
 def _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=None) -> None:
-    """Send the CV PDF (and, for one-click vacancies, the cover `letter`) in the
-    chat if enabled — never failing the (already sent) application when the chat
-    step can't complete."""
-    if not (attach_cv_in_chat and content.attachment_path):
+    """Deliver the cover `letter` and/or the CV PDF through the vacancy chat.
+
+    The letter is the point of this tool, so it is NOT gated on the CV setting:
+    hh's quick-apply vacancies send the response on the apply click with no letter
+    form at all, and the chat is then the only way it reaches the employer. Gating
+    both on `attach_cv_in_chat` meant turning off the PDF silently dropped the
+    letter too.
+
+    Never fails the (already sent) application — but says plainly which part
+    didn't make it, since a delivered application with no letter is the failure
+    mode that matters here.
+    """
+    want_cv = bool(attach_cv_in_chat and content.attachment_path)
+    if not (letter or want_cv):
         return
     try:
-        attach_cv_via_chat(page, content.attachment_path, debug_dir, letter)
+        attach_cv_via_chat(page, content.attachment_path if want_cv else None,
+                           debug_dir, letter)
     except Exception as exc:  # noqa: BLE001 — response already succeeded
-        print(f"⚠️  hh: отклик отправлен, но CV/письмо в чат не отправлены: {exc}")
+        if letter:
+            print(f"⚠️  hh: ОТКЛИК ОТПРАВЛЕН, НО СОПРОВОДИТЕЛЬНОЕ ПИСЬМО НЕ ДОШЛО ({exc}). "
+                  "Текст письма — в колонке «Сообщение», отправь его в чате вручную.")
+        else:
+            print(f"⚠️  hh: отклик отправлен, CV в чат не приложен: {exc}")
 
 
 def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
-                   attach_cv_in_chat: bool = False, debug_dir=None) -> None:
-    page.goto(url, wait_until="domcontentloaded")
+                   attach_cv_in_chat: bool = False, debug_dir=None,
+                   submit_timeout_ms: int = SUBMIT_TIMEOUT_MS) -> None:
+    url = to_session_domain(url)
+    resp = page.goto(url, wait_until="domcontentloaded")
     _check_not_blocked(page)
+    # hh answers 403 for a vacancy that is archived or restricted to certain users.
+    # Without this the run falls through to the missing Apply button and reports
+    # "no apply button", which reads like a broken selector rather than a dead link.
+    if resp is not None and resp.status >= 400:
+        raise ChannelError(f"вакансия недоступна (HTTP {resp.status}): {url}")
     if page.locator(SEL_ALREADY_APPLIED).count() > 0:
         raise ChannelError(f"already applied: {url}")
     # Grab the vacancy text now (for answering questions) before we leave the page.
@@ -254,7 +301,8 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
             vacancy_context = ""
     apply_btn = page.locator(SEL_APPLY)
     if apply_btn.count() == 0:
-        raise ChannelError(f"no apply button on {url}")
+        raise ChannelError(
+            f"нет кнопки отклика (вакансия закрыта или доступна не всем): {url}")
     apply_btn.first.click()
     _check_not_blocked(page)
     # After the click hh may show a country-visibility consent popup (foreign
@@ -280,21 +328,37 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
                 f"вакансия с обязательными вопросами работодателя, нужен ручной отклик: {url}")
         questions = collect_questions(page)
         _fill_questions(page, questions, answerer(questions, vacancy_context))
-    # One-click-apply vacancies submit on the apply click itself — no letter form
-    # ever renders. Don't hang waiting for a letter box that will never appear:
-    # if it's absent, either the response already went through (finish cleanly)
-    # or it's an unknown form (capture the DOM and fail clearly, not by timeout).
+    # Ask "did the response already go through?" BEFORE touching the letter form.
+    # hh's quick apply submits on the apply click itself and only then offers an
+    # optional cover-letter popup, whose submit control is NOT
+    # `vacancy-response-submit-popup`. Checking the form first meant we filled that
+    # popup, waited 30s for a button it never had, and reported `failed` for an
+    # application that was in fact sent (live: vacancy/135269482 and /135056818).
+    if _already_applied(page):
+        print(f"ℹ️  hh: отклик подан в один клик (онлайн-резюме); письмо и CV — в чат: {url}")
+        # No letter reached the employer with the response, so send it in the chat.
+        _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=content.body)
+        return
     if page.locator(SEL_LETTER_INPUT).count() == 0:
-        if _already_applied(page):
-            print(f"ℹ️  hh: отклик подан в один клик (онлайн-резюме); письмо и CV — в чат: {url}")
-            # No letter form was shown, so send the cover letter in the chat too.
-            _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=content.body)
-            return
         _dump_chat_debug(page, debug_dir, "hh_no_letter_field")
         raise ChannelError(
             f"hh: поле письма не появилось и отклик не подтверждён — проверь вручную: {url}")
     page.locator(SEL_LETTER_INPUT).first.fill(content.body)
-    page.locator(SEL_SUBMIT).first.click()
+    try:
+        # Only reached when the response has NOT already gone through — quick-apply
+        # is caught above — so this waits on a popup that really is expected to
+        # render. Generous by default; tune with HH_SUBMIT_TIMEOUT_SECONDS.
+        page.locator(SEL_SUBMIT).first.click(timeout=submit_timeout_ms)
+    except Exception as exc:  # noqa: BLE001
+        # The click may have failed because the response was already in flight.
+        if _already_applied(page):
+            print(f"ℹ️  hh: отклик уже отправлен, письмо и CV — в чат: {url}")
+            _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=content.body)
+            return
+        _dump_chat_debug(page, debug_dir, "hh_no_submit_button")
+        raise ChannelError(
+            f"кнопка отправки отклика не найдена ({exc.__class__.__name__}) — "
+            f"проверь вручную: {url}") from exc
     _verify_submitted(page)
     # The application is now sent (online resume included). Optionally attach the
     # PDF as an extra in the chat — never letting its failure fail the application.
@@ -307,7 +371,8 @@ class HeadHunterChannel:
     needs_subject = False
 
     def __init__(self, storage_state_path: str, headless: bool = False, answerer=None,
-                 attach_cv_in_chat: bool = False):
+                 attach_cv_in_chat: bool = False,
+                 submit_timeout_ms: int = SUBMIT_TIMEOUT_MS):
         # answerer(questions, vacancy_context) -> {question_id: {"text"|"choice"}}.
         # None => vacancies with mandatory questions are skipped, not answered.
         # attach_cv_in_chat => after responding, also attach the CV PDF in the chat.
@@ -315,6 +380,7 @@ class HeadHunterChannel:
         self._headless = headless
         self._answerer = answerer
         self._attach_cv_in_chat = attach_cv_in_chat
+        self._submit_timeout_ms = submit_timeout_ms
         self._pw = None
         self._browser = None
         self._page = None
@@ -353,4 +419,5 @@ class HeadHunterChannel:
         if self._page is None:
             raise ChannelError("HeadHunterChannel.start() not called")
         apply_via_page(self._page, vacancy_url(target), content, self._answerer,
-                       self._attach_cv_in_chat, self._debug_dir)
+                       self._attach_cv_in_chat, self._debug_dir,
+                       self._submit_timeout_ms)

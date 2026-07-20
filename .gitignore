@@ -34,5 +34,12 @@ Thumbs.db
 # Real-Chrome profile used for the interactive hh.ru login (login cookies)
 sender/.hh_chrome/
 
+# DOM dumps + screenshots written when an hh selector breaks. A logged-in page's
+# HTML carries the CSRF token, the full name and resume data — never commit it.
+sender/.hh_chat_debug/
+
 # Playwright MCP browser profile (session data / artifacts, not source)
 .playwright-mcp/
+
+# VS Code (личные настройки, не в публичный репо)
+.vscode/
