@@ -7,6 +7,7 @@ Automating third-party ATS violates their ToS and risks bans (accepted by user).
 import re
 from urllib.parse import unquote, urlsplit
 
+from app.application.apply_guard import host_allowed, leaked_secrets
 from app.application.auto_apply import answer_ai_fields, build_plan
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.channel import ManualApplyRequired, OutreachContent
@@ -262,6 +263,15 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
             raise ManualApplyRequired(f"страница недоступна / вакансия неактуальна: {obs.url}")
         raise ManualApplyRequired(f"форма не распознана: {obs.url}")
 
+    # Checked here, on the page that actually holds the form — not on job_url.
+    # An IFRAME_ATS lands on a company page but fills the vendor's form (obs.url is
+    # the vendor after _enter_ats_iframe), and the EMAIL route returns above without
+    # filling anything. Only a form we are about to fill and submit needs the host
+    # to be one we recognise: the page supplies the labels that reach the model and
+    # receives whatever it answers.
+    if not host_allowed(obs.url):
+        raise ManualApplyRequired(f"незнакомый сайт, заполни вручную: {obs.url}")
+
     plan = build_plan(obs, profile, cv_path)
     answer_ai_fields(plan, answerer, vacancy_context or content.body)
     missing = plan.unmapped_required()
@@ -276,6 +286,16 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     if placeholders:
         raise ManualApplyRequired(
             f"ИИ оставил плейсхолдер {placeholders}: {obs.url}")
+
+    # The ATS collects contact details in their own fields, so a model-written
+    # answer restating them means the page asked for them. Checked on AI answers
+    # only — profile-sourced fields are supposed to carry these values.
+    for a in plan.ai_fields:
+        leaked = leaked_secrets(a.value, profile)
+        if leaked:
+            raise ManualApplyRequired(
+                f"ответ ИИ содержит личные данные {leaked} "
+                f"(поле «{a.field.label or a.field.name}») — проверь вручную: {obs.url}")
 
     fill_and_submit(page, plan, dry_run)
     if dry_run:
