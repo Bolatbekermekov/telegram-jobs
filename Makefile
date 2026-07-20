@@ -22,7 +22,7 @@
 #   make test-unit      -> run the sender test suite
 #   make apply_probe    -> LIVE routing check on the 3 real external-apply URLs (network; no submit)
 
-PYTHON ?= sender/.venv/Scripts/python.exe
+PYTHON ?= sender/.venv/bin/python
 TO ?= @bolatbekermeko_v
 
 .PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login search search_linkedin search_wellfound search_remoteok search_remotive search_wwr search_hh bot_menu test-unit apply_probe
