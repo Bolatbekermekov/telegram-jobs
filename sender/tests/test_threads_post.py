@@ -108,3 +108,38 @@ def test_the_contact_line_survives_chrome_stripping_verbatim():
 
 def test_author_thread_text_is_empty_when_the_author_posted_nothing():
     assert author_thread_text([("@someone_else", FOREIGN)], "@lnkrnchk") == ""
+
+
+def test_a_short_handle_in_its_own_trailing_span_is_not_chrome():
+    """8 chars, one word, no punctuation — indistinguishable from a badge by shape
+    alone, so it used to be stripped and the contact was lost."""
+    assert post_body(["1 дн.", "DM me:", "@acme_hr", "1"]) == "DM me:\n@acme_hr"
+
+
+def test_a_short_handle_in_a_leading_span_is_not_chrome():
+    assert post_body(["hiring", "1 дн.", "@acme_hr", "пишите в личку", "2"]) == (
+        "@acme_hr\nпишите в личку")
+
+
+def test_an_email_in_a_trailing_span_is_not_chrome():
+    assert post_body(["1 дн.", "CV:", "hr@acme.com", "3"]) == "CV:\nhr@acme.com"
+
+
+def test_author_thread_text_matches_a_handle_with_glued_interface_debris():
+    """The DOM hands the handle over with a separator or badge stuck to it often
+    enough; comparing raw returns "" and the thread silently degrades to the root
+    post alone, with no signal that anything was lost."""
+    blocks = [("@lnkrnchk·", ROOT), ("lnkrnchk •", REPLY_2)]
+    text = author_thread_text(blocks, "@lnkrnchk")
+    assert "Ищу Full Stack" in text
+    assert "Для отклика присылайте" in text
+
+
+def test_author_thread_text_does_not_conflate_handles_differing_only_in_dots():
+    """Threads handles may contain periods, and an impersonation account differs from
+    the real one by exactly that. Normalising the handle's INSIDE away — not just its
+    edges — would let a stranger's reply into the vacancy text."""
+    blocks = [("@john.doe", ROOT), ("@johndoe", FOREIGN)]
+    text = author_thread_text(blocks, "@john.doe")
+    assert "Ищу Full Stack" in text
+    assert "Навайбкодили" not in text

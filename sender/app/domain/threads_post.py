@@ -8,6 +8,13 @@ the author continues in self-replies — that is where the second half of the
 requirements and, crucially, the contact to apply to live. Other people's replies
 in the same thread are trolling and other candidates' CVs, and must never be mixed
 into the vacancy text.
+
+Known limitation: a bare figure that ENDS a post — a salary, a headcount — is lost,
+because by shape it is exactly an engagement counter, and a positional rule
+("counters form a run at the very end") does not separate the two either. So
+«Зарплата:» / «300 000» keeps the label and drops the number. Accepted rather than
+guessed at: intake already stores the root post's og:description, which usually
+carries the salary, so the cost is a thinner summary, not a missing fact.
 """
 import re
 
@@ -23,6 +30,9 @@ _SENTENCE_CHARS = set(".!?:;,")
 _LIST_MARKERS = ("—", "–", "-", "•", "*", "→")
 # Longest a chrome token can plausibly be ("hiring", "Автор", "Author", "1 дн.").
 _CHROME_MAX_CHARS = 12
+# Interface debris glued to a handle: a leading "@", a trailing "·". Edges only —
+# see _same_handle for why the inside of a handle is left alone.
+_HANDLE_EDGE_RE = re.compile(r"^\W+|\W+$")
 
 
 def _is_chrome(part: str) -> bool:
@@ -35,6 +45,13 @@ def _is_chrome(part: str) -> bool:
     p = part.strip()
     if not p or p in _SEPARATORS:
         return True
+    # An "@" is always content: a handle, a mention, an email. Threads' chrome —
+    # badges, relative timestamps, separators, engagement counters — never carries
+    # one, and the author's own handle span is excluded upstream by the DOM reader.
+    # Without this, "@acme_hr" (8 chars, one word, no punctuation) reads as a short
+    # chrome token and a trailing contact line is thrown away.
+    if "@" in p:
+        return False
     if _COUNTER_RE.match(p) or _TIME_RE.match(p):
         return True
     # A short single word with no sentence punctuation: the "hiring" profile tag,
@@ -65,7 +82,15 @@ def post_body(parts: list[str]) -> str:
 
 
 def _same_handle(a: str, b: str) -> bool:
-    return a.strip().lstrip("@").lower() == b.strip().lstrip("@").lower()
+    """Compare two handles, ignoring case and the debris the DOM glues onto them.
+
+    Only the EDGES are normalised — a leading "@", trailing separators, stray
+    whitespace. A handle's inside is left alone on purpose: Threads handles may
+    contain periods («john.doe»), and an impersonation account differs from the real
+    one by exactly that, so folding punctuation away everywhere would let a
+    stranger's replies into the vacancy text.
+    """
+    return _HANDLE_EDGE_RE.sub("", a).lower() == _HANDLE_EDGE_RE.sub("", b).lower()
 
 
 def author_thread_text(blocks: list[tuple[str, list[str]]], author: str) -> str:
