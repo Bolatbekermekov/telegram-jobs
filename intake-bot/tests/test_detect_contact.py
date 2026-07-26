@@ -233,6 +233,19 @@ def test_a_handle_that_merely_starts_like_the_author_still_wins():
     assert c == Contact("telegram", "@lnkrnchk_hr")
 
 
+def test_a_dot_glued_to_the_author_handle_does_not_become_a_telegram_target():
+    """The whole-token compare alone missed this: "@lnkrnchk.hr" tokenises as
+    "lnkrnchk.hr", which != the author, so the truncated "@lnkrnchk" was stored as
+    a Telegram target although it was never written as a handle in the message."""
+    url = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+    assert detect_contact(f"пиши @lnkrnchk.hr {url}").platform == "threads"
+
+
+def test_a_missing_space_after_a_sentence_dot_does_not_leak_the_author():
+    url = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+    assert detect_contact(f"вакансия от @lnkrnchk.Пиши в личку {url}").platform == "threads"
+
+
 def test_email_in_the_message_still_beats_a_threads_link():
     c = detect_contact(f"{_CLEAN} резюме на hr@acme.com")
     assert c.platform == "email"

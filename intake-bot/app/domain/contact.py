@@ -49,8 +49,8 @@ _THREADS_PARTS_RE = re.compile(
     rf"^(?:https?://)?{_THREADS_HOST}/@([\w.]+)/post/([\w-]+)", re.IGNORECASE)
 # A Threads handle may contain dots (the namespace is Instagram's), while _HANDLE_RE
 # captures `\w{4,}` and stops at the first one: the author "@ivan.hr" would reach the
-# exemption below as "@ivan". It therefore compares the whole dotted token found at
-# the match position, never the truncation.
+# exemption below as "@ivan". This yields the whole dotted token at a match position,
+# which the exemption compares alongside the capture itself.
 _HANDLE_TOKEN_RE = re.compile(r"[\w.]+")
 
 
@@ -117,13 +117,21 @@ def detect_contact(text: str) -> Contact | None:
     if m:
         return Contact("telegram", _clean(m.group(0)))
     for m in _HANDLE_RE.finditer(text):
-        # Whole-token equality, not the captured handle and not a prefix test: the
-        # capture truncates "@ivan.hr" to "@ivan" (storing which would DM a real
-        # stranger), while a prefix test would swallow "@lnkrnchk_hr", a different
-        # person from the author "@lnkrnchk". A trailing dot is sentence punctuation —
-        # a Threads handle cannot end in one.
+        # The author is recognised in either shape, and BOTH clauses are load-bearing.
+        # A prefix test in their place would be wrong: it swallows "@lnkrnchk_hr", who
+        # is a different person from the author "@lnkrnchk".
+        #   token   — _HANDLE_RE stops at a dot, so the author "@ivan.hr" arrives here
+        #             truncated to "@ivan"; the whole token is what identifies him, and
+        #             storing the truncation would DM an unrelated real user.
+        #   capture — a dot glued to the author's handle ("@lnkrnchk.hr", or a period
+        #             with no space after it: "@lnkrnchk.Пиши") makes the token differ
+        #             from the author while the capture still is exactly the author —
+        #             and that handle was never written in the message. Not redundant:
+        #             deleting this clause reintroduces the fabricated target.
+        # A trailing dot is sentence punctuation; a Threads handle cannot end in one.
         token = _HANDLE_TOKEN_RE.match(text, m.start(1)).group(0).rstrip(".")
-        if author and token.lower() == author[1:]:
+        if author and (token.lower() == author[1:]
+                       or ("@" + m.group(1)).lower() == author):
             continue
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
