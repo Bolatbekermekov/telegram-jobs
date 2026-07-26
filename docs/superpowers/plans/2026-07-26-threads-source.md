@@ -70,7 +70,13 @@
 - Test: `intake-bot/tests/test_detect_contact.py`
 
 **Interfaces:**
-- Produces: `canonical_threads_url(url: str) -> str`, `threads_post_id(url: str) -> str`, `threads_author(url: str) -> str` (возвращает `"@handle"` или `""`), и `Contact("threads", <канонический URL>)` из `detect_contact`.
+- Produces: `canonical_threads_url(url: str) -> str`, `threads_author(url: str) -> str` (возвращает `"@handle"` или `""`), и `Contact("threads", <канонический URL>)` из `detect_contact`.
+
+> **Правка от 2026-07-26 (по итогам ревью Task 1):** `threads_post_id` из плана
+> **удалён**. Его никто не вызывает — Task 6 разбирает автора самостоятельно
+> (`author_from_url`), а дедуп в явных не-целях. Держать неиспользуемую функцию
+> «на потом» противоречит YAGNI из этого же плана. Канонизация к id остаётся
+> описанной в спеке как свойство URL, но отдельной функции под неё нет.
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -79,9 +85,7 @@
 ```python
 # --- Threads --------------------------------------------------------------
 
-from app.domain.contact import (  # noqa: E402
-    canonical_threads_url, threads_author, threads_post_id,
-)
+from app.domain.contact import canonical_threads_url, threads_author  # noqa: E402
 
 _SHARED = ("https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
            "?xmt=AQG0bheD9uqmoSjOr9bFyIfWrZmjZK8OWTtZ0RjfvAVPAHs981VOMdhda3xuSsAZwsdDgJA"
@@ -132,7 +136,6 @@ def test_email_in_the_message_still_beats_a_threads_link():
 
 def test_threads_helpers():
     assert canonical_threads_url(_SHARED) == _CLEAN
-    assert threads_post_id(_SHARED) == "DbL4LxBl6v9"
     assert threads_author(_SHARED) == "@lnkrnchk"
     assert threads_author("https://hh.ru/vacancy/1") == ""
 ```
@@ -164,19 +167,6 @@ def canonical_threads_url(url: str) -> str:
     if not m:
         return url
     return f"https://www.threads.com/@{m.group(1)}/post/{m.group(2)}"
-
-
-def threads_post_id(url: str) -> str:
-    """The post id, which is the post's identity: a wrong @user with a right id
-    still resolves to the same post (verified live 2026-07-26).
-
-    Nothing calls this yet — the intake path has no dedup at all today (dedup lives
-    only in the search path's candidates_repo), and adding it is out of scope. It
-    exists because canonicalisation is the hard half of dedup and doing it here
-    costs nothing.
-    """
-    m = _THREADS_PARTS_RE.match(url)
-    return m.group(2) if m else ""
 
 
 def threads_author(url: str) -> str:
@@ -252,6 +242,18 @@ git commit -m "feat(intake): распознавать ссылку на пост
 - Produces: `extract_threads_post(html: str, max_chars: int = 5000) -> str` — сигнатура один-в-один как у существующей `extract_linkedin_post`.
 
 - [ ] **Step 1: Создать фикстуры из живых страниц**
+
+> **Правка от 2026-07-26 (по итогам ревью Task 2): скрипт ниже был неверен.** Он
+> скачивал настоящие ответы, проверял их assert'ами и затем **записывал вместо них
+> синтетические 76 байт**, из-за чего `missing.html` и `spa_shell.html` получались
+> байт-в-байт одинаковыми: два теста кормили один блоб и утверждали одно и то же под
+> разными именами. Это нарушало требование самого же спека — фикстуры должны быть
+> настоящей разметкой с живого сайта. Правильная версия: все три фикстуры —
+> **усечённые срезы реальных ответов** (первые 30 000 байт, чтобы попал `<head>` и
+> кусок скриптов), и скрипт захвата **коммитится** рядом с ними как
+> `intake-bot/tests/fixtures/threads/capture.py`, чтобы доказательство живого
+> поведения было воспроизводимым. Источник истины — этот закоммиченный скрипт, а не
+> текст ниже.
 
 Запустить ровно этот скрипт из корня проекта:
 
