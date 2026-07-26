@@ -1531,14 +1531,68 @@ git commit -m "feat(send): атомарная перезапись платфо�
 
 ### Task 8: Sender — юзкейс резолва и встраивание в цикл отправки
 
+> **Правка от 2026-07-26 (решение человека): модель как запасной детектор контакта.**
+> Живая проверка в Task 6 показала, что пробел в `«Telegram: @ skyluckwalker»` поставил
+> сам автор поста, а не рендеринг: `innerText === textContent`, якоря нет, в payload'е
+> Threads `linkified_in_app_url: null`. Правилами такое не берётся, а людей, пишущих
+> контакт как попало («телега: nick», «почта name собака domain»), не покрыть регексом
+> в принципе.
+>
+> Решение человека: склеивать, и пусть тип контакта определяет модель.
+>
+> **Это перекрывает записанный принцип проекта.** В `contact.py` стоит: «Platform
+> detection is rule-based on purpose: it decides where the message is later sent, so it
+> must not depend on an LLM guess». Принцип не отменяется, а сужается, и вот чем он
+> заменён:
+>
+> 1. **Правила решают первыми.** Модель вызывается **только** когда `detect_contact`
+>    вернул `None`. Все существующие лиды идут прежним детерминированным путём.
+> 2. **Только для Threads.** Вызов живёт в резолвере; интейк, hh, LinkedIn и wellfound
+>    не затрагиваются.
+> 3. **Ответ модели проверяется, а не принимается.** Платформа обязана быть из
+>    известного набора, target обязан пройти проверку формы для этой платформы, и —
+>    главное — **ядро target'а обязано встречаться в исходном тексте треда**. Это
+>    защита от выдумывания: модель физически не может вернуть ник, которого в треде
+>    не было.
+> 4. **Хендл автора отбрасывается** и здесь тоже (см. правку выше).
+> 5. **Видно человеку.** В заметку лида пишется, что контакт определён моделью, и это
+>    же печатается на подтверждении в `make run`, где есть клавиша правки.
+>
+> Модель — `OPENAI_MODEL` (не дешёвая): вызов один на лид, лидов единицы в неделю, а
+> цена ошибки — сообщение не тому человеку.
+
 **Files:**
+- Create: `sender/app/application/contact_llm.py` — **чистые** сборка промпта, разбор и
+  валидация ответа. Ни сети, ни клиента; по образцу `application/relevance.py`.
+- Create: `sender/app/infrastructure/openai_contact.py` — тонкая обёртка над OpenAI, по
+  образцу `infrastructure/openai_relevance.py`.
 - Create: `sender/app/application/resolve_threads_lead.py`
-- Modify: `sender/app/interface/cli.py:32` (`_KNOWN`) и `:138-141` (перед генерацией)
-- Test: `sender/tests/test_resolve_threads_lead.py`
+- Modify: `sender/app/interface/cli.py:32` (`_KNOWN`) и цикл отправки
+- Test: `sender/tests/test_contact_llm.py`, `sender/tests/test_resolve_threads_lead.py`
 
 **Interfaces:**
 - Consumes: `resolve_thread`/`render_thread` (Task 6), `detect_contact` (Task 4), `SheetsRepo.update_resolved` (Task 7).
-- Produces: `resolve_threads_lead(lead, repo, render, detect=detect_contact) -> Lead` — возвращает **новый** `Lead` с обновлёнными `platform`/`target`/`vacancy_context` (или исходный, если резолв не удался). `render` — вызываемое `(url) -> str`.
+- Produces:
+  - `build_contact_prompt(thread_text: str) -> tuple[str, str]` — (system, user).
+  - `parse_contact_response(raw: str, source_text: str, author: str) -> Contact | None` —
+    разбирает, валидирует и **отбрасывает всё сомнительное**. Возвращает `None` при
+    любой из проверок ниже.
+  - `resolve_threads_lead(lead, repo, render, detect=detect_contact, llm=None) -> Lead` —
+    `llm` вызываемое `(thread_text) -> str` (сырой ответ модели) или `None`, тогда
+    запасной детектор просто не используется и поведение прежнее.
+
+**Проверки в `parse_contact_response` (все обязательны, каждая со своим тестом):**
+
+| Проверка | Почему |
+|---|---|
+| Ответ разбирается как JSON, иначе `None` | модель может ответить прозой |
+| `platform` ∈ `{telegram, email, linkedin, hh, wellfound}` | платформа вне набора сломает `build_channel` |
+| `target` проходит проверку формы своей платформы (телеграм-ник `[A-Za-z0-9_]{5,32}`, email по регексу, остальные — URL нужного хоста) | модель вернёт «пиши в тг» вместо ника |
+| **Ядро `target` встречается в `source_text`** (без учёта регистра, `@` и пробелов) | **защита от выдумывания** — ник, которого не было в треде, отбрасывается |
+| `platform == telegram` и `target` равен автору поста → `None` | ник автора в Threads не является телеграм-ником |
+
+Промпт обязан требовать строгий JSON и явно запрещать додумывать: если контакта в
+тексте нет, модель возвращает `{"platform": null}`.
 
 - [ ] **Step 1: Написать падающие тесты**
 
