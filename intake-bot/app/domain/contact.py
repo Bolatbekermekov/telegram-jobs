@@ -110,16 +110,22 @@ def detect_contact(text: str) -> Contact | None:
     # The Threads link is located up front, but only to protect its author handle:
     # "вакансия от @lnkrnchk <threads link>" would otherwise match _HANDLE_RE and
     # be stored as a Telegram contact, and the send loop would DM a user that does
-    # not exist there. A DIFFERENT @handle still wins, as it always did.
+    # not exist there. A DIFFERENT @handle still wins, as it always did — and every
+    # handle is scanned, not just the first, because the message may credit the author
+    # before it gives the real contact ("вакансия от @lnkrnchk, пиши @ivan_hr") just
+    # as easily as after it. Only a message whose every handle is the author falls
+    # through to threads.
     tm = _THREADS_RE.search(text)
     threads_url = canonical_threads_url(_clean(tm.group(0))) if tm else ""
+    author = threads_author(threads_url).lower()
 
     m = _TME_RE.search(text)
     if m:
         return Contact("telegram", _clean(m.group(0)))
-    m = _HANDLE_RE.search(text)
-    if m and ("@" + m.group(1)).lower() != threads_author(threads_url).lower():
-        return Contact("telegram", "@" + m.group(1))
+    for m in _HANDLE_RE.finditer(text):
+        handle = "@" + m.group(1)
+        if handle.lower() != author:
+            return Contact("telegram", handle)
     m = _EMAIL_RE.search(text)
     if m:
         return Contact("email", m.group(0))

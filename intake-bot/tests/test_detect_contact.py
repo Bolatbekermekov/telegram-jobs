@@ -166,6 +166,28 @@ def test_the_threads_authors_own_handle_does_not_hijack_the_lead():
     assert c.platform == "threads"
 
 
+def test_a_real_handle_after_the_author_handle_still_wins():
+    """The author may be credited before the actual contact is given. Taking only
+    the first @handle threw the real recruiter away."""
+    c = detect_contact(f"вакансия от @lnkrnchk, пиши @ivan_hr {_CLEAN}")
+    assert c == Contact("telegram", "@ivan_hr")
+
+
+def test_a_real_handle_before_the_author_handle_still_wins():
+    c = detect_contact(f"пиши @ivan_hr, вакансия от @lnkrnchk {_CLEAN}")
+    assert c == Contact("telegram", "@ivan_hr")
+
+
+def test_only_the_author_handle_falls_through_to_threads():
+    c = detect_contact(f"вакансия от @lnkrnchk смотри {_CLEAN}")
+    assert c.platform == "threads"
+
+
+def test_the_author_handle_repeated_still_falls_through():
+    c = detect_contact(f"@lnkrnchk пишет: вакансия от @lnkrnchk {_CLEAN}")
+    assert c.platform == "threads"
+
+
 def test_email_in_the_message_still_beats_a_threads_link():
     c = detect_contact(f"{_CLEAN} резюме на hr@acme.com")
     assert c.platform == "email"
