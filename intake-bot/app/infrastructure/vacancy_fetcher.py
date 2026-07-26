@@ -85,7 +85,7 @@ def is_fetchable_vacancy_url(url: str) -> bool:
 
 
 def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
-         ua: str = _UA) -> str:
+         *, ua: str = _UA) -> str:
     """GET `url`, retrying once on throttling or a network blip.
 
     A 403/404 is the site's final answer (restricted or removed vacancy) — retry

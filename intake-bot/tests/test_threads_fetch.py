@@ -58,3 +58,24 @@ def test_get_sends_the_user_agent_it_is_given(monkeypatch):
     monkeypatch.setattr(httpx, "get", fake_httpx_get)
     assert vf._get("https://x/", 1.0, ua="probe/1.0") == "ok"
     assert captured["headers"]["User-Agent"] == "probe/1.0"
+
+
+def test_get_defaults_to_the_browser_user_agent(monkeypatch):
+    """hh and LinkedIn need the browser UA and rely on this default. Pinning the
+    VALUE matters: no other test would notice if it became _CLIENT_UA, and a
+    Threads caller that forgot ua= would then look fine while returning nothing."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+    def fake_httpx_get(url, headers=None, timeout=None, follow_redirects=None):
+        captured["headers"] = headers
+        return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", fake_httpx_get)
+    vf._get("https://x/", 1.0)
+    assert captured["headers"]["User-Agent"] == vf._UA
+    assert "Mozilla" in captured["headers"]["User-Agent"]
