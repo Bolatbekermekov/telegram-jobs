@@ -30,11 +30,16 @@ _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECA
 # "@" inside an email address (e.g. john@gmail.com). That anchor is the only thing
 # keeping a well-formed email out of this rule, which is second of six and so
 # pre-empts email/linkedin/hh whenever it fires.
-# Allowing a space after the at-sign (`@\s?`, for the "@ skyluckwalker" that Threads
-# renders) was tried here and reverted: it also matches the "at" of "hr @ acme.com"
-# and "Role @ Company", fabricating an "@acme"/"@Company" target while the real
-# contact sat later in the same text. Mentions are glued when the thread is
-# assembled instead — see the Threads resolver.
+# Allowing a space after the at-sign (`@\s?`, for the "@ skyluckwalker" seen on a
+# live Threads post) was tried here and reverted: it also matches the "at" of
+# "hr @ acme.com" and "Role @ Company", fabricating an "@acme"/"@Company" target
+# while the real contact sat later in the same text.
+# Threads' own LINKIFIED mentions do reach this rule glued: the DOM reader unwraps
+# the mention anchor before reading the text (infrastructure/threads_thread.py),
+# which is what stops innerText tearing "@nick" onto a line of its own. An at-sign
+# the AUTHOR typed with a space after it is a different thing — measured 2026-07-26,
+# that space is in the post as Threads stores it, so nothing upstream can remove it
+# and such a handle stays undetected here. Open decision, not papered over.
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
