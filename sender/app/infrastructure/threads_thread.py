@@ -43,6 +43,14 @@ _GOTO_TIMEOUT_MS = 30000
 #    post and the inner one is what they quoted, so any block CONTAINED by another
 #    block is dropped. Measured on @mosseri's feed, keeping the inner card instead
 #    returned «@zuck» with an empty body and lost mosseri's own text entirely;
+#  * keeping the outer card is only half of it — the span query is scoped to the card
+#    it belongs to (`s.closest('[data-pressable-container]') === el`), because
+#    querySelectorAll on the outer card also reaches into the nested one. Unscoped,
+#    the quoted post's body is collected as the AUTHOR's text, and the handle filter
+#    in author_thread_text cannot help: the block really is the author's. A stranger's
+#    «пишите мне @stranger_hr» would then be read as the vacancy's own contact and the
+#    outreach would go to them. It also defeats the source-text check Task 8 plans
+#    against invented handles, since the stranger's handle IS in the source text;
 #  * the body sits in `span[dir="auto"]`, split one span per paragraph. Taking only
 #    the longest span drops the opening paragraphs, so every leaf span is collected
 #    in DOM order; spans inside the author link are skipped (they are the handle).
@@ -110,7 +118,13 @@ _READ_BLOCKS_JS = """
     top.replaceWith(document.createTextNode(glued));
   }
   for (const b of document.querySelectorAll('[role="button"], button')) {
-    if (b.closest('span[dir="auto"]')) b.remove();   // translate link, "… ещё"
+    // parentElement first: closest() matches the element itself, so a body span that
+    // is ITSELF pressable would otherwise be deleted outright. Measured: this bounds
+    // the damage — the node survives — but it does NOT rescue the text, because the
+    // span filter below self-matches the same way and skips it anyway. Loosening that
+    // one instead would let «Показать перевод» back in as body text, so it stays as
+    // it is: for a span we cannot tell from a control, skipping beats destroying.
+    if (b.parentElement && b.parentElement.closest('span[dir="auto"]')) b.remove();
   }
 
   const blocks = [], seen = new Set();
@@ -126,7 +140,8 @@ _READ_BLOCKS_JS = """
     const spans = [...el.querySelectorAll('span[dir="auto"]')].filter(s =>
       !s.querySelector('span[dir="auto"]')
       && !s.closest('a[href^="/@"]')
-      && !s.closest('[role="button"], button'));
+      && !s.closest('[role="button"], button')
+      && s.closest('[data-pressable-container]') === el);  // not the quoted card's
     const parts = [];
     for (const s of spans) {
       const t = (s.innerText || '').trim();
@@ -171,10 +186,11 @@ def resolve_thread(page, url: str) -> str:
     try:
         page.goto(url, timeout=_GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
         page.wait_for_timeout(_SETTLE_MS)
-        blocks = read_thread_blocks(page)
+        # Assembly stays inside the try as well, so the never-raise contract does not
+        # depend on how another module behaves on a shape neither of us predicted.
+        return author_thread_text(read_thread_blocks(page), author)
     except Exception:  # noqa: BLE001 — an unreadable thread is not a lost lead
         return ""
-    return author_thread_text(blocks, author)
 
 
 def render_thread(url: str, headless: bool = True) -> str:

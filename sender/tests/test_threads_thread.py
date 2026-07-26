@@ -239,8 +239,11 @@ def test_the_block_finder_does_not_emit_the_thread_wrapper(dom_blocks):
         assert "Ветка" not in parts
 
 
-# the quoted card measured 187 chars live, well past any length threshold
-_QUOTED = "Excited about this launch, the team moved remarkably fast on it."
+# The quoted card measured 187 chars live, well past any length threshold. It carries
+# a handle on purpose: a quoted post is written by SOMEONE ELSE, so any contact in it
+# belongs to a stranger.
+_STRANGER = "@stranger_hr"
+_QUOTED = f"Мы тоже нанимаем, пишите мне {_STRANGER} прямо сейчас."
 
 _QUOTE_HTML = f"""<div id="thread"><div><div>
   <div><div><div data-pressable-container="true">
@@ -263,6 +266,50 @@ def test_a_quoted_card_does_not_replace_the_post_that_quotes_it(dom_blocks):
     blocks = dom_blocks(_QUOTE_HTML)
     assert [h for h, _ in blocks] == ["@lnkrnchk"]
     assert _LONG in post_body(blocks[0][1])
+
+
+def test_a_quoted_cards_text_is_not_collected_as_the_authors_own(dom_blocks):
+    """Attributing the block to the author is only half of it: the span query runs
+    over the whole outer card, so without scoping it also sweeps up the nested card's
+    body. The handle-based defence in author_thread_text cannot catch that — the block
+    IS the author's. A stranger's «пишите мне @stranger_hr» would then read as the
+    vacancy's own contact and the outreach would go to them.
+
+    It also defeats the guard Task 8 plans, which checks a model-proposed contact
+    against the source text: here the stranger's handle really is in the source text.
+    """
+    body = post_body(dom_blocks(_QUOTE_HTML)[0][1])
+    assert _QUOTED not in body
+    assert _STRANGER not in body
+    assert detect_contact(body) is None
+
+
+# The markup a real linkified mention arrives in, measured live 2026-07-26: Threads
+# wraps the anchor in block-level <div>s, so plain innerText tears the handle onto a
+# line of its own and orphans the punctuation after it. The reader unwraps the anchor
+# before reading; this is the only thing pinning that.
+_MENTION = ('<span>Пишите </span>'
+            '<div><span><div><a href="/@acme_hr" role="link">'
+            '<span translate="no">@acme_hr</span></a></div></span></div>'
+            '<span>, это наш HR.</span>')
+
+_MENTION_HTML = f"""<div id="thread"><div><div>
+  {_card("@lnkrnchk", "DbMention01", _MENTION)}
+</div></div></div>"""
+
+
+def test_a_linkified_mention_comes_back_glued_into_its_sentence(dom_blocks):
+    """Unwrapping the anchor is what makes the contact readable at all: torn apart,
+    the handle is still in the text but no longer sits in the sentence that says what
+    it is for. The mention is also not mistaken for the post's author link.
+    """
+    blocks = dom_blocks(_MENTION_HTML)
+    assert [h for h, _ in blocks] == ["@lnkrnchk"]
+    body = post_body(blocks[0][1])
+    assert body == "Пишите @acme_hr, это наш HR."
+    contact = detect_contact(body)
+    assert contact is not None
+    assert (contact.platform, contact.target) == ("telegram", "@acme_hr")
 
 
 # --- selector drift canary -----------------------------------------------------
