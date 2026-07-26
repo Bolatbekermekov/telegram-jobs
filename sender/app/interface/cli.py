@@ -29,7 +29,9 @@ from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.sheets_repo import SheetsRepo
 
-_KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound"}
+# Platforms the send loop can build a channel for. A platform missing here is a
+# per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
+_KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads"}
 
 
 def _prompt(msg: str) -> str:
@@ -116,6 +118,31 @@ def run() -> None:
                 repo.mark_status(lead, status, note=note)
                 print(f"⏭  Лид #{lead.lead_id} [{platform}]: {note} — пропуск.")
                 continue
+
+            if lead.platform == "threads":
+                # og:description gave the intake the root post only; the rest of the
+                # vacancy and the contact live in the author's self-replies, which
+                # need a browser. Anonymous render: reading a public post must not
+                # touch the saved session. This runs BEFORE the channel is opened —
+                # resolving changes lead.platform, and opening first would raise a
+                # Threads browser for a lead that should go out over Telegram.
+                from app.application.resolve_threads_lead import resolve_threads_lead
+                from app.infrastructure.openai_contact import OpenAIContactDetector
+                from app.infrastructure.threads_thread import render_thread
+                print("Читаю тред Threads...")
+                lead = resolve_threads_lead(
+                    lead, repo,
+                    render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
+                    # The writing model, not the cheap one: once per lead, and a
+                    # wrong answer is a message to the wrong person.
+                    llm=OpenAIContactDetector(
+                        config.OPENAI_API_KEY, config.OPENAI_MODEL,
+                        max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS))
+                if lead.platform != platform:
+                    print(f"   контакт найден: {lead.platform} → {lead.target}")
+                    platform = lead.platform
+                else:
+                    print(f"   контакта в треде нет, буду писать автору: {lead.target}")
 
             try:
                 channel = switcher.for_platform(platform)
