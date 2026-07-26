@@ -22,17 +22,26 @@ from dataclasses import dataclass
 @dataclass
 class Contact:
     platform: str   # telegram | email | linkedin | hh | wellfound
-    target: str
+    target: str     # @nick / t.me URL / email / profile or vacancy URL
 
 
 _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECASE)
-# `@\s?` because Threads renders a mention with a space after the at-sign, and the
-# DOM text comes through as "@ skyluckwalker" — dropping that contact would send the
-# lead down the DM fallback for no reason.
-_HANDLE_RE = re.compile(r"(?:^|\s)@\s?(\w{4,})\b")
+# A Telegram @handle anchored to start-or-whitespace, so it never matches the
+# "@" inside an email address (e.g. john@gmail.com). That anchor is the only thing
+# keeping a well-formed email out of this rule, which is second of six and so
+# pre-empts email/linkedin/hh whenever it fires.
+# Allowing a space after the at-sign (`@\s?`, for the "@ skyluckwalker" that Threads
+# renders) was tried here and reverted: it also matches the "at" of "hr @ acme.com"
+# and "Role @ Company", fabricating an "@acme"/"@Company" target while the real
+# contact sat later in the same text. Mentions are glued when the thread is
+# assembled instead — see the Threads resolver.
+_HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
 _HH_HOST = r"(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)"
+# A vacancy link is matched first and separately: the iOS share sheet sends
+#   "Vacancy: https://hh.kz/vacancy/135297431  … Sent via hh mobile app https://hh.ru/mobile"
+# so a rule that takes any hh link would store the app-download footer as the target.
 _HH_VACANCY_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/vacancy/\d+\S*", re.IGNORECASE)
 _HH_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/\S+", re.IGNORECASE)
 _WELLFOUND_RE = re.compile(

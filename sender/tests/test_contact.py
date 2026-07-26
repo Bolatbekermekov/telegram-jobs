@@ -7,13 +7,6 @@ def test_telegram_handle():
     assert detect_contact("Пиши @ivan_hr") == Contact("telegram", "@ivan_hr")
 
 
-def test_telegram_handle_with_a_stray_space_after_the_at():
-    """Threads renders a mention as '@ skyluckwalker' — one glued token in the DOM
-    text. The real contact must survive that."""
-    c = detect_contact("Для отклика присылайте портфолио в Telegram: @ skyluckwalker")
-    assert c == Contact("telegram", "@skyluckwalker")
-
-
 def test_tme_link():
     c = detect_contact("контакт https://t.me/ivanhr")
     assert c.platform == "telegram" and "t.me/ivanhr" in c.target
@@ -56,3 +49,76 @@ def test_none_when_no_contact():
 
 def test_strips_trailing_punctuation():
     assert detect_contact("см. (linkedin.com/in/abc).").target.endswith("abc")
+
+
+def test_a_bare_threads_post_url_yields_no_contact():
+    """The one sanctioned difference from the intake copy, pinned.
+
+    There is deliberately no `threads` rule here: by the time this runs the lead is
+    already threads, so a rule would re-point it at itself. Nothing else locks that,
+    so without this assertion a future refresh copied from intake could reintroduce a
+    `threads` rule and leave the suite green.
+    """
+    assert detect_contact("https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9") is None
+
+
+# --- Golden parity vectors ---------------------------------------------------
+# This table is checked into BOTH suites — sender/tests/test_contact.py and
+# intake-bot/tests/test_detect_contact.py — with identical data, deliberately
+# duplicated. The two apps are separate deploys that never import each other, so the
+# only thing that catches a drift in one of the two `contact.py` copies is each suite
+# pinning the answers itself. Change one copy of this table, change the other.
+#
+# It exists because the sender copy diverged behaviourally from the intake original on
+# the day it was created: a handle rule widened to `@\s?` also matched the "at" of
+# "hr @ acme.com" and "Role @ Company" and returned a fabricated "@acme" target,
+# pre-empting the email, linkedin and hh rules that held the real contact. A
+# hand-written parity check missed it because its inputs contained no "X @ domain.tld"
+# and no prose "@". The last four rows are that shape.
+#
+# Threads URLs are deliberately kept out: a Threads link legitimately changes the
+# answer between the apps (intake has a `threads` rule and an author exemption, the
+# sender has neither by design), so no single expectation could hold for both. Threads
+# behaviour is pinned per-app instead, outside this table.
+_GOLDEN = [
+    # (text, expected platform, expected target) — a None platform means no contact.
+    ("Контакт: https://t.me/ivanhr спасибо", "telegram", "https://t.me/ivanhr"),
+    ("Ищем backend. Пиши @ivan_hr по вакансии", "telegram", "@ivan_hr"),
+    ("резюме на hr@acme.com", "email", "hr@acme.com"),
+    # The (?:^|\s) anchor: the "@" inside a well-formed email is not a handle.
+    ("john@gmail.com", "email", "john@gmail.com"),
+    # Ordering: the handle rule is second of six, so a later handle beats an earlier email.
+    ("пиши boss@acme.com или @ivan_hr", "telegram", "@ivan_hr"),
+    ("профиль https://linkedin.com/in/ivan", "linkedin", "https://linkedin.com/in/ivan"),
+    ("см. (linkedin.com/in/abc).", "linkedin", "linkedin.com/in/abc"),
+    # Regional domain folded onto hh.ru (the saved session is hh.ru-only), tracking dropped.
+    ("откликнуться https://astana.hh.kz/vacancy/135297431?from=share_ios",
+     "hh", "https://hh.ru/vacancy/135297431"),
+    # The vacancy wins over the app-download footer in the same share.
+    ("Вакансия: https://hh.kz/vacancy/135297431 Отправлено из мобильного приложения hh"
+     " https://hh.ru/mobile", "hh", "https://hh.ru/vacancy/135297431"),
+    ("https://wellfound.com/jobs/1-dev", "wellfound", "https://wellfound.com/jobs/1-dev"),
+    ("просто описание вакансии", None, None),
+    # "@" as the word "at", and space-obfuscated emails. A widened handle rule turns
+    # every one of these into a fabricated Telegram target, and in three of the four
+    # the real contact is sitting later in the same text.
+    ("Резюме отправляйте: hr @ acme.com", None, None),
+    ("пишите hr @ acme.com или в телеграм @ivan_hr", "telegram", "@ivan_hr"),
+    ("Ищем разработчика @ Astana, откликайтесь на hh.ru/vacancy/12345",
+     "hh", "https://hh.ru/vacancy/12345"),
+    ("CV -> hr @ acme.com или https://linkedin.com/in/ivan",
+     "linkedin", "https://linkedin.com/in/ivan"),
+]
+
+
+def test_golden_parity_vectors():
+    """Every rule, and the ordering between them, pinned as data. Reports every
+    drifted vector at once rather than stopping at the first."""
+    drift = []
+    for text, platform, target in _GOLDEN:
+        expected = None if platform is None else (platform, target)
+        c = detect_contact(text)
+        actual = None if c is None else (c.platform, c.target)
+        if actual != expected:
+            drift.append(f"  {text!r}\n    expected {expected}\n    got      {actual}")
+    assert not drift, "detect_contact drifted from the golden vectors:\n" + "\n".join(drift)
