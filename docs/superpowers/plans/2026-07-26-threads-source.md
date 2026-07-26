@@ -1594,6 +1594,27 @@ git commit -m "feat(send): атомарная перезапись платфо�
 Промпт обязан требовать строгий JSON и явно запрещать додумывать: если контакта в
 тексте нет, модель возвращает `{"platform": null}`.
 
+> **Правка от 2026-07-26 (по итогам ревью Task 7): три опасности, которые эта задача
+> обязана закрыть.**
+>
+> 1. **`update_resolved` умеет падать**, и не только транзиентно: `IncorrectCellLabel`
+>    при `row < 1` кидается до ретраев; `APIError` сразу на 403/400 — включая лимит в
+>    50 000 символов на ячейку, достижимый, потому что отрендеренный тред уходит в
+>    «Вакансию» без обрезки; `APIError` после трёх попыток и ~3 секунд **настоящего**
+>    сна на 429/5xx, прямо внутри интерактивного `make run`; и любая транспортная
+>    ошибка `requests` — **без ретрая**, потому что `_with_retry` ловит только
+>    `APIError`. Глотать это молча нельзя: запись атомарна сама по себе, но не в паре
+>    «записали, потом отправили». Поведение зафиксировано выше — отправляем по
+>    найденному контакту и **говорим человеку**, что строка осталась старой.
+> 2. **Пустой target опаснее, чем кажется.** `update_resolved` очистит «Источник»,
+>    выставив «Платформу», а `skip_reason` смотрит **только** на платформу — значит
+>    следующий прогон поднимет Telegram-канал и попробует отправить в `""`. Поэтому
+>    пустой target = не трогаем строку вообще.
+> 3. **Ветка DM затирает единственный указатель на тред.** После неё «Источник» —
+>    это уже хендл автора, а не URL поста, и перечитать тред из `lead.target` нельзя.
+>    Спасает только то, что URL остаётся в заметке. Значит заметка здесь
+>    **несущая, а не декоративная** — на неё нужен тест.
+
 - [ ] **Step 1: Написать падающие тесты**
 
 Создать `sender/tests/test_resolve_threads_lead.py`:
@@ -1808,10 +1829,24 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact):
         target = author or lead.target
         note = f"контакта в треде нет, DM автору: {lead.target}"
 
+    # The caller owns a non-empty target: update_resolved blanks Источник while
+    # setting Платформа, and skip_reason gates only on the platform — so a blank
+    # target means the next run opens a Telegram channel and sends to "".
+    if not target:
+        return lead
+
     try:
         repo.update_resolved(lead, platform, target, vacancy, note=note)
-    except Exception:  # noqa: BLE001 — the sheet is a record, the send is the point
-        pass
+    except Exception as exc:  # noqa: BLE001 — the sheet is a record, the send is the point
+        # Not silent. The write is atomic within itself, but not across the pair
+        # (write, then send): if it failed we still send via the resolved route,
+        # so the message reaches the right person while the row keeps the old
+        # platform/target and is later stamped `sent`. That is a wrong record,
+        # not a wrong recipient, and it is recoverable by re-resolving — but the
+        # human has to know it happened.
+        print(f"⚠️  #{lead.lead_id}: строку в таблице обновить не удалось "
+              f"({type(exc).__name__}). Отправляю по найденному контакту, "
+              f"но в таблице останется старая платформа.")
 
     return replace(lead, platform=platform, target=target, vacancy_context=vacancy)
 ```
