@@ -4,8 +4,9 @@ Leads are processed in sheet order (by id, top to bottom). At most one channel
 is open at a time — browser channels and the Telegram userbot can't share a
 process — so ChannelSwitcher stops the current channel and starts the next
 whenever the platform changes between consecutive leads. Default mode asks
-send/edit/skip per lead; AUTO_SEND=true sends automatically. Per-platform daily
-limits and anti-ban delays apply.
+send/edit/skip per lead; AUTO_SEND=true sends automatically — except leads held
+for a human by send_plan.hold_reason, which get `manual` instead of a send.
+Per-platform daily limits and anti-ban delays apply.
 """
 import random
 import time
@@ -130,6 +131,7 @@ def run() -> None:
                 from app.infrastructure.openai_contact import OpenAIContactDetector
                 from app.infrastructure.threads_thread import render_thread
                 print("Читаю тред Threads...")
+                thread_url = lead.target      # resolving replaces it with the contact
                 lead, contact_from_model = resolve_threads_lead(
                     lead, repo,
                     render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
@@ -144,13 +146,16 @@ def run() -> None:
                 else:
                     print(f"   контакта в треде нет, буду писать автору: {lead.target}")
 
-                hold = hold_reason(contact_from_model, config.AUTO_SEND)
+                hold = hold_reason(config.AUTO_SEND,
+                                   contact_from_model=contact_from_model,
+                                   contact=f"{lead.platform} → {lead.target}",
+                                   source_url=thread_url)
                 if hold is not None:
-                    # No status written: the lead stays `new` for a manual send,
-                    # exactly like the [плейсхолдер] carve-out. Checked before the
-                    # channel opens and before the message is generated — there is
-                    # nothing to generate for a lead we are not going to send.
-                    print(f"⏭  Лид #{lead.lead_id}: {hold}.")
+                    # Checked before the channel opens and before the message is
+                    # generated — nothing to generate for a lead we won't send.
+                    status, note = hold
+                    repo.mark_status(lead, status, note=note)
+                    print(f"✋ Лид #{lead.lead_id}: {note}")
                     continue
 
             try:
@@ -194,6 +199,17 @@ def run() -> None:
             subject = subject_for(lead.vacancy_context or lead.raw_text)
             attachment = config.CV_PATH if config.ATTACH_CV else None
             content = format_for_channel(channel, body, subject, attachment)
+
+            hold = hold_reason(config.AUTO_SEND, body=content.body,
+                               contact=f"{platform} → {lead.target}")
+            if hold is not None:
+                # Same rule as the model-contact hold above, and what the README
+                # has always promised for auto mode: a template must not reach a
+                # live recruiter just because nobody was there to read it.
+                status, note = hold
+                repo.mark_status(lead, status, note=note)
+                print(f"✋ Лид #{lead.lead_id}: {note}")
+                continue
 
             if not config.AUTO_SEND:
                 _show(content.body)

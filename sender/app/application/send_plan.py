@@ -6,7 +6,7 @@ channel switch. Only an unknown platform qualifies: channel-start failures and
 mid-run rate limits are handled by the loop itself, which leaves those leads
 `new` rather than writing a terminal status.
 """
-from app.domain.lead import STATUS_SKIPPED
+from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 
 
 def skip_reason(lead, known) -> tuple[str, str] | None:
@@ -23,22 +23,49 @@ def skip_reason(lead, known) -> tuple[str, str] | None:
     return None
 
 
-def hold_reason(contact_from_model: bool, auto_send: bool) -> str | None:
-    """Why an unattended run must not send this lead, or None to send it.
+def hold_reason(auto_send: bool, contact_from_model: bool = False, body: str = "",
+                contact: str = "", source_url: str = "") -> tuple[str, str] | None:
+    """Why an unattended run must not send this lead, as (status, note), or None.
 
-    Auto mode does not send what no human has read. Same carve-out as the
-    `[плейсхолдер]` one: no status is written, the lead stays `new`, and the
-    human sends it manually — this is not a skip.
+    Auto mode has no confirmation step, so it must not send what no human has
+    read. Two things qualify, and they are one rule:
 
-    A model-proposed contact qualifies. The vetting in
-    `contact_llm.parse_contact_response` proves the target was WRITTEN in the
-    thread; it cannot prove the target is the address to apply to. "hr @
-    acmecorp.com" read back as the handle @acmecorp passes every check, and so
-    does a handle the author only mentioned in passing. The confirmation step is
-    what catches that, so taking the confirmation away has to take the send away
-    with it.
+      * a contact the MODEL proposed instead of the rules. The vetting in
+        `contact_llm.parse_contact_response` proves the target was WRITTEN in the
+        thread; it cannot prove the target is the address to apply to. "hr @
+        acmecorp.com" read back as the handle @acmecorp passes every check, and so
+        does a handle the author only mentioned in passing.
+      * a body still carrying a `[плейсхолдер]`: the letter was asked for filled
+        in and came back a template, and a recruiter must not receive one.
+
+    Both are what a human catches on the confirmation prompt, so taking the
+    confirmation away has to take the send away with it.
+
+    The status is `manual`, not `new`. `new` does not survive here: by this point
+    the row has already been rewritten to an ordinary platform, so the next run
+    would find a normal lead, resolve nothing, raise no flag and auto-send it
+    unread — the hold would last exactly one run. `manual` is outside
+    `fetch_new_leads`, it says the truth ("needs a person"), and it is not the
+    terminal `skipped` the human forbade. The cost: getting such a lead back into
+    the queue means setting Статус to `new` in the sheet by hand, because nothing
+    in the sender writes that value to an existing row.
+
+    The note carries what acting by hand needs — why it stopped, what it would
+    have been sent to, and where that came from — because the row itself only
+    shows where the lead now points.
     """
-    if auto_send and contact_from_model:
-        return ("контакт предложен моделью — в авто-режиме не отправляю, "
-                "оставляю 'new' для ручной отправки")
-    return None
+    if not auto_send:
+        return None
+    if contact_from_model:
+        reason = "контакт предложен моделью, а не правилами — нужна проверка человеком"
+    elif "[" in body:
+        reason = "в тексте остался [плейсхолдер] — нужна правка человеком"
+    else:
+        return None
+
+    parts = [reason]
+    if contact:
+        parts.append(f"контакт: {contact}")
+    if source_url:
+        parts.append(f"тред: {source_url}")
+    return STATUS_MANUAL, "; ".join(parts)
