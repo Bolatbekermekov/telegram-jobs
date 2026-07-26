@@ -34,7 +34,9 @@ in the script payload to defend against.
 
 The asserts below are the live-behaviour proof, not ceremony. If one fires, Threads
 changed how it serves these pages: stop and report it. Do not weaken an assert, do not
-hand-edit a fixture, and do not fall back to synthetic markup.
+hand-edit a fixture, and do not fall back to synthetic markup. The one exception is the
+byte-distinctness assert at the end, which can fire for a reason that has nothing to do
+with og-serving — read the comment on it before concluding anything.
 """
 import codecs
 import html as _html
@@ -70,43 +72,70 @@ def slice_utf8(raw):
     return out
 
 
-# A non-browser UA gets the server-rendered page that carries og:*.
-raw = get(POST, UA_BOT).decode("utf-8", "replace")
-metas = re.findall(
-    r'<meta[^>]+(?:property|name)="(?:og:[a-z]+|description|twitter:description)"[^>]+>', raw)
-assert metas, "og-тегов нет: Threads отдал скелет, проверь UA"
-post = slice_utf8(get(POST, UA_BOT))
-(OUT / "post.html").write_bytes(post)
+def main():
+    # A non-browser UA gets the server-rendered page that carries og:*. Fetch it ONCE
+    # and slice the very bytes that were asserted on: asserting one response and
+    # shipping the bytes of a second means a page that has stopped serving og looks
+    # like a slice that is merely too short, sending the maintainer after the wrong
+    # cause.
+    post_raw = get(POST, UA_BOT)
+    metas = re.findall(
+        r'<meta[^>]+(?:property|name)="(?:og:[a-z]+|description|twitter:description)"[^>]+>',
+        post_raw.decode("utf-8", "replace"))
+    assert metas, "og-тегов нет: Threads отдал скелет, проверь UA"
+    post = slice_utf8(post_raw)
+    (OUT / "post.html").write_bytes(post)
 
-# A deleted / non-existent post id: the page comes back 200 with NO og tags at all.
-missing_raw = get(MISSING, UA_BOT)
-assert not re.search(r'property="og:description"', missing_raw.decode("utf-8", "replace")), \
-    "у отсутствующего поста появился og"
-(OUT / "missing.html").write_bytes(slice_utf8(missing_raw))
+    # A deleted / non-existent post id: the page comes back 200 with NO og tags at all.
+    missing_raw = get(MISSING, UA_BOT)
+    assert not re.search(r'property="og:description"', missing_raw.decode("utf-8", "replace")), \
+        "у отсутствующего поста появился og"
+    (OUT / "missing.html").write_bytes(slice_utf8(missing_raw))
 
-# A browser UA gets a JS shell — the trap this whole feature has to avoid.
-shell_raw = get(POST, UA_BROWSER)
-assert not re.search(r'property="og:description"', shell_raw.decode("utf-8", "replace")), \
-    "браузерный UA неожиданно отдал og"
-(OUT / "spa_shell.html").write_bytes(slice_utf8(shell_raw))
+    # A browser UA gets a JS shell — the trap this whole feature has to avoid.
+    shell_raw = get(POST, UA_BROWSER)
+    assert not re.search(r'property="og:description"', shell_raw.decode("utf-8", "replace")), \
+        "браузерный UA неожиданно отдал og"
+    (OUT / "spa_shell.html").write_bytes(slice_utf8(shell_raw))
 
-# Truncating must not have changed what the fixtures prove: post.html still has to
-# carry a whole og:description with the full 480-char root post, and the other two
-# still have to carry none. Without this, a slice that clipped the tag would quietly
-# turn every Threads test into a test of the empty string.
-m = _OG_DESC_RE.search(post.decode("utf-8"))
-assert m, "срез post.html потерял og:description — подними _SLICE_BYTES"
-assert len(_html.unescape(m.group(1)).strip()) == 480, "текст поста в срезе изменился"
-for name in ("missing.html", "spa_shell.html"):
-    assert not _OG_DESC_RE.search((OUT / name).read_text(encoding="utf-8")), \
-        f"в {name} появился og:description"
+    # Truncating must not have changed what the fixtures prove: post.html still has to
+    # carry a whole og:description with the full 480-char root post, and the other two
+    # still have to carry none. Without this, a slice that clipped the tag would quietly
+    # turn every Threads test into a test of the empty string.
+    m = _OG_DESC_RE.search(post.decode("utf-8"))
+    assert m, "срез post.html потерял og:description — подними _SLICE_BYTES"
+    assert len(_html.unescape(m.group(1)).strip()) == 480, "текст поста в срезе изменился"
+    for name in ("missing.html", "spa_shell.html"):
+        assert not _OG_DESC_RE.search((OUT / name).read_text(encoding="utf-8")), \
+            f"в {name} появился og:description"
 
-# The three fixtures must be genuinely different documents. They were once distilled
-# down to the same 76-byte synthetic shell, which made two of the tests duplicates
-# asserting nothing about the pages they claimed to cover.
-blobs = {name: (OUT / name).read_bytes()
-         for name in ("post.html", "missing.html", "spa_shell.html")}
-assert len(set(blobs.values())) == 3, "фикстуры совпадают побайтово"
+    # The three fixtures must be genuinely different documents. They were once distilled
+    # down to the same 76-byte synthetic shell, which made two of the tests duplicates
+    # asserting nothing about the pages they claimed to cover.
+    #
+    # Be aware how THIN this margin is, because it is not what you would guess:
+    # missing.html and spa_shell.html differ in exactly 8 bytes — the per-response CSP
+    # `nonce="…"` at around char 417. Within the first 30 000 bytes the two responses are
+    # otherwise the same document; they only diverge past ~88 KB, in the script payload
+    # this slice deliberately excludes. So if this assert ever fires, look at the nonce
+    # first: Meta dropping the per-response nonce would trip it without anything about
+    # og-serving having changed. It is NOT evidence of the kind of change the other
+    # asserts watch for.
+    #
+    # That the two are genuinely different live behaviours (a deleted post vs. a browser
+    # UA being handed a JS shell) is proved by the two full-response asserts above, not
+    # by these slices — the slices only prove both extract to "".
+    blobs = {name: (OUT / name).read_bytes()
+             for name in ("post.html", "missing.html", "spa_shell.html")}
+    assert len(set(blobs.values())) == 3, "фикстуры совпадают побайтово"
 
-for f in sorted(OUT.glob("*.html")):
-    print(f, f.stat().st_size, "bytes")
+    for f in sorted(OUT.glob("*.html")):
+        print(f, f.stat().st_size, "bytes")
+
+
+# Guarded: this module lives under intake-bot/tests/, and the body above does three live
+# HTTP fetches. pytest's default `python_files` does not collect `capture.py`, but
+# --doctest-modules, a widened `python_files`, an IDE run-on-open or a type-checker
+# import would otherwise all hit threads.com at import time and fail on an assert.
+if __name__ == "__main__":
+    main()
