@@ -1,8 +1,12 @@
 """Deterministic detection of (platform, target) from free vacancy text.
 
-Priority order: telegram > email > linkedin > hh > wellfound. The first rule
-that matches wins. Platform detection is rule-based on purpose: it decides where
-the message is later sent, so it must not depend on an LLM guess.
+Priority order: telegram > email > linkedin > hh > wellfound > threads. The first
+rule that matches wins. Platform detection is rule-based on purpose: it decides
+where the message is later sent, so it must not depend on an LLM guess.
+
+Threads is deliberately last: a recruiter who drops a thread link next to their own
+@nick or e-mail is reachable there directly, and a direct channel beats a public
+post. Only the post author's own handle is exempt (see detect_contact).
 """
 import re
 from dataclasses import dataclass
@@ -10,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Contact:
-    platform: str   # telegram | email | linkedin | hh | wellfound
+    platform: str   # telegram | email | linkedin | hh | wellfound | threads
     target: str     # @nick / t.me URL / email / profile or vacancy URL
 
 
@@ -31,6 +35,46 @@ _HH_VACANCY_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/vacancy/\d+\S*", re.IGNO
 _HH_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/\S+", re.IGNORECASE)
 _WELLFOUND_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:wellfound\.com|angel\.co)/\S+", re.IGNORECASE)
+
+# Threads (Meta). Posts live at /@user/post/<id>. threads.net is an alias that
+# 301s to threads.com (verified 2026-07-26: identical bytes), so it is folded onto
+# .com — the sender opens exactly what the sheet holds. The iOS/Android share sheet
+# appends a tracking blob (?xmt=…&slof=1) that is noise for us.
+_THREADS_HOST = r"(?:www\.)?threads\.(?:com|net)"
+_THREADS_RE = re.compile(
+    rf"(?:https?://)?{_THREADS_HOST}/@[\w.]+/post/[\w-]+\S*", re.IGNORECASE)
+_THREADS_PARTS_RE = re.compile(
+    rf"^(?:https?://)?{_THREADS_HOST}/@([\w.]+)/post/([\w-]+)", re.IGNORECASE)
+
+
+def canonical_threads_url(url: str) -> str:
+    """A shared Threads link -> the plain post URL the sender can open."""
+    m = _THREADS_PARTS_RE.match(url)
+    if not m:
+        return url
+    return f"https://www.threads.com/@{m.group(1)}/post/{m.group(2)}"
+
+
+def threads_post_id(url: str) -> str:
+    """The post id, which is the post's identity: a wrong @user with a right id
+    still resolves to the same post (verified live 2026-07-26).
+
+    Nothing calls this yet — the intake path has no dedup at all today (dedup lives
+    only in the search path's candidates_repo), and adding it is out of scope. It
+    exists because canonicalisation is the hard half of dedup and doing it here
+    costs nothing.
+    """
+    m = _THREADS_PARTS_RE.match(url)
+    return m.group(2) if m else ""
+
+
+def threads_author(url: str) -> str:
+    """'@handle' of the post author from the URL, or '' when it is not a Threads
+    post link. Authoritative author comes from the rendered page in the sender;
+    this is what the intake has to work with."""
+    m = _THREADS_PARTS_RE.match(url)
+    return "@" + m.group(1) if m else ""
+
 
 _TRAILING = ".,);]>\"'"
 
@@ -63,11 +107,18 @@ def canonical_hh_url(url: str) -> str:
 
 
 def detect_contact(text: str) -> Contact | None:
+    # The Threads link is located up front, but only to protect its author handle:
+    # "вакансия от @lnkrnchk <threads link>" would otherwise match _HANDLE_RE and
+    # be stored as a Telegram contact, and the send loop would DM a user that does
+    # not exist there. A DIFFERENT @handle still wins, as it always did.
+    tm = _THREADS_RE.search(text)
+    threads_url = canonical_threads_url(_clean(tm.group(0))) if tm else ""
+
     m = _TME_RE.search(text)
     if m:
         return Contact("telegram", _clean(m.group(0)))
     m = _HANDLE_RE.search(text)
-    if m:
+    if m and ("@" + m.group(1)).lower() != threads_author(threads_url).lower():
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:
@@ -81,4 +132,6 @@ def detect_contact(text: str) -> Contact | None:
     m = _WELLFOUND_RE.search(text)
     if m:
         return Contact("wellfound", _clean(m.group(0)))
+    if threads_url:
+        return Contact("threads", threads_url)
     return None

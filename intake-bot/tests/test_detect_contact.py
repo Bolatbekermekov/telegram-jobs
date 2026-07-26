@@ -116,3 +116,63 @@ def test_non_vacancy_regional_link_keeps_its_path():
 def test_other_platforms_are_not_touched():
     assert detect_contact("https://www.linkedin.com/in/x?trk=abc").platform == "linkedin"
     assert detect_contact("@nick").target == "@nick"
+
+
+# --- Threads --------------------------------------------------------------
+
+from app.domain.contact import (  # noqa: E402
+    canonical_threads_url, threads_author, threads_post_id,
+)
+
+_SHARED = ("https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+           "?xmt=AQG0bheD9uqmoSjOr9bFyIfWrZmjZK8OWTtZ0RjfvAVPAHs981VOMdhda3xuSsAZwsdDgJA"
+           "&slof=1")
+_CLEAN = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+
+
+def test_threads_post_is_detected():
+    c = detect_contact(_CLEAN)
+    assert c == Contact("threads", _CLEAN)
+
+
+def test_threads_share_tracking_is_dropped():
+    """The share sheet appends ?xmt=…&slof=1; the sheet must hold a plain URL."""
+    assert detect_contact(_SHARED).target == _CLEAN
+
+
+def test_threads_net_is_folded_onto_threads_com():
+    c = detect_contact("вакансия https://www.threads.net/@lnkrnchk/post/DbL4LxBl6v9")
+    assert c.target == _CLEAN
+
+
+def test_threads_without_scheme_or_www():
+    assert detect_contact("threads.com/@lnkrnchk/post/DbL4LxBl6v9").target == _CLEAN
+
+
+def test_threads_url_author_is_not_read_as_a_telegram_handle():
+    """The '@' in the URL path is preceded by '/', so _HANDLE_RE must not fire."""
+    assert detect_contact(_CLEAN).platform == "threads"
+
+
+def test_a_real_telegram_handle_still_beats_a_threads_link():
+    c = detect_contact(f"Пиши @ivan_hr по вакансии {_CLEAN}")
+    assert c == Contact("telegram", "@ivan_hr")
+
+
+def test_the_threads_authors_own_handle_does_not_hijack_the_lead():
+    """"вакансия от @lnkrnchk <ссылка>" must stay threads: that handle is the post
+    author, not a Telegram user, and DMing it would reach nobody."""
+    c = detect_contact(f"вакансия от @lnkrnchk {_CLEAN}")
+    assert c.platform == "threads"
+
+
+def test_email_in_the_message_still_beats_a_threads_link():
+    c = detect_contact(f"{_CLEAN} резюме на hr@acme.com")
+    assert c.platform == "email"
+
+
+def test_threads_helpers():
+    assert canonical_threads_url(_SHARED) == _CLEAN
+    assert threads_post_id(_SHARED) == "DbL4LxBl6v9"
+    assert threads_author(_SHARED) == "@lnkrnchk"
+    assert threads_author("https://hh.ru/vacancy/1") == ""
