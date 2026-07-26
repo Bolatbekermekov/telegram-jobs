@@ -143,3 +143,35 @@ def extract_linkedin_post(html: str, max_chars: int = 5000) -> str:
     if not text or _LI_POST_BOILERPLATE_RE.search(text):
         return ""
     return text[:max_chars]
+
+
+# A Threads post's text lives in og:description, like a LinkedIn post's — but with
+# two differences that matter (both verified live 2026-07-26):
+#
+#  * Threads serves that markup ONLY to a non-browser User-Agent. A browser UA gets
+#    a JS shell with no og tags at all, so the fetcher must NOT send `_UA` here.
+#  * og:description carries the ROOT post only, capped around 480 chars. The rest of
+#    the vacancy and the contact to apply to live in the author's self-replies, which
+#    are absent from the anonymous HTML entirely. The sender re-reads the whole thread
+#    in a browser; this is the cheap first pass that lets intake answer instantly.
+#
+# No boilerplate filter is needed (LinkedIn needs `_LI_POST_BOILERPLATE_RE`): a
+# deleted or private Threads post comes back with no og tags, so it falls out here.
+# Match og:description specifically, not `(?:og:)?description` — the page also carries
+# a shorter plain `description` and a `twitter:description`, and relying on document
+# order to pick the right one is a coin flip.
+_TH_OG_DESC_RE = re.compile(
+    r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', re.IGNORECASE)
+
+
+def extract_threads_post(html: str, max_chars: int = 5000) -> str:
+    """Text of a Threads post from its og:description ("" when absent)."""
+    if not html:
+        return ""
+    m = _TH_OG_DESC_RE.search(html)
+    if not m:
+        return ""
+    # Already plain text: decode entities and keep the line breaks (they separate
+    # the post's bullet points), don't collapse whitespace.
+    text = _html.unescape(m.group(1)).strip()
+    return text[:max_chars] if text else ""

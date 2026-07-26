@@ -252,3 +252,46 @@ def test_it_gives_up_after_the_last_attempt(monkeypatch):
 def test_the_timeout_stays_under_a_serverless_budget():
     """A fetch that outlives the function turns a saved lead into a killed request."""
     assert vf._TIMEOUT_SECONDS <= 10
+
+
+# --- Threads posts --------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from app.domain.vacancy_text import extract_threads_post  # noqa: E402
+
+_FX = Path(__file__).parent / "fixtures" / "threads"
+
+
+def test_threads_post_text_comes_from_og_description():
+    text = extract_threads_post((_FX / "post.html").read_text(encoding="utf-8"))
+    assert text.startswith("Ищу Full Stack Developer")
+    assert "Lovable" in text
+    assert len(text) == 480          # og:description caps the root post here
+
+
+def test_threads_missing_post_yields_nothing():
+    """A deleted/non-existent post returns a page with no og tags at all."""
+    assert extract_threads_post((_FX / "missing.html").read_text(encoding="utf-8")) == ""
+
+
+def test_threads_spa_shell_yields_nothing_not_garbage():
+    """What a browser User-Agent gets. Must be empty, never partial junk."""
+    assert extract_threads_post((_FX / "spa_shell.html").read_text(encoding="utf-8")) == ""
+
+
+def test_threads_empty_html():
+    assert extract_threads_post("") == ""
+
+
+def test_threads_entities_are_decoded_and_newlines_kept():
+    html = ('<meta property="og:description" content="Ищем&#064;QA&amp;Dev'
+            '&#10;&#8212; тесты" />')
+    text = extract_threads_post(html)
+    assert "@" in text and "&" in text and "&amp;" not in text
+    assert "\n" in text
+
+
+def test_threads_respects_max_chars():
+    html = '<meta property="og:description" content="' + "a" * 900 + '" />'
+    assert len(extract_threads_post(html, max_chars=100)) == 100
