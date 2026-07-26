@@ -104,6 +104,13 @@ def test_resolve_thread_does_not_open_a_page_for_a_non_threads_url():
     assert page.goto_calls == []
 
 
+def test_render_thread_rejects_a_non_threads_url_without_launching_a_browser():
+    """The send loop calls this per lead, so the URL is checked before Playwright
+    is even imported — which is also what keeps this test offline."""
+    assert render_thread("https://hh.ru/vacancy/1") == ""
+    assert render_thread("") == ""
+
+
 # --- the contact, which is the whole point of reading the thread ----------------
 #
 # Measured live 2026-07-26 (see task-6-report.md). Threads renders a real mention

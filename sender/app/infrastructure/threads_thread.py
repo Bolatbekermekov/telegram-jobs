@@ -14,6 +14,15 @@ DM fallback) touches the saved session.
 DOM interaction is isolated here on purpose, the same way channels/linkedin.py
 isolates its selectors: they drift. The decision of what IS the vacancy is pure
 and lives in domain/threads_post.py.
+
+Known limitation, measured 2026-07-26 and NOT fixed here: a post is found by
+climbing from its author link to the nearest ancestor whose text runs past 40
+characters, so a post that never gets there is skipped outright. The climb plateaus
+rather than growing — a 21-character reply measured [0,0,0,21,21,21] over its six
+hops — so allowing more hops does not help; the threshold itself is what would have
+to change, and picking a smaller container wrongly is worse than missing a terse
+post. Cost: a self-reply of about 25 characters or less is lost, which matters when
+that reply is the contact («тг: @nick»). Fixing it needs its own measurement pass.
 """
 import re
 
@@ -152,6 +161,11 @@ def resolve_thread(page, url: str) -> str:
 
 def render_thread(url: str, headless: bool = True) -> str:
     """Open an anonymous browser, read the thread, close it. "" on any failure."""
+    # Checked before the browser starts: the send loop calls this per lead, and a
+    # lead that is not a Threads post must not cost a browser launch.
+    if not author_from_url(url):
+        return ""
+
     from playwright.sync_api import sync_playwright
 
     pw = browser = None
