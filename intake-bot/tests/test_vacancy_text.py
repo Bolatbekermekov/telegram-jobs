@@ -267,7 +267,11 @@ def test_threads_post_text_comes_from_og_description():
     text = extract_threads_post((_FX / "post.html").read_text(encoding="utf-8"))
     assert text.startswith("Ищу Full Stack Developer")
     assert "Lovable" in text
-    assert len(text) == 480          # og:description caps the root post here
+    # og:description caps the root post here. If Threads moves that cap this number
+    # needs re-baselining against a fresh capture.py run — don't delete the assertion:
+    # it is the anchor on real markup. The wrong-tag protection (og:description vs the
+    # shorter plain `description`) lives in the reordered-tags test at the end.
+    assert len(text) == 480
 
 
 def test_threads_missing_post_yields_nothing():

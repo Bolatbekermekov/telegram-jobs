@@ -160,6 +160,8 @@ def extract_linkedin_post(html: str, max_chars: int = 5000) -> str:
 # Match og:description specifically, not `(?:og:)?description` — the page also carries
 # a shorter plain `description` and a `twitter:description`, and relying on document
 # order to pick the right one is a coin flip.
+# Like `_LI_OG_DESC_RE`, this needs `property=` before `content=` and double quotes; a
+# page that reorders the attributes or uses single ones yields "" rather than garbage.
 _TH_OG_DESC_RE = re.compile(
     r'<meta[^>]+property="og:description"[^>]+content="([^"]*)"', re.IGNORECASE)
 
@@ -174,4 +176,4 @@ def extract_threads_post(html: str, max_chars: int = 5000) -> str:
     # Already plain text: decode entities and keep the line breaks (they separate
     # the post's bullet points), don't collapse whitespace.
     text = _html.unescape(m.group(1)).strip()
-    return text[:max_chars] if text else ""
+    return text[:max_chars]
