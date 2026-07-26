@@ -73,13 +73,17 @@ class LinkedInSearcher:
         self._page = None
 
     def start(self) -> None:
-        from pathlib import Path
-
         from playwright.sync_api import sync_playwright
+
+        from app.infrastructure.linkedin_session import has_valid_session
 
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=self._headless)
-        state = self._storage_state_path if Path(self._storage_state_path).exists() else None
+        # A file that exists but carries no live `li_at` is a logged-out session:
+        # loading it browses as a guest and every page dead-ends at the authwall.
+        # Treat it as "no session" so `make login_browser` opens the login window
+        # instead of silently keeping the dead cookies.
+        state = self._storage_state_path if has_valid_session(self._storage_state_path) else None
         context = self._browser.new_context(storage_state=state)
         self._page = context.new_page()
         if state is None:

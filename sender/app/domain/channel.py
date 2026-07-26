@@ -12,9 +12,10 @@ class RateLimitedError(ChannelError):
 
 
 class InvitePendingError(ChannelError):
-    """Not a failure: an outreach step was made but full delivery is deferred —
-    e.g. a LinkedIn connection request with a note was sent, so the CV goes only
-    after the person accepts. The caller records this as its own status."""
+    """Not a failure: the outreach was a LinkedIn connection request carrying the
+    cover letter as its note (used when the person isn't a 1st-degree contact and
+    can't be messaged for free). That invite is the complete outreach — no CV, and
+    no CV chase after they accept. The caller records it as a normal send."""
 
 
 class ManualApplyRequired(ChannelError):

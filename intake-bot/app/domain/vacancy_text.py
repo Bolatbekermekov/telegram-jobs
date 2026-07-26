@@ -112,3 +112,34 @@ def extract_linkedin_vacancy(html: str, max_chars: int = 5000) -> str:
         if c:
             head.append(f"Компания: {c}")
     return "\n".join([*head, body]).strip()
+
+
+# A LinkedIn *post* (a hiring post, /posts/…) has none of the job-page selectors
+# above — its text lives in the og:description meta tag, which carries the full
+# post body (verified live 2026-07-22: ~1.5k chars for a real hiring post).
+_LI_OG_DESC_RE = re.compile(
+    r'<meta[^>]+(?:property|name)="(?:og:)?description"[^>]+content="([^"]*)"',
+    re.IGNORECASE)
+# When a post isn't publicly readable, LinkedIn serves its generic site blurb as
+# og:description instead of the post — that is NOT the vacancy, so reject it
+# (seen live on a post whose author restricts it).
+_LI_POST_BOILERPLATE_RE = re.compile(
+    r"manage your professional identity|"
+    r"build and engage with your professional network|"
+    r"\d[\d,\s]*million\+?\s*members", re.IGNORECASE)
+
+
+def extract_linkedin_post(html: str, max_chars: int = 5000) -> str:
+    """Body of a LinkedIn hiring post from its og:description meta ("" if absent
+    or if LinkedIn served its generic members blurb — the post isn't public)."""
+    if not html:
+        return ""
+    m = _LI_OG_DESC_RE.search(html)
+    if not m:
+        return ""
+    # og:description is already plain text; just decode entities and keep the line
+    # breaks (they separate the post's bullet points), don't collapse whitespace.
+    text = _html.unescape(m.group(1)).strip()
+    if not text or _LI_POST_BOILERPLATE_RE.search(text):
+        return ""
+    return text[:max_chars]

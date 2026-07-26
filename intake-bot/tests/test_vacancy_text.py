@@ -127,6 +127,41 @@ def test_a_short_but_real_posting_is_not_link_only():
         "Location: Ahemdabad\n\nhttps://www.linkedin.com/jobs/view/4438796193/")
 
 
+# --- LinkedIn posts (hiring posts, read from og:description) -----------------
+
+def test_linkedin_post_text_from_og_description():
+    """A hiring post's text lives in the og:description meta (verified live on
+    real leads: /jobs/ selectors don't exist on a /posts/ page)."""
+    from app.domain.vacancy_text import extract_linkedin_post
+
+    html = ('<meta property="og:description" content="QA Engineer (ML/Voice AI) '
+            '&#8211; Cybernet AI. Алматы (гибрид). Ищем QA, опыт с REST API и '
+            'автотестами. Зарплата обсуждается." />')
+    out = extract_linkedin_post(html)
+    assert "QA Engineer" in out
+    assert "Cybernet AI" in out
+    assert "REST API" in out
+    assert "&#8211;" not in out and "–" in out   # entity decoded
+
+
+def test_linkedin_post_rejects_the_generic_members_blurb():
+    """When a post isn't publicly readable, LinkedIn serves its generic site
+    blurb as og:description — that is NOT the vacancy, so drop it (row #110)."""
+    from app.domain.vacancy_text import extract_linkedin_post
+
+    html = ('<meta property="og:description" content="500 million+ members | '
+            'Manage your professional identity. Build and engage with your '
+            'professional network." />')
+    assert extract_linkedin_post(html) == ""
+
+
+def test_linkedin_post_without_og_description_yields_nothing():
+    from app.domain.vacancy_text import extract_linkedin_post
+
+    assert extract_linkedin_post("<html><body>authwall</body></html>") == ""
+    assert extract_linkedin_post("") == ""
+
+
 # --- fetch retry ------------------------------------------------------------
 
 class _FakeResp:
@@ -155,6 +190,31 @@ def _patched_httpx(monkeypatch, responses):
 import sys  # noqa: E402
 
 from app.infrastructure import vacancy_fetcher as vf  # noqa: E402
+
+
+def test_linkedin_post_urls_are_fetchable():
+    """A bare hiring-post link should now be fetched, not treated as unreadable."""
+    post = ("https://www.linkedin.com/posts/assemzhan-nagashybayeva-3bb2a91a7_"
+            "qa-engineer-activity-7482667084305424384-5wMi/")
+    assert vf.is_linkedin_post_url(post)
+    assert vf.is_fetchable_vacancy_url(post)
+    assert vf.is_linkedin_post_url("https://www.linkedin.com/feed/update/urn:li:activity:123/")
+
+
+def test_a_linkedin_profile_is_not_a_fetchable_post():
+    """A /in/ profile isn't a post — profiles answer 999 and carry no vacancy."""
+    assert not vf.is_linkedin_post_url("https://www.linkedin.com/in/daria-yakovleva/")
+    assert not vf.is_fetchable_vacancy_url("https://www.linkedin.com/in/daria-yakovleva/")
+
+
+def test_fetch_routes_a_post_to_the_og_description_extractor(monkeypatch):
+    """A post URL is read via extract_linkedin_post (og:description), not the
+    job-page selectors."""
+    html = '<meta property="og:description" content="Ищем Go-разработчика, удалёнка." />'
+    _patched_httpx(monkeypatch, [_FakeResp(200, html)])
+    out = vf.fetch_vacancy_text(
+        "https://www.linkedin.com/posts/x_hiring-activity-1-a/", timeout=8.0)
+    assert "Go-разработчика" in out
 
 
 def test_throttled_first_attempt_is_retried(monkeypatch):

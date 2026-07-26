@@ -5,9 +5,11 @@ Both sites are read anonymously, with a plain GET:
 * hh — its public API answers 403 to an unauthenticated client (checked
   2026-07-20 on api.hh.ru/vacancies/<id>, every User-Agent), but the ordinary
   page comes back in well under a second.
-* LinkedIn — the public job view is served without a login, so this needs no
-  session and carries none of the ban risk that automating a logged-in LinkedIn
-  does. Only `/jobs/view/` is supported; `/posts/` answers 404 to a plain GET.
+* LinkedIn — the public job view AND hiring posts are served without a login, so
+  this needs no session and carries none of the ban risk that automating a
+  logged-in LinkedIn does. `/jobs/view/` is read from the job-page markup;
+  `/posts/…` and `/feed/update/…` come back 200 (NOT 404 — that was stale) with
+  the post text in the og:description meta.
 
 Best-effort by design: the bot runs on a serverless function with a short budget
 and a datacenter IP that either site may throttle, so every failure returns "" and
@@ -15,7 +17,9 @@ the caller falls back to summarising whatever the message itself contained.
 """
 import re
 
-from app.domain.vacancy_text import extract_hh_vacancy, extract_linkedin_vacancy
+from app.domain.vacancy_text import (
+    extract_hh_vacancy, extract_linkedin_post, extract_linkedin_vacancy,
+)
 
 # A browser UA: a bot-looking one gets throttled by both sites.
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -25,6 +29,8 @@ _HH_VACANCY_RE = re.compile(
     r"^https?://(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)/vacancy/\d+", re.IGNORECASE)
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://(?:[\w.-]*\.)?linkedin\.com/jobs/view/\d+", re.IGNORECASE)
+_LINKEDIN_POST_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?linkedin\.com/(?:posts/|feed/update/)", re.IGNORECASE)
 
 # hh answers in ~0.6s and LinkedIn in ~2-3s, so this is head-room, not the norm.
 # It stays small on purpose: the bot runs on a serverless function whose own
@@ -48,8 +54,13 @@ def is_linkedin_job_url(url: str) -> bool:
     return bool(_LINKEDIN_JOB_RE.match((url or "").strip()))
 
 
+def is_linkedin_post_url(url: str) -> bool:
+    return bool(_LINKEDIN_POST_RE.match((url or "").strip()))
+
+
 def is_fetchable_vacancy_url(url: str) -> bool:
-    return is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+    return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+            or is_linkedin_post_url(url))
 
 
 def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None) -> str:
@@ -86,6 +97,8 @@ def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
         extract = extract_hh_vacancy
     elif is_linkedin_job_url(url):
         extract = extract_linkedin_vacancy
+    elif is_linkedin_post_url(url):
+        extract = extract_linkedin_post
     else:
         return ""
     try:

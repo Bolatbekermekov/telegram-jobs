@@ -12,13 +12,14 @@ import time
 
 from app import config
 from app.application.format_content import format_for_channel
-from app.application.generate_message import GenerateMessage, subject_for
+from app.application.generate_message import (
+    GenerateMessage, generate_body, subject_for,
+)
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import skip_reason
 from app.domain.lead import (
     STATUS_FAILED,
-    STATUS_INVITED,
     STATUS_MANUAL,
     STATUS_SENT,
     STATUS_SKIPPED,
@@ -90,6 +91,7 @@ def run() -> None:
     sent_per_platform: dict[str, int] = {}
     rate_limited: set[str] = set()       # platforms that rate-limited us this run
     quit_requested = False
+    gen_failures = 0                     # consecutive message-generation failures
 
     # Strict id order: walk leads top-to-bottom. ChannelSwitcher keeps a single
     # channel open and switches only when the platform changes (Telethon and
@@ -139,7 +141,20 @@ def run() -> None:
             print("-" * 60)
 
             print("Генерирую сообщение...")
-            body = generator.execute(lead)
+            body, gen_err = generate_body(generator, lead)
+            if gen_err is not None:
+                # Generation hit OpenAI/network — don't crash the run (row 82).
+                # Leave the lead `new` and move on; bail after 3 in a row, since
+                # that means OpenAI is down and every remaining lead would fail too.
+                gen_failures += 1
+                print(f"⚠️  #{lead.lead_id}: не смог сгенерировать сообщение "
+                      f"({type(gen_err).__name__}). Оставляю 'new'.")
+                if gen_failures >= 3:
+                    print("🛑 OpenAI недоступен (3 ошибки подряд) — останавливаю прогон. "
+                          "Остальные лиды остаются 'new'. Проверь сеть/квоту и запусти снова.")
+                    break
+                continue
+            gen_failures = 0
             subject = subject_for(lead.vacancy_context or lead.raw_text)
             attachment = config.CV_PATH if config.ATTACH_CV else None
             content = format_for_channel(channel, body, subject, attachment)
@@ -168,13 +183,13 @@ def run() -> None:
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
             elif result.invited:
-                # Connection request with a note was sent — a real outreach
-                # action (counted in the run total); CV goes after acceptance.
-                repo.mark_status(lead, STATUS_INVITED, note=result.error)
+                # A LinkedIn connection request carrying the cover letter went out.
+                # It's the whole outreach — no CV, no follow-up after they accept —
+                # so record it as a normal send (won't be retried).
+                repo.mark_sent(lead, content.body, STATUS_SENT)
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
-                print(f"📨 Запрос на контакт отправлен [{platform}] "
-                      f"(всего за прогон: {sent_per_platform[platform]}). "
-                      "CV — после подтверждения.")
+                print(f"📨 Запрос на контакт с письмом отправлен [{platform}] "
+                      f"(всего за прогон: {sent_per_platform[platform]}).")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
@@ -431,9 +446,13 @@ def run_login_all():
         telegram_session_file,
     )
 
+    from app.infrastructure.linkedin_session import has_valid_session
+
     has_session = {
         "telegram": Path(telegram_session_file(config.SESSION_PATH)).exists(),
-        "linkedin": Path(config.LINKEDIN_STATE_PATH).exists(),
+        # A LinkedIn state file can exist yet be logged out (no live li_at); that
+        # is not a session to skip — re-login instead.
+        "linkedin": has_valid_session(config.LINKEDIN_STATE_PATH),
         "hh": Path(config.HH_STATE_PATH).exists(),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
     }

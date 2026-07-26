@@ -1,19 +1,41 @@
+import json
+
 import pytest
 
-from app.domain.channel import ChannelError, InvitePendingError, OutreachContent
+from app.domain.channel import (
+    ChannelError, ChannelUnavailable, InvitePendingError, OutreachContent,
+    RateLimitedError,
+)
+from app.infrastructure.channels import linkedin as _li
 from app.infrastructure.channels.linkedin import (
-    SEL_CONNECT_BTN,
     SEL_FILE_INPUT,
     SEL_INVITE_SEND,
+    SEL_MENU_CONNECT,
     SEL_MESSAGE_BTN,
+    SEL_MORE_BTN,
     SEL_MSG_BOX,
     SEL_MSG_SEND,
     SEL_NOTE_BOX,
     SEL_PERSONALIZE,
+    LinkedInChannel,
     connect_with_note,
     fill_and_send,
     message_or_connect,
 )
+
+
+def test_start_rejects_a_logged_out_session(tmp_path):
+    """A state file with no `li_at` must stop the run (re-login), not start a
+    guest browser that fails every profile at the authwall — the row-79 bug."""
+    dead = tmp_path / "linkedin_state.json"
+    dead.write_text(json.dumps({"cookies": [{"name": "bcookie", "value": "v=2"}]}))
+    with pytest.raises(ChannelUnavailable):
+        LinkedInChannel(str(dead)).start()
+
+
+def test_start_rejects_a_missing_session(tmp_path):
+    with pytest.raises(ChannelUnavailable):
+        LinkedInChannel(str(tmp_path / "nope.json")).start()
 
 
 class _FakePage:
@@ -54,12 +76,25 @@ class _FakePage:
             def dispatch_event(self_inner, ev):
                 page.actions.append(("dispatch", selector, ev))
 
+            def evaluate(self_inner, expr, timeout=None):
+                # _click_via_dom uses locator.evaluate("el => el.click()", timeout=…)
+                page.actions.append(("jsclick", selector))
+
+            def wait_for(self_inner, state=None, timeout=None):
+                # Model Playwright: a present element resolves, an absent one
+                # times out (raises) — that's how _visible() reads readiness.
+                if page._counts.get(selector, 0) == 0:
+                    raise TimeoutError(f"wait_for timeout: {selector}")
+
             def scroll_into_view_if_needed(self_inner):
                 pass
 
         return _Locator()
 
     def wait_for_timeout(self, ms):
+        pass
+
+    def wait_for_load_state(self, state, timeout=None):
         pass
 
 
@@ -79,7 +114,7 @@ def test_fill_and_send_messages_connection():
     page = _FakePage(dict(_MSG_OK))
     fill_and_send(page, "https://linkedin.com/in/someone", OutreachContent(body="Hi there"))
     assert ("goto", "https://linkedin.com/in/someone") in page.actions
-    assert ("click", SEL_MESSAGE_BTN) in page.actions
+    assert ("jsclick", SEL_MESSAGE_BTN) in page.actions
     assert ("fill", SEL_MSG_BOX, "Hi there") in page.actions
     assert ("click", SEL_MSG_SEND) in page.actions
 
@@ -111,20 +146,25 @@ def test_fill_and_send_no_attachment_skips_upload():
     assert not any(a[0] == "set_input_files" for a in page.actions)
 
 
-def test_message_or_connect_messages_when_possible():
+def test_message_or_connect_messages_a_first_degree_contact():
+    # 1st-degree: no Connect action anywhere -> free message. The button is
+    # opened with a native in-page click to clear LinkedIn's sticky nav layer.
     page = _FakePage(dict(_MSG_OK))
     message_or_connect(page, "https://linkedin.com/in/a", OutreachContent(body="Hi"))
-    assert ("click", SEL_MESSAGE_BTN) in page.actions
+    assert ("jsclick", SEL_MESSAGE_BTN) in page.actions
+    assert ("fill", SEL_MSG_BOX, "Hi") in page.actions
 
 
-# A profile where we can't message, but the connect+note flow works.
-_CONNECT_OK = {SEL_CONNECT_BTN: 1, SEL_PERSONALIZE: 1, SEL_NOTE_BOX: 1, SEL_INVITE_SEND: 1}
+# A non-contact reached through the "…"/Еше menu (the only Connect path).
+_CONNECT_OK = {SEL_MORE_BTN: 1, SEL_MENU_CONNECT: 1,
+               SEL_PERSONALIZE: 1, SEL_NOTE_BOX: 1, SEL_INVITE_SEND: 1}
 
 
 def test_connect_with_note_sends_invite():
     page = _FakePage(dict(_CONNECT_OK))
     connect_with_note(page, "Здравствуйте, интересна ваша вакансия QA")
-    assert ("dispatch", SEL_CONNECT_BTN, "click") in page.actions   # overlay-proof click
+    assert ("jsclick", SEL_MORE_BTN) in page.actions       # opened the … menu
+    assert ("jsclick", SEL_MENU_CONNECT) in page.actions   # native-click, overlay-proof
     assert ("click", SEL_PERSONALIZE) in page.actions
     assert any(a[0] == "fill" and a[1] == SEL_NOTE_BOX for a in page.actions)
     assert ("click", SEL_INVITE_SEND) in page.actions
@@ -138,9 +178,22 @@ def test_connect_with_note_truncates_note_to_limit():
 
 
 def test_connect_with_note_raises_when_modal_missing():
-    page = _FakePage({SEL_CONNECT_BTN: 1})  # connect clicks but no personalize modal
+    # Menu opens with a Connect entry, but clicking it never surfaces the note
+    # modal — a real failure, not a silent skip.
+    page = _FakePage({SEL_MORE_BTN: 1, SEL_MENU_CONNECT: 1})
     with pytest.raises(ChannelError, match="приглашения"):
         connect_with_note(page, "hi")
+
+
+def test_invite_limit_stops_the_platform():
+    """Monthly personalized-invite quota spent: "Персонализировать" shows a Premium
+    upsell, no note field. Raise RateLimitedError so the run stops LinkedIn
+    connects (leads stay `new`) instead of sending note-less invites."""
+    from app.infrastructure.channels.linkedin import SEL_INVITE_LIMIT
+    page = _FakePage({SEL_MORE_BTN: 1, SEL_MENU_CONNECT: 1,
+                      SEL_PERSONALIZE: 1, SEL_INVITE_LIMIT: 1})  # note box absent
+    with pytest.raises(RateLimitedError, match="лимит"):
+        message_or_connect(page, "https://linkedin.com/in/x", OutreachContent(body="Hi"))
 
 
 def test_message_or_connect_sends_invite_when_only_connect():
@@ -155,6 +208,59 @@ def test_message_or_connect_raises_when_no_action():
     page = _FakePage({})
     with pytest.raises(ChannelError, match="не найдены"):
         message_or_connect(page, "https://linkedin.com/in/a", OutreachContent(body="Hi"))
+
+
+# A 3rd-degree profile (Daria, row 79): messaging is InMail-only (Premium), and
+# Connect lives under the "Еще" overflow menu, not the top card.
+_THIRD_DEGREE = {SEL_MESSAGE_BTN: 1, SEL_MORE_BTN: 1, SEL_MENU_CONNECT: 1,
+                 SEL_PERSONALIZE: 1, SEL_NOTE_BOX: 1, SEL_INVITE_SEND: 1}
+
+
+def test_message_or_connect_connects_when_message_is_inmail_only():
+    """Row-79 fix: don't message a non-contact into the InMail paywall — connect.
+
+    The Connect action is reached through the "Еще" menu, and the outcome is a
+    pending invite, not a delivered message."""
+    page = _FakePage(dict(_THIRD_DEGREE))
+    with pytest.raises(InvitePendingError):
+        message_or_connect(page, "https://linkedin.com/in/daria", OutreachContent(body="Hi"))
+    assert ("jsclick", SEL_MORE_BTN) in page.actions      # opened the … menu
+    assert ("jsclick", SEL_MENU_CONNECT) in page.actions  # picked Connect
+    assert ("click", SEL_INVITE_SEND) in page.actions               # invite sent
+    # Never fell through to the InMail message composer.
+    assert not any(a[0] == "fill" and a[1] == SEL_MSG_BOX for a in page.actions)
+
+
+def test_message_or_connect_connects_a_second_degree_via_top_card(monkeypatch):
+    """2nd-degree (a hiring post's author, e.g. rodion-kozlov): Connect is a
+    primary top-card control, not in the menu. Use it — don't fall through to the
+    InMail paywall. _topcard_connect anchors it past the recommendation cards."""
+    page = _FakePage({SEL_PERSONALIZE: 1, SEL_NOTE_BOX: 1, SEL_INVITE_SEND: 1})
+    monkeypatch.setattr(_li, "_topcard_connect", lambda p: p.locator("TOPCARD_CONNECT"))
+    with pytest.raises(InvitePendingError):
+        message_or_connect(page, "https://linkedin.com/in/rodion", OutreachContent(body="Hi"))
+    assert ("jsclick", "TOPCARD_CONNECT") in page.actions   # clicked the top-card Connect
+    assert ("click", SEL_INVITE_SEND) in page.actions       # invite sent
+    assert not any(a[0] == "jsclick" and a[1] == SEL_MORE_BTN for a in page.actions)  # menu not used
+
+
+def test_message_or_connect_prefers_connect_over_message():
+    """When both a top-level Connect and a Message button exist (2nd-degree),
+    connect+note wins — a free invite beats a paid InMail."""
+    page = _FakePage({SEL_MESSAGE_BTN: 1, SEL_MSG_BOX: 1, **_CONNECT_OK})
+    with pytest.raises(InvitePendingError):
+        message_or_connect(page, "https://linkedin.com/in/b", OutreachContent(body="Hi"))
+    assert not any(a[0] == "fill" and a[1] == SEL_MSG_BOX for a in page.actions)
+
+
+def test_message_raises_manual_when_only_inmail(monkeypatch):
+    """A non-contact with no Connect anywhere (InMail-only, no invite path) must
+    be flagged for a manual apply, not sent a message into a composer that never
+    opens."""
+    from app.domain.channel import ManualApplyRequired
+    page = _FakePage({SEL_MESSAGE_BTN: 1})   # message button exists, but no msg box
+    with pytest.raises(ManualApplyRequired):
+        message_or_connect(page, "https://linkedin.com/in/c", OutreachContent(body="Hi"))
 
 
 from app.infrastructure.channels.linkedin import (
