@@ -31,7 +31,7 @@ def hold_reason(auto_send: bool, review: str = "", contact: str = "",
 
     `review` is the resolver's verdict on the contact — non-empty when a human has
     to look before it goes out, and already phrased for a human (see
-    `resolve_threads_lead.REVIEW_MODEL` / `REVIEW_UNCUED`). Auto mode has no
+    `resolve_threads_lead.REVIEW_MODEL`). Auto mode has no
     confirmation step, so a contact nobody has read must not be sent; interactive
     runs show the same reason and let the human decide.
 
