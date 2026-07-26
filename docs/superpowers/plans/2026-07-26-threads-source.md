@@ -923,12 +923,13 @@ def test_author_thread_text_matches_the_handle_case_insensitively_and_without_at
     assert "Ищу Full Stack" in author_thread_text(blocks, "@lnkrnchk")
 
 
-def test_author_thread_text_contains_the_contact_so_detection_can_find_it():
-    from app.domain.contact import detect_contact
+def test_the_contact_line_survives_chrome_stripping_verbatim():
+    """This module's job ends at handing the contact line through intact. Whether
+    `detect_contact` can then read "@ skyluckwalker" depends on the shape the DOM
+    reader emits, which is Task 6's problem — see the note below."""
     blocks = [("@lnkrnchk", ROOT), ("@lnkrnchk", REPLY_2)]
-    c = detect_contact(author_thread_text(blocks, "@lnkrnchk"))
-    assert c is not None and c.platform == "telegram"
-    assert c.target == "@skyluckwalker"
+    text = author_thread_text(blocks, "@lnkrnchk")
+    assert "Для отклика присылайте портфолио в Telegram: @ skyluckwalker" in text
 
 
 def test_author_thread_text_is_empty_when_the_author_posted_nothing():
@@ -1058,6 +1059,35 @@ git commit -m "feat(send): чистая сборка текста ваканси
   - `read_thread_blocks(page) -> list[tuple[str, list[str]]]` — тонкий DOM-ридер (один `page.evaluate`).
   - `resolve_thread(page, url: str) -> str` — открывает URL, возвращает текст автора («» при любой неудаче).
   - `render_thread(url: str, headless: bool = True) -> str` — поднимает **анонимный** браузер и возвращает то же.
+
+> **Правка от 2026-07-26 (по итогам ревью Task 4): в этой задаче надо решить, как
+> склеивать упоминание.** Отрендеренный DOM отдаёт контактную строку как
+> `«… в Telegram: @ skyluckwalker»` — с пробелом после собачки. Первоначально план
+> лечил это в `detect_contact`, добавив `@\s?` в `_HANDLE_RE`. Это оказалось неверным:
+> правило второе из шести, поэтому оно **перехватывает** email, linkedin и hh, и
+> `«пишите hr @ acme.com или в телеграм @ivan_hr»` давало `@acme` вместо `@ivan_hr`, а
+> `«разработчик @ Astana, откликайтесь на hh.ru/vacancy/12345»` давало `@Astana` вместо
+> hh-вакансии. `@ Company` — обычная конвенция в вакансиях, так что это не экзотика.
+> `\s?` откачен, `detect_contact` снова точная копия интейкового.
+>
+> Значит пробел — артефакт рендеринга, и лечить его надо **здесь**. Перед реализацией
+> выяснить живьём, откуда он берётся, и выбрать по результату:
+>
+> 1. **Упоминание — это якорь.** Threads линкует упоминания как `a[href^="/@"]`. Если
+>    `skyluckwalker` лежит внутри такого якоря, склеивай только текст якорей — тогда
+>    прозаическое `@ Astana` не затрагивается вообще, и это самый точный вариант.
+> 2. **Пробел приходит от `innerText` на границе инлайн-элементов.** Тогда у того же
+>    узла `textContent` вернёт склеенное. Глобально подменять нельзя — `innerText`
+>    держит переводы строк, которые разделяют пункты списка. Читать `textContent`
+>    только там, где узел не содержит переводов строк.
+> 3. **Ни то, ни другое** — сообщи, не угадывай. Нормализация `@\s+` → `@` по всему
+>    тексту вернёт ровно ту проблему, из-за которой откатили `\s?`, поэтому это
+>    последний вариант и только с явным решением человека.
+>
+> Проверить надо на живом посте: `https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9`,
+> строка «Для отклика присылайте портфолио в Telegram: @ skyluckwalker». Тест на то,
+> что `detect_contact` находит в собранном тексте `@skyluckwalker`, переехал сюда из
+> Task 5 — добавить его после того, как форма известна.
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -1617,6 +1647,26 @@ def test_a_persist_failure_still_returns_the_resolved_lead_in_memory():
     assert out.platform == "telegram" and out.target == "@skyluckwalker"
 
 
+def test_the_authors_own_handle_is_not_treated_as_a_telegram_contact():
+    """Found while implementing Task 4. "@lnkrnchk" written by @lnkrnchk in their
+    own post is their THREADS name, not a Telegram username — DMing it would reach
+    a different person. The intake copy of detect_contact exempts the author from
+    the URL; the sender copy gets rendered prose with no URL, so the guard is here."""
+    repo = FakeRepo()
+    text = "Ищем разработчика. Пишите мне @lnkrnchk, отвечаю быстро."
+    out = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.platform == "threads"
+    assert out.target == "@lnkrnchk"          # the DM fallback, not a Telegram DM
+
+
+def test_a_different_handle_in_the_authors_post_still_wins():
+    repo = FakeRepo()
+    text = "Ищем разработчика. Резюме в Telegram: @hiring_bot_hr"
+    out = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.platform == "telegram"
+    assert out.target == "@hiring_bot_hr"
+
+
 def test_non_threads_leads_are_returned_as_is():
     repo = FakeRepo()
     lead = _lead(platform="hh", target="https://hh.ru/vacancy/1")
@@ -1683,14 +1733,25 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact):
     # A partial render (hydration dropped a reply) must never shrink the vacancy.
     vacancy = text if len(text) >= len(lead.vacancy_context or "") else lead.vacancy_context
 
+    author = author_from_url(lead.target)
     contact = detect(text)
+    # The author's own Threads handle is NOT a Telegram username. When they write
+    # "пишите мне @lnkrnchk" in their own post, detect_contact reads it as Telegram
+    # and we would DM whoever holds that name there — a different person. The
+    # intake copy of detect_contact guards this by exempting the author parsed out
+    # of the URL; the sender copy cannot, because its input is rendered prose with
+    # no URL in it. So the guard lives here, where the author IS known.
+    if contact is not None and contact.platform == "telegram" and author:
+        if contact.target.strip().lstrip("@").lower() == author.lstrip("@").lower():
+            contact = None
+
     if contact is not None:
         platform, target = contact.platform, contact.target
         note = f"контакт из треда Threads: {lead.target}"
     else:
         # Nothing to apply to but the author — the DM fallback.
         platform = "threads"
-        target = author_from_url(lead.target) or lead.target
+        target = author or lead.target
         note = f"контакта в треде нет, DM автору: {lead.target}"
 
     try:
