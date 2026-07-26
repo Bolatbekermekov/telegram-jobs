@@ -21,3 +21,24 @@ def skip_reason(lead, known) -> tuple[str, str] | None:
     if p not in known:
         return (STATUS_SKIPPED, f"unknown platform: {p}")
     return None
+
+
+def hold_reason(contact_from_model: bool, auto_send: bool) -> str | None:
+    """Why an unattended run must not send this lead, or None to send it.
+
+    Auto mode does not send what no human has read. Same carve-out as the
+    `[плейсхолдер]` one: no status is written, the lead stays `new`, and the
+    human sends it manually — this is not a skip.
+
+    A model-proposed contact qualifies. The vetting in
+    `contact_llm.parse_contact_response` proves the target was WRITTEN in the
+    thread; it cannot prove the target is the address to apply to. "hr @
+    acmecorp.com" read back as the handle @acmecorp passes every check, and so
+    does a handle the author only mentioned in passing. The confirmation step is
+    what catches that, so taking the confirmation away has to take the send away
+    with it.
+    """
+    if auto_send and contact_from_model:
+        return ("контакт предложен моделью — в авто-режиме не отправляю, "
+                "оставляю 'new' для ручной отправки")
+    return None

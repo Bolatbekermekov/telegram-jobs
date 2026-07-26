@@ -17,7 +17,7 @@ from app.application.generate_message import (
 )
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
-from app.application.send_plan import skip_reason
+from app.application.send_plan import hold_reason, skip_reason
 from app.domain.lead import (
     STATUS_FAILED,
     STATUS_MANUAL,
@@ -130,7 +130,7 @@ def run() -> None:
                 from app.infrastructure.openai_contact import OpenAIContactDetector
                 from app.infrastructure.threads_thread import render_thread
                 print("Читаю тред Threads...")
-                lead = resolve_threads_lead(
+                lead, contact_from_model = resolve_threads_lead(
                     lead, repo,
                     render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
                     # The writing model, not the cheap one: once per lead, and a
@@ -143,6 +143,15 @@ def run() -> None:
                     platform = lead.platform
                 else:
                     print(f"   контакта в треде нет, буду писать автору: {lead.target}")
+
+                hold = hold_reason(contact_from_model, config.AUTO_SEND)
+                if hold is not None:
+                    # No status written: the lead stays `new` for a manual send,
+                    # exactly like the [плейсхолдер] carve-out. Checked before the
+                    # channel opens and before the message is generated — there is
+                    # nothing to generate for a lead we are not going to send.
+                    print(f"⏭  Лид #{lead.lead_id}: {hold}.")
+                    continue
 
             try:
                 channel = switcher.for_platform(platform)

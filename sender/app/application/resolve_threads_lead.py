@@ -24,11 +24,17 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact, llm=None):
     could not be read. `llm(thread_text) -> str` is the optional fallback detector
     (a raw model answer); it is consulted ONLY when the rules found nothing, and
     its answer is vetted by `parse_contact_response` before it can become a
-    recipient. Returns the lead to send: rewritten when the thread was read, the
-    original object otherwise.
+    recipient.
+
+    Returns `(lead, contact_from_model)`: the lead to send — rewritten when the
+    thread was read, the original object otherwise — and whether its contact came
+    from the model rather than from the rules. The caller needs that second value:
+    an unattended run must not send a contact no human has read, because the
+    vetting proves the target was WRITTEN in the thread, not that it is the
+    address to apply to (see `send_plan.hold_reason`).
     """
     if lead.platform != "threads":
-        return lead
+        return lead, False
 
     try:
         text = render(lead.target)
@@ -37,7 +43,7 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact, llm=None):
     if not text:
         # Keep whatever the intake stored. Status stays `new` so the next run,
         # possibly with a working browser, tries again.
-        return lead
+        return lead, False
 
     # A partial render (hydration dropped a reply) must never shrink the vacancy.
     vacancy = text if len(text) >= len(lead.vacancy_context or "") else lead.vacancy_context
@@ -87,7 +93,7 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact, llm=None):
     # setting Платформа, and skip_reason gates only on the platform — so a blank
     # target means the next run opens a Telegram channel and sends to "".
     if not target:
-        return lead
+        return lead, False
 
     try:
         repo.update_resolved(lead, platform, target, vacancy, note=note)
@@ -102,4 +108,4 @@ def resolve_threads_lead(lead, repo, render, detect=detect_contact, llm=None):
               f"({type(exc).__name__}). Отправляю по найденному контакту, "
               f"но в таблице останется старая платформа.")
 
-    return replace(lead, platform=platform, target=target, vacancy_context=vacancy)
+    return replace(lead, platform=platform, target=target, vacancy_context=vacancy), by_model

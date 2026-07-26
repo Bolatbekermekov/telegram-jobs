@@ -25,6 +25,15 @@ defend against contaminated text — a stranger's handle absorbed into the
 author's block would BE in the source. That is why block scoping in
 `threads_thread.py` is a safety property, not a formatting one.
 
+The occurrence check compares the WHOLE target against the text, and it must stay
+that way. It therefore rejects «почта name собака domain.ru», one of the sloppy
+forms this fallback was partly meant to catch — that is an accepted cost, not an
+oversight. Relaxing it to "each part occurs somewhere in the text" would gut the
+guard: in a post of any length almost any plausible address can be assembled from
+fragments, so a thread mentioning hr@acme.com and info@other.com would validate a
+fabricated hr@other.com. A missed contact degrades to a DM to the author; a
+fabricated one reaches a stranger.
+
 Pure: no network, no client. The OpenAI call lives in
 `infrastructure/openai_contact.py`.
 """
