@@ -295,3 +295,17 @@ def test_threads_entities_are_decoded_and_newlines_kept():
 def test_threads_respects_max_chars():
     html = '<meta property="og:description" content="' + "a" * 900 + '" />'
     assert len(extract_threads_post(html, max_chars=100)) == 100
+
+
+def test_the_plain_description_tag_does_not_win_when_it_comes_first():
+    """The page carries three description tags: og:description (the post),
+    a shorter plain `description`, and `twitter:description`. Matching the loose
+    `(?:og:)?description` form passes on the saved fixture only because
+    og:description happens to be first there — with the order reversed it would
+    return the 152-char blurb as the vacancy. Pin the specific tag."""
+    html = (
+        '<meta name="description" content="Ищу Full Stack Developer, короткий блурб" />'
+        '<meta name="twitter:description" content="Ищу Full Stack Developer, средний блурб" />'
+        '<meta property="og:description" content="Ищу Full Stack Developer, полный текст поста" />'
+    )
+    assert extract_threads_post(html) == "Ищу Full Stack Developer, полный текст поста"
