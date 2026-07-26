@@ -11,7 +11,9 @@ reverted). So `_FULL` exercises the model path and `_GLUED` exercises the rule
 path; using `_FULL` for the rule path would assert a detection that cannot
 happen.
 """
-from app.application.resolve_threads_lead import resolve_threads_lead
+from app.application.resolve_threads_lead import (
+    REVIEW_MODEL, REVIEW_UNCUED, resolve_threads_lead,
+)
 from app.domain.lead import STATUS_NEW, Lead
 
 _URL = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
@@ -251,7 +253,7 @@ def test_a_model_answer_that_fails_validation_falls_back_to_the_dm():
         llm=lambda text: '{"platform": "telegram", "target": "@totally_made_up"}')
     assert (out.platform, out.target) == ("threads", "@lnkrnchk")
     assert repo.resolved[0][1] == "threads"
-    assert from_model is False, "отброшенный ответ модели — это не контакт от модели"
+    assert from_model == "", "отброшенный ответ модели — это не контакт, требующий проверки"
 
 
 def test_the_model_cannot_hand_back_the_authors_handle_as_telegram():
@@ -275,33 +277,154 @@ def test_the_model_still_runs_after_the_rules_hit_only_the_author():
     assert (out.platform, out.target) == ("telegram", "@hiring_acme")
 
 
-# --- where the contact came from ------------------------------------------
-# The send loop has to tell the two apart without re-parsing the note: an
-# unattended run must not send a contact no human has read (send_plan.hold_reason).
+# --- which contacts need a human ------------------------------------------
+# The send loop has to tell these apart without re-parsing the note: an unattended
+# run must not send a contact nobody has read (send_plan.hold_reason).
 
-def test_a_rules_contact_is_not_flagged_as_the_models():
-    out, from_model = resolve_threads_lead(_lead(), FakeRepo(),
-                                           render=lambda url: _GLUED)
-    assert out.platform == "telegram" and from_model is False
-
-
-def test_a_model_contact_is_flagged():
-    out, from_model = resolve_threads_lead(_lead(), FakeRepo(),
-                                           render=lambda url: _FULL,
-                                           llm=lambda text: _FOUND)
-    assert out.platform == "telegram" and from_model is True
+def test_a_cued_rules_contact_needs_no_review():
+    out, review = resolve_threads_lead(_lead(), FakeRepo(),
+                                       render=lambda url: _GLUED)
+    assert out.platform == "telegram" and review == ""
 
 
-def test_the_dm_fallback_is_not_a_model_contact():
-    out, from_model = resolve_threads_lead(
+def test_a_model_contact_needs_review():
+    out, review = resolve_threads_lead(_lead(), FakeRepo(),
+                                       render=lambda url: _FULL,
+                                       llm=lambda text: _FOUND)
+    assert out.platform == "telegram" and review == REVIEW_MODEL
+
+
+def test_the_dm_fallback_needs_no_review():
+    out, review = resolve_threads_lead(
         _lead(), FakeRepo(),
         render=lambda url: "Ищем разработчика, пишите в комментарии.")
-    assert out.platform == "threads" and from_model is False
+    assert out.platform == "threads" and review == ""
 
 
-def test_an_unresolved_lead_is_not_a_model_contact():
+def test_an_unresolved_lead_needs_no_review():
     """Both untouched paths: an unreadable thread and a non-threads lead."""
     repo = FakeRepo()
-    assert resolve_threads_lead(_lead(), repo, render=lambda url: "")[1] is False
+    assert resolve_threads_lead(_lead(), repo, render=lambda url: "")[1] == ""
     assert resolve_threads_lead(_lead(platform="hh"), repo,
-                                render=lambda url: _FULL)[1] is False
+                                render=lambda url: _FULL)[1] == ""
+
+
+# --- confidence: a bare @mention is not automatically a contact ------------
+# detect_contact takes the FIRST @handle anywhere in the text. Over a URL (all the
+# intake ever feeds it) that is safe; over a whole rendered thread it points at
+# strangers. These are the exact texts that motivated the rule.
+
+def test_a_company_mention_in_prose_is_not_auto_sent():
+    repo = FakeRepo()
+    text = "Ищем разработчика в @acmecorp. Пишите в комментарии."
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("telegram", "@acmecorp")
+    assert review == REVIEW_UNCUED, "без подсказки такой контакт нельзя слать молча"
+    assert REVIEW_UNCUED in repo.resolved[0][4] and _URL in repo.resolved[0][4]
+
+
+def test_a_thanks_mention_loses_to_the_real_email_further_down():
+    """The mention is stepped over, not just flagged — the email is the contact."""
+    repo = FakeRepo()
+    text = "Спасибо @kollega за репост! Ищем разработчика. Резюме на hr@acme.io"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("email", "hr@acme.io")
+    assert review == ""
+
+
+def test_a_stack_mention_is_not_a_contact():
+    repo = FakeRepo()
+    text = "Стек: @nestjs и @supabase. Отклики в комментарии."
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.target == "@nestjs" and review == REVIEW_UNCUED
+
+
+def test_a_cued_mention_still_auto_sends():
+    """The cue is what separates a contact from a mention, and genuine contact
+    lines carry one — usually two."""
+    repo = FakeRepo()
+    text = "Ищем разработчика. Для отклика пишите в Telegram: @hiring_acme"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("telegram", "@hiring_acme")
+    assert review == ""
+
+
+def test_an_uncued_tme_link_still_auto_sends():
+    """Shape decides: nobody writes a t.me link by accident."""
+    repo = FakeRepo()
+    text = "Стек @nestjs. Наш канал https://t.me/acmejobs"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("telegram", "https://t.me/acmejobs")
+    assert review == ""
+
+
+def test_an_uncued_email_still_auto_sends():
+    repo = FakeRepo()
+    text = "Ищем разработчика в Acme. hr@acme.io"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("email", "hr@acme.io")
+    assert review == ""
+
+
+def test_an_uncued_hh_link_still_auto_sends():
+    repo = FakeRepo()
+    text = "Ищем разработчика. https://hh.ru/vacancy/135297431"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.platform == "hh" and review == ""
+
+
+def test_a_cue_on_another_line_does_not_vouch_for_a_mention():
+    """Line-scoped: "пишите" two lines up says nothing about this mention."""
+    repo = FakeRepo()
+    text = "Пишите нам!\nМы работаем со стеком @supabase каждый день."
+    _, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert review == REVIEW_UNCUED
+
+
+def test_a_far_away_cue_on_the_same_line_does_not_vouch_either():
+    repo = FakeRepo()
+    text = "Пишите нам, ищем разработчика, стек @nestjs"
+    _, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert review == REVIEW_UNCUED
+
+
+# --- the author guard keeps the rest of the detection ----------------------
+
+def test_masking_the_author_keeps_a_good_email_behind_it():
+    """Dropping the whole detection lost this email to the DM fallback."""
+    repo = FakeRepo()
+    text = "Я @lnkrnchk, ищем разработчика. Резюме на hr@acme.io"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("email", "hr@acme.io")
+    assert review == ""
+
+
+def test_the_author_alone_still_falls_back_to_the_dm():
+    repo = FakeRepo()
+    text = "Ищем разработчика. Пишите мне @lnkrnchk, отвечаю быстро."
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("threads", "@lnkrnchk")
+    assert review == ""
+
+
+def test_known_limit_a_cued_brand_mention_is_still_auto_sent():
+    """DOCUMENTS A LIMIT, does not endorse it. The cue rule tests whether an apply
+    word sits next to the handle — not whether the handle is a Telegram account.
+    "Откликнуться можно у @acmecorp в шапке профиля" means "look at their Threads
+    profile", but it reads as cued, so it goes out as a Telegram DM to whoever owns
+    that name there. Threads and Telegram share the `@nick` shape and namespace, so
+    no text rule closes this; it needs the handle checked against Telegram itself.
+    If a later change starts flagging this, that is an improvement — update the test.
+    """
+    repo = FakeRepo()
+    text = "Откликнуться можно у @acmecorp в шапке профиля"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("telegram", "@acmecorp")
+    assert review == ""
+
+
+def test_masking_does_not_reach_inside_an_address():
+    """"@nick" is masked; "hr@nick.com" is left alone."""
+    from app.application.resolve_threads_lead import _mask_handle
+    assert _mask_handle("пишите @lnkrnchk или hr@lnkrnchk.com", "@lnkrnchk") == \
+        "пишите lnkrnchk или hr@lnkrnchk.com"

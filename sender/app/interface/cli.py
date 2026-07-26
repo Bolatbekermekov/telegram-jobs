@@ -18,7 +18,7 @@ from app.application.generate_message import (
 )
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
-from app.application.send_plan import hold_reason, skip_reason
+from app.application.send_plan import has_placeholder, hold_reason, skip_reason
 from app.domain.lead import (
     STATUS_FAILED,
     STATUS_MANUAL,
@@ -132,7 +132,7 @@ def run() -> None:
                 from app.infrastructure.threads_thread import render_thread
                 print("Читаю тред Threads...")
                 thread_url = lead.target      # resolving replaces it with the contact
-                lead, contact_from_model = resolve_threads_lead(
+                lead, review = resolve_threads_lead(
                     lead, repo,
                     render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
                     # The writing model, not the cheap one: once per lead, and a
@@ -146,16 +146,28 @@ def run() -> None:
                 else:
                     print(f"   контакта в треде нет, буду писать автору: {lead.target}")
 
-                hold = hold_reason(config.AUTO_SEND,
-                                   contact_from_model=contact_from_model,
+                hold = hold_reason(config.AUTO_SEND, review=review,
                                    contact=f"{lead.platform} → {lead.target}",
                                    source_url=thread_url)
                 if hold is not None:
                     # Checked before the channel opens and before the message is
                     # generated — nothing to generate for a lead we won't send.
+                    # Also before the rate-limit re-test below: the hold has to be
+                    # written now, because the row is already rewritten to an
+                    # ordinary platform and the next run would raise no flag.
                     status, note = hold
                     repo.mark_status(lead, status, note=note)
                     print(f"✋ Лид #{lead.lead_id}: {note}")
+                    continue
+
+                if platform in rate_limited:
+                    # Re-tested after resolving: the check at the top of the loop
+                    # saw `threads`, and this lead is now telegram/email/hh. In a
+                    # loop built around ban avoidance, a resolved lead must not be
+                    # the one thing that walks past the guard. No status written —
+                    # same as the guard above, it retries next run.
+                    print(f"⏭  Лид #{lead.lead_id}: платформа '{platform}' "
+                          "ограничила нас в этом прогоне — оставляю на следующий.")
                     continue
 
             try:
@@ -200,15 +212,13 @@ def run() -> None:
             attachment = config.CV_PATH if config.ATTACH_CV else None
             content = format_for_channel(channel, body, subject, attachment)
 
-            hold = hold_reason(config.AUTO_SEND, body=content.body,
-                               contact=f"{platform} → {lead.target}")
-            if hold is not None:
-                # Same rule as the model-contact hold above, and what the README
-                # has always promised for auto mode: a template must not reach a
-                # live recruiter just because nobody was there to read it.
-                status, note = hold
-                repo.mark_status(lead, status, note=note)
-                print(f"✋ Лид #{lead.lead_id}: {note}")
+            if config.AUTO_SEND and has_placeholder(content.body):
+                # What the README has always promised for auto mode: a template
+                # must not reach a live recruiter just because nobody was there to
+                # read it. NO status — unlike a contact, the body is regenerated
+                # from scratch every run, so `new` self-heals for free next time.
+                print(f"⏭  Лид #{lead.lead_id}: в тексте остался [плейсхолдер] — "
+                      "оставляю 'new', перегенерирую в следующий прогон.")
                 continue
 
             if not config.AUTO_SEND:
