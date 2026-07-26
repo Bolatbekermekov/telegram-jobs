@@ -12,7 +12,7 @@ path; using `_FULL` for the rule path would assert a detection that cannot
 happen.
 """
 from app.application.resolve_threads_lead import (
-    REVIEW_MODEL, REVIEW_UNCUED, resolve_threads_lead,
+    REVIEW_AMBIGUOUS, REVIEW_MODEL, REVIEW_UNCUED, resolve_threads_lead,
 )
 from app.domain.lead import STATUS_NEW, Lead
 
@@ -405,6 +405,145 @@ def test_the_author_alone_still_falls_back_to_the_dm():
     out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
     assert (out.platform, out.target) == ("threads", "@lnkrnchk")
     assert review == ""
+
+
+# --- cues across lines ----------------------------------------------------
+# threads_post.post_body joins every leaf span with "\n", so a self-reply whose
+# whole content is the contact lands on its own line NECESSARILY. Measured on
+# Task 5's captured spans: 3 of 3 contact spans are own-line, 0 of 3 put the cue
+# on the handle's own line. A line-scoped rule parked all of these.
+
+def test_a_cue_ending_the_previous_line_vouches():
+    repo = FakeRepo()
+    out, review = resolve_threads_lead(_lead(), repo,
+                                       render=lambda url: "Отклики:\n@hiring_acme")
+    assert (out.platform, out.target) == ("telegram", "@hiring_acme")
+    assert review == ""
+
+
+def test_a_cue_two_lines_up_does_not_vouch_but_the_line_above_does():
+    repo = FakeRepo()
+    text = "Ищем разработчика.\nРезюме в телеграм:\n@hiring_acme"
+    _, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert review == ""
+
+
+def test_a_blank_line_between_the_cue_and_the_handle_is_stepped_over():
+    repo = FakeRepo()
+    text = "Что важно: React, Node\n\nКонтакты:\n@hiring_acme"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.platform, out.target) == ("telegram", "@hiring_acme")
+    assert review == ""
+
+
+def test_the_captured_dm_me_span_shape_auto_sends():
+    """Verbatim from test_threads_post: post_body(["1 дн.","DM me:","@acme_hr","1"])."""
+    repo = FakeRepo()
+    out, review = resolve_threads_lead(_lead(), repo,
+                                       render=lambda url: "DM me:\n@acme_hr")
+    assert (out.platform, out.target) == ("telegram", "@acme_hr")
+    assert review == ""
+
+
+def test_a_cue_opening_the_next_line_vouches():
+    """The other captured shape: post_body(...) == "@acme_hr\\nпишите в личку"."""
+    repo = FakeRepo()
+    out, review = resolve_threads_lead(_lead(), repo,
+                                       render=lambda url: "@acme_hr\nпишите в личку")
+    assert (out.platform, out.target) == ("telegram", "@acme_hr")
+    assert review == ""
+
+
+def test_a_neighbouring_cue_does_not_vouch_when_the_handle_shares_its_line():
+    """The gate on the cross-line rule. Without it "Стек: @nestjs\\nОтклики в
+    комментарии" would go out to a framework's account."""
+    repo = FakeRepo()
+    text = "Стек: @nestjs\nОтклики в комментарии."
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.target == "@nestjs" and review == REVIEW_UNCUED
+
+
+def test_a_lone_mention_with_no_cue_on_either_side_is_still_held():
+    repo = FakeRepo()
+    text = "@nestjs\n\nИщем разработчика на этом стеке"
+    _, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert review == REVIEW_UNCUED
+
+
+# --- a handle that is really a domain --------------------------------------
+
+def test_a_handle_glued_to_a_tld_is_not_a_telegram_contact():
+    """"Резюме на hr @acmecorp.com": _HANDLE_RE stops at the dot and the email rule
+    never fires across the space, so the cue would have certified "@acmecorp"."""
+    repo = FakeRepo()
+    out, review = resolve_threads_lead(_lead(), repo,
+                                       render=lambda url: "Резюме на hr @acmecorp.com")
+    assert out.target != "@acmecorp"
+    assert out.platform == "threads"          # stepped over, nothing else found
+
+
+def test_a_short_domain_tail_is_caught_too():
+    repo = FakeRepo()
+    out, _ = resolve_threads_lead(_lead(), repo,
+                                  render=lambda url: "CV на jobs @acme.io")
+    assert out.target != "@acme"
+
+
+def test_stepping_over_a_domain_tail_lets_the_model_recover_the_address():
+    """Why it is stepped over rather than held: the address is right there, and the
+    model reads the spaced form the rules cannot."""
+    repo = FakeRepo()
+    out, review = resolve_threads_lead(
+        _lead(), repo, render=lambda url: "Резюме на hr @acmecorp.com",
+        llm=lambda t: '{"platform": "email", "target": "hr@acmecorp.com"}')
+    assert (out.platform, out.target) == ("email", "hr@acmecorp.com")
+    assert review == REVIEW_MODEL
+
+
+# --- two plausible contacts: decline to pick -------------------------------
+
+def test_a_cued_mention_competing_with_an_email_is_held():
+    """No text rule separates "the person who reviewed my CV" from "the person to
+    send it to", so this declines to guess instead of guessing."""
+    repo = FakeRepo()
+    text = "Резюме смотрел @kollega, он рекомендовал; hr@acme.io"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert out.target == "@kollega"
+    assert review == REVIEW_AMBIGUOUS
+
+
+def test_a_cued_mention_with_nothing_competing_still_auto_sends():
+    """The narrow case stays automatic — that is the point of the hold being narrow."""
+    repo = FakeRepo()
+    text = "Ищем разработчика. Для отклика пишите в Telegram: @hiring_acme"
+    _, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert review == ""
+
+
+def test_another_bare_mention_is_not_competition():
+    """More ambiguity of the same kind is not an unambiguous alternative."""
+    repo = FakeRepo()
+    text = "Пишите нам: @hr_acme. Стек @nestjs"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.target, review) == ("@hr_acme", "")
+
+
+def test_known_limit_the_ambiguity_hold_is_one_directional():
+    """DOCUMENTS A LIMIT. The hold fires when a cued MENTION is selected and
+    something unambiguous competes. The mirror image does not: detect_contact
+    ranks t.me above bare handles, so here the link is selected and the cued
+    mention never gets a say — no hold, and the outreach goes to the channel.
+
+    Left as-is deliberately. The harm class differs: the ambiguity hold exists to
+    stop a message reaching a BYSTANDER ("@kollega, who reviewed my CV"), whereas
+    both candidates here are contacts the author published for being contacted
+    through. Sending to the author's email or channel instead of their preferred
+    Telegram handle is a worse guess, not a wrong recipient.
+    """
+    repo = FakeRepo()
+    text = "Пишите @hr_acme\nили в канал https://t.me/acmejobs"
+    out, review = resolve_threads_lead(_lead(), repo, render=lambda url: text)
+    assert (out.target, review) == ("https://t.me/acmejobs", "")
 
 
 def test_known_limit_a_cued_brand_mention_is_still_auto_sent():

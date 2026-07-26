@@ -25,10 +25,18 @@ So a detection carries a confidence, decided by SHAPE:
 
   * `t.me/…`, an email, a LinkedIn/hh/Wellfound URL — unambiguous. Nobody writes
     one of those by accident, so these send as they always have.
-  * a bare `@handle` — ambiguous. Trusted only when an apply cue sits just before
-    it on the same line ("Резюме в Telegram: @nick"). Otherwise the detection is
-    kept, but flagged for review, which routes it exactly like a model-proposed
-    contact: held under AUTO_SEND, surfaced loudly when a human is watching.
+  * a bare `@handle` — ambiguous. Trusted only when an apply cue vouches for it,
+    either inline ("Резюме в Telegram: @nick") or across the line break that
+    `post_body` necessarily produces for a contact in its own span ("Отклики:\n
+    @nick"). Otherwise the detection is kept, but flagged for review, which routes
+    it exactly like a model-proposed contact: held under AUTO_SEND, surfaced
+    loudly when a human is watching.
+  * an "@handle" glued to a TLD ("hr @acme.com") — not a Telegram target at all.
+    Telegram usernames cannot contain a dot, so this is a domain tail; it is
+    stepped over so the address itself can still be found.
+  * a cued handle WITH an email or link competing elsewhere in the post — two
+    plausible contacts, and no text rule separates "who reviewed my CV" from "who
+    to send it to". Flagged rather than picked.
 
 `contact.py:44-49` predicted this rule's shape and its home ("a contextual one
 applied in the resolver, glue only where a telegram/тг cue sits just before it");
@@ -44,6 +52,8 @@ from app.infrastructure.threads_thread import author_from_url
 # Why a contact needs a human before it is sent. "" = it does not.
 REVIEW_MODEL = "контакт предложен моделью, а не правилами — нужна проверка человеком"
 REVIEW_UNCUED = "@-упоминание без подсказки на отклик — нужна проверка человеком"
+REVIEW_AMBIGUOUS = ("в тексте и @-упоминание, и однозначный контакт — "
+                    "нужна проверка человеком")
 
 # An apply cue: either WHERE to write ("Telegram", "тг", "в личку") or WHAT to do
 # ("для отклика", "резюме", "присылайте"). Stems, so morphology comes free —
@@ -69,25 +79,111 @@ _MAX_MENTION_SKIPS = 5
 
 
 def mention_is_cued(text: str, handle: str) -> bool:
-    """True when an apply cue sits just before `handle` on its own line.
+    """True when an apply cue vouches for `handle`.
 
-    Line-scoped on purpose: a cue two sentences up, on another line, says nothing
-    about this mention.
+    Two shapes, because a rendered thread has two. `threads_post.post_body` joins
+    every leaf span with "\\n", so a self-reply whose whole content is the contact
+    lands on a line of its own NECESSARILY — measured on Task 5's captured spans,
+    3 of 3 contact spans are own-line and 0 of 3 put the cue on the handle's line:
+
+        ["1 дн.", "DM me:", "@acme_hr", "1"]              -> "DM me:\\n@acme_hr"
+        ["1 дн.", "CV:", "hr@acme.com", "3"]              -> "CV:\\nhr@acme.com"
+        ["hiring", "1 дн.", "@acme_hr", "пишите в личку"] -> "@acme_hr\\nпишите в личку"
+
+    So:
+      (a) inline — a cue ends within `_CUE_WINDOW` before the "@" on the same line;
+      (b) own-line — the handle IS the line, and the previous non-empty line ends
+          with a cue, or the next non-empty line starts with one.
+
+    (b) is gated on the handle being alone on its line on purpose. Without that
+    gate, "Стек: @nestjs\\nОтклики в комментарии" would read as cued and go out to a
+    framework's account — the exact class this rule exists to catch.
     """
     nick = (handle or "").lstrip("@").strip()
     if not nick:
         return False
     at_re = re.compile(r"@\s*" + re.escape(nick) + r"\b", re.IGNORECASE)
-    for line in (text or "").splitlines():
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
         for m in at_re.finditer(line):
             ends = [c.end() for c in _CUE_RE.finditer(line[:m.start()])]
             if ends and m.start() - max(ends) <= _CUE_WINDOW:
+                return True
+            if _is_lone_mention(line, m) and (
+                    _cue_ends(_neighbour(lines, i, -1))
+                    or _cue_starts(_neighbour(lines, i, +1))):
                 return True
     return False
 
 
 def _same_handle(target: str, author: str) -> bool:
     return (target or "").strip().lstrip("@").lower() == (author or "").lstrip("@").lower()
+
+
+def _is_lone_mention(line: str, m: re.Match) -> bool:
+    """True when the match is the whole line, bar whitespace and trailing marks."""
+    return not line[:m.start()].strip() and not line[m.end():].strip(" \t.,;:!—-")
+
+
+def _neighbour(lines: list[str], i: int, step: int) -> str:
+    """The nearest non-empty line in direction `step`, or ""."""
+    j = i + step
+    while 0 <= j < len(lines):
+        if lines[j].strip():
+            return lines[j]
+        j += step
+    return ""
+
+
+def _cue_ends(line: str) -> bool:
+    """True when a cue sits at the END of `line` ("Отклики:", "DM me:")."""
+    ends = [c.end() for c in _CUE_RE.finditer(line)]
+    return bool(ends) and len(line.rstrip()) - max(ends) <= _CUE_WINDOW
+
+
+def _cue_starts(line: str) -> bool:
+    """True when a cue opens `line` ("пишите в личку")."""
+    m = _CUE_RE.search(line)
+    return m is not None and m.start() <= _CUE_WINDOW
+
+
+def _is_bare_mention(contact) -> bool:
+    """A Telegram hit that is an "@handle" rather than a t.me link."""
+    return contact.platform == "telegram" and contact.target.startswith("@")
+
+
+def _is_domain_tail(text: str, handle: str) -> bool:
+    """True when this "@handle" is really the middle of an address.
+
+    "Резюме на hr @acmecorp.com" hands `_HANDLE_RE` a clean "@acmecorp", because
+    `\\b` ends the run at the dot and the email rule never fires across the space.
+    A Telegram username cannot contain a dot, so "@name.tld" is always a domain
+    tail or a Threads handle — never a Telegram target. This is the very shape
+    `contact.py:33-36` records as the reason the `@\\s?` variant was reverted.
+    """
+    nick = (handle or "").lstrip("@").strip()
+    if not nick:
+        return False
+    return re.search(rf"(?:^|\s)@\s*{re.escape(nick)}\.[A-Za-z]{{2,}}",
+                     text or "", re.IGNORECASE) is not None
+
+
+def _has_unambiguous(text: str, handle: str, detect) -> bool:
+    """True when something of unmistakable shape competes with this mention.
+
+    An email, a t.me link or a platform URL elsewhere in the post. Bare mentions
+    are masked out along the way — another "@nick" is not competition, it is more
+    of the same ambiguity.
+    """
+    probe = _mask_handle(text, handle)
+    for _ in range(_MAX_MENTION_SKIPS):
+        found = detect(probe)
+        if found is None:
+            return False
+        if not _is_bare_mention(found):
+            return True
+        probe = _mask_handle(probe, found.target)
+    return False
 
 
 def _mask_handle(text: str, handle: str) -> str:
@@ -118,8 +214,7 @@ def _route(text, author, detect, llm):
     # wins over "Спасибо @kollega за репост". The first uncued mention is kept as
     # the fallback: the detection is not thrown away, only demoted.
     for _ in range(_MAX_MENTION_SKIPS):
-        if contact is None or contact.platform != "telegram" \
-                or not contact.target.startswith("@"):
+        if contact is None or not _is_bare_mention(contact):
             break                       # nothing, or an unambiguous shape
         if author and _same_handle(contact.target, author):
             # The author's own Threads handle is NOT a Telegram username. When they
@@ -131,6 +226,12 @@ def _route(text, author, detect, llm):
             # lives here, where the author IS known. Masked rather than dropped:
             # "Я @lnkrnchk, ищем разработчика. Резюме на hr@acme.io" carries a
             # perfectly good deterministic email behind it.
+            pass
+        elif _is_domain_tail(scan, contact.target):
+            # "Резюме на hr @acmecorp.com" — a domain, not a handle. Never kept as
+            # a fallback: it is definitively not a Telegram target, so stepping
+            # over it lets the address itself be recovered (by a later rule, or by
+            # the model, which reads the spaced form fine).
             pass
         elif mention_is_cued(scan, contact.target):
             break                       # a cue marks this one as the contact
@@ -153,10 +254,16 @@ def _route(text, author, detect, llm):
                 contact = None
             if contact is not None:
                 review = REVIEW_MODEL
-    elif contact.platform == "telegram" and contact.target.startswith("@") \
-            and not mention_is_cued(scan, contact.target):
-        # Only reachable by running out of skips in a post full of mentions.
-        contact, review = (uncued or contact), REVIEW_UNCUED
+    elif _is_bare_mention(contact):
+        if not mention_is_cued(scan, contact.target):
+            # Only reachable by running out of skips in a post full of mentions.
+            contact, review = (uncued or contact), REVIEW_UNCUED
+        elif _has_unambiguous(scan, contact.target, detect):
+            # A cued mention AND an email/link elsewhere. No text rule separates
+            # "the person who reviewed my CV" from "the person to send it to", so
+            # this declines to guess rather than guessing — which is what the hold
+            # is for. A cued mention with nothing competing still goes out.
+            review = REVIEW_AMBIGUOUS
 
     if contact is None:
         # Nothing to apply to but the author — the DM fallback.
