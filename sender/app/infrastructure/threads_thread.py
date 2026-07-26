@@ -14,15 +14,6 @@ DM fallback) touches the saved session.
 DOM interaction is isolated here on purpose, the same way channels/linkedin.py
 isolates its selectors: they drift. The decision of what IS the vacancy is pure
 and lives in domain/threads_post.py.
-
-Known limitation, measured 2026-07-26 and NOT fixed here: a post is found by
-climbing from its author link to the nearest ancestor whose text runs past 40
-characters, so a post that never gets there is skipped outright. The climb plateaus
-rather than growing — a 21-character reply measured [0,0,0,21,21,21] over its six
-hops — so allowing more hops does not help; the threshold itself is what would have
-to change, and picking a smaller container wrongly is worse than missing a terse
-post. Cost: a self-reply of about 25 characters or less is lost, which matters when
-that reply is the contact («тг: @nick»). Fixing it needs its own measurement pass.
 """
 import re
 
@@ -43,12 +34,43 @@ _GOTO_TIMEOUT_MS = 30000
 #
 #  * every post carries an author link `a[href^="/@"]` -> that is the handle, and it
 #    is locale-independent (unlike the «Автор»/"Author" badge);
-#  * a post block = the nearest ancestor of that link holding real text;
-#  * the whole-thread wrapper matches too (it starts with «Ветка … просмотров»), so
-#    any block that CONTAINS another block is dropped;
+#  * a post block = `a.closest('[data-pressable-container]')`. Threads marks every
+#    post card with that attribute, exactly one per card: measured on the target
+#    thread, 10 containers for 10 posts, none nested; on a profile feed, 16 for
+#    15 posts plus 1 quoted card. The whole-thread wrapper («Ветка … просмотров»)
+#    is NOT a pressable container, so it can no longer be picked up at all;
+#  * quote posts DO nest one card inside another. The outer card is the author's own
+#    post and the inner one is what they quoted, so any block CONTAINED by another
+#    block is dropped. Measured on @mosseri's feed, keeping the inner card instead
+#    returned «@zuck» with an empty body and lost mosseri's own text entirely;
 #  * the body sits in `span[dir="auto"]`, split one span per paragraph. Taking only
 #    the longest span drops the opening paragraphs, so every leaf span is collected
 #    in DOM order; spans inside the author link are skipped (they are the handle).
+#
+# NOT a length threshold, and do not reintroduce one. The first version climbed to
+# the nearest ancestor whose innerText ran past 40 characters, which was only ever a
+# crude way of stepping over the header row — it was never a property of a post, and
+# it dropped short posts outright and silently. Measured hop by hop from the avatar
+# link, innerText length per hop:
+#
+#     /@lnkrnchk    [0, 0, 0, 508]         -> found
+#     /@khamartdil  [0, 0, 0, 21, 21, 21]  -> never found («Лучшие!»)
+#     /@maxlanies   [0, 0, 0, 22, 22, 22]  -> never found («Покажешь?»)
+#
+# The climb PLATEAUS at the post, so allowing more hops would not have helped; the
+# threshold itself was the bug, and a terse self-reply is exactly the shape a contact
+# arrives in («тг: @nick»). Lowering the threshold does not work either, and neither
+# does the obvious structural substitute «nearest ancestor that holds a body span»:
+# that ancestor is the HEADER row, measured at 18 / 27 / 13 characters for these
+# posts («lnkrnchk\nhiring\n1d»), and since the header sits INSIDE the post it would
+# win the containment filter and replace every body with its own chrome.
+#
+# The failure mode this trades into: if Meta renames the attribute, `closest` returns
+# null for every anchor, no block is emitted and resolve_thread returns "" — the lead
+# keeps the 480 chars the intake already stored. Verified by stripping the attribute
+# from the live page: [] blocks, "" text, no exception. Every lead degrading at once
+# is easier to notice than one post quietly missing from one thread, but nothing
+# offline can catch it; the live canary in tests/test_threads_thread.py is what does.
 #
 # Two things are pruned from the DOM before anything is read, because no rule on the
 # resulting TEXT can undo them:
@@ -93,17 +115,13 @@ _READ_BLOCKS_JS = """
 
   const blocks = [], seen = new Set();
   for (const a of document.querySelectorAll('a[href^="/@"]')) {
-    let el = a, hops = 0, b = null;
-    while (el && hops < 6) {
-      if ((el.innerText || '').trim().length > 40) { b = el; break; }
-      el = el.parentElement; hops++;
-    }
+    const b = a.closest('[data-pressable-container]');
     if (b && !seen.has(b)) {
       seen.add(b);
       blocks.push({ el: b, handle: a.getAttribute('href').split('/')[1] });
     }
   }
-  const kept = blocks.filter(x => !blocks.some(y => y !== x && x.el.contains(y.el)));
+  const kept = blocks.filter(x => !blocks.some(y => y !== x && y.el.contains(x.el)));
   return kept.map(({ el, handle }) => {
     const spans = [...el.querySelectorAll('span[dir="auto"]')].filter(s =>
       !s.querySelector('span[dir="auto"]')

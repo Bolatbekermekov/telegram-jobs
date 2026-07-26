@@ -34,12 +34,19 @@ _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECA
 # live Threads post) was tried here and reverted: it also matches the "at" of
 # "hr @ acme.com" and "Role @ Company", fabricating an "@acme"/"@Company" target
 # while the real contact sat later in the same text.
-# Threads' own LINKIFIED mentions do reach this rule glued: the DOM reader unwraps
-# the mention anchor before reading the text (infrastructure/threads_thread.py),
-# which is what stops innerText tearing "@nick" onto a line of its own. An at-sign
-# the AUTHOR typed with a space after it is a different thing — measured 2026-07-26,
-# that space is in the post as Threads stores it, so nothing upstream can remove it
-# and such a handle stays undetected here. Open decision, not papered over.
+# Threads' own LINKIFIED mentions do reach this rule glued, and that is built and
+# verified against the live page: the DOM reader unwraps the mention anchor before
+# reading the text (infrastructure/threads_thread.py), which is what stops innerText
+# tearing "@nick" onto a line of its own.
+# An at-sign the AUTHOR typed with a space after it is a different thing and is NOT
+# covered. Measured 2026-07-26: that space is in the post as Threads stores it
+# (its own payload has linkified_in_app_url: null precisely because of it), so no
+# reader-side fix exists — the DOM is faithful, there is nothing to unglue. Closing
+# it needs a TEXT-level rule, and the only safe shape is a contextual one applied in
+# the resolver — glue "@ nick" only where a telegram/тг cue sits just before it —
+# never a blanket `@\s+` here, which is the revert above. That rule is deliberately
+# unwritten pending a human decision, so such a handle stays undetected and
+# _HANDLE_RE stays an exact copy of the intake's.
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
