@@ -1,4 +1,6 @@
-from app.domain.contact import Contact, detect_contact
+from app.domain.contact import (
+    Contact, canonical_threads_url, detect_contact, threads_author,
+)
 
 
 def test_telegram_handle():
@@ -120,10 +122,6 @@ def test_other_platforms_are_not_touched():
 
 # --- Threads --------------------------------------------------------------
 
-from app.domain.contact import (  # noqa: E402
-    canonical_threads_url, threads_author, threads_post_id,
-)
-
 _SHARED = ("https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
            "?xmt=AQG0bheD9uqmoSjOr9bFyIfWrZmjZK8OWTtZ0RjfvAVPAHs981VOMdhda3xuSsAZwsdDgJA"
            "&slof=1")
@@ -147,6 +145,24 @@ def test_threads_net_is_folded_onto_threads_com():
 
 def test_threads_without_scheme_or_www():
     assert detect_contact("threads.com/@lnkrnchk/post/DbL4LxBl6v9").target == _CLEAN
+
+
+def test_a_lookalike_host_is_not_a_threads_link():
+    """Without a left boundary the pattern matched inside "notthreads.com" and
+    canonicalised a threads.com URL that was never sent."""
+    assert detect_contact("https://notthreads.com/@lnkrnchk/post/DbL4LxBl6v9") is None
+
+
+def test_an_uppercase_host_and_a_fragment_are_canonicalised():
+    """Both come off real shares: host case carries no meaning, "#" starts a fragment."""
+    shouty = "HTTPS://WWW.THREADS.COM/@lnkrnchk/post/DbL4LxBl6v9"
+    assert detect_contact(shouty).target == _CLEAN
+    assert detect_contact(f"{_CLEAN}#comments").target == _CLEAN
+
+
+def test_a_threads_profile_without_a_post_is_not_a_lead():
+    """A bare profile link holds no vacancy to read; only posts are leads."""
+    assert detect_contact("https://www.threads.com/@lnkrnchk") is None
 
 
 def test_threads_url_author_is_not_read_as_a_telegram_handle():
@@ -188,6 +204,35 @@ def test_the_author_handle_repeated_still_falls_through():
     assert c.platform == "threads"
 
 
+def test_a_dotted_author_handle_does_not_become_a_truncated_telegram_target():
+    """`\\w{4,}` stops at the dot, so "@ivan.hr" used to yield "@ivan" — a real,
+    unrelated Telegram user. Threads shares Instagram's dotted namespace."""
+    url = "https://www.threads.com/@ivan.hr/post/DbL4LxBl6v9"
+    c = detect_contact(f"вакансия от @ivan.hr {url}")
+    assert c.platform == "threads"
+    assert c.target == url
+
+
+def test_a_dotted_author_does_not_shadow_a_real_handle():
+    url = "https://www.threads.com/@ivan.hr/post/DbL4LxBl6v9"
+    c = detect_contact(f"вакансия от @ivan.hr, пиши @ivan_hr {url}")
+    assert c == Contact("telegram", "@ivan_hr")
+
+
+def test_a_short_first_segment_dotted_author_also_falls_through():
+    """"@hr.recruiter" passed by accident (`hr` fails \\w{4,}); pin it."""
+    url = "https://www.threads.com/@hr.recruiter/post/DbL4LxBl6v9"
+    assert detect_contact(f"вакансия от @hr.recruiter {url}").platform == "threads"
+
+
+def test_a_handle_that_merely_starts_like_the_author_still_wins():
+    """The prefix check must not over-match: @lnkrnchk_hr is a DIFFERENT person
+    from the author @lnkrnchk, so it is a real Telegram contact."""
+    url = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+    c = detect_contact(f"пиши @lnkrnchk_hr {url}")
+    assert c == Contact("telegram", "@lnkrnchk_hr")
+
+
 def test_email_in_the_message_still_beats_a_threads_link():
     c = detect_contact(f"{_CLEAN} резюме на hr@acme.com")
     assert c.platform == "email"
@@ -195,6 +240,5 @@ def test_email_in_the_message_still_beats_a_threads_link():
 
 def test_threads_helpers():
     assert canonical_threads_url(_SHARED) == _CLEAN
-    assert threads_post_id(_SHARED) == "DbL4LxBl6v9"
     assert threads_author(_SHARED) == "@lnkrnchk"
     assert threads_author("https://hh.ru/vacancy/1") == ""

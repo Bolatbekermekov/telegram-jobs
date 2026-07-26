@@ -39,12 +39,19 @@ _WELLFOUND_RE = re.compile(
 # Threads (Meta). Posts live at /@user/post/<id>. threads.net is an alias that
 # 301s to threads.com (verified 2026-07-26: identical bytes), so it is folded onto
 # .com — the sender opens exactly what the sheet holds. The iOS/Android share sheet
-# appends a tracking blob (?xmt=…&slof=1) that is noise for us.
+# appends a tracking blob (?xmt=…&slof=1) that is noise for us. The left boundary
+# keeps the host from matching inside a look-alike one (notthreads.com), which would
+# otherwise be canonicalised into a threads.com URL nobody ever sent.
 _THREADS_HOST = r"(?:www\.)?threads\.(?:com|net)"
 _THREADS_RE = re.compile(
-    rf"(?:https?://)?{_THREADS_HOST}/@[\w.]+/post/[\w-]+\S*", re.IGNORECASE)
+    rf"(?<![\w.-])(?:https?://)?{_THREADS_HOST}/@[\w.]+/post/[\w-]+\S*", re.IGNORECASE)
 _THREADS_PARTS_RE = re.compile(
     rf"^(?:https?://)?{_THREADS_HOST}/@([\w.]+)/post/([\w-]+)", re.IGNORECASE)
+# A Threads handle may contain dots (the namespace is Instagram's), while _HANDLE_RE
+# captures `\w{4,}` and stops at the first one: the author "@ivan.hr" would reach the
+# exemption below as "@ivan". It therefore compares the whole dotted token found at
+# the match position, never the truncation.
+_HANDLE_TOKEN_RE = re.compile(r"[\w.]+")
 
 
 def canonical_threads_url(url: str) -> str:
@@ -53,19 +60,6 @@ def canonical_threads_url(url: str) -> str:
     if not m:
         return url
     return f"https://www.threads.com/@{m.group(1)}/post/{m.group(2)}"
-
-
-def threads_post_id(url: str) -> str:
-    """The post id, which is the post's identity: a wrong @user with a right id
-    still resolves to the same post (verified live 2026-07-26).
-
-    Nothing calls this yet — the intake path has no dedup at all today (dedup lives
-    only in the search path's candidates_repo), and adding it is out of scope. It
-    exists because canonicalisation is the hard half of dedup and doing it here
-    costs nothing.
-    """
-    m = _THREADS_PARTS_RE.match(url)
-    return m.group(2) if m else ""
 
 
 def threads_author(url: str) -> str:
@@ -123,9 +117,15 @@ def detect_contact(text: str) -> Contact | None:
     if m:
         return Contact("telegram", _clean(m.group(0)))
     for m in _HANDLE_RE.finditer(text):
-        handle = "@" + m.group(1)
-        if handle.lower() != author:
-            return Contact("telegram", handle)
+        # Whole-token equality, not the captured handle and not a prefix test: the
+        # capture truncates "@ivan.hr" to "@ivan" (storing which would DM a real
+        # stranger), while a prefix test would swallow "@lnkrnchk_hr", a different
+        # person from the author "@lnkrnchk". A trailing dot is sentence punctuation —
+        # a Threads handle cannot end in one.
+        token = _HANDLE_TOKEN_RE.match(text, m.start(1)).group(0).rstrip(".")
+        if author and token.lower() == author[1:]:
+            continue
+        return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:
         return Contact("email", m.group(0))
