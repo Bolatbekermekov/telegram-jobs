@@ -6,9 +6,19 @@ assert the exact shape of the API call — how many, which cells, which input
 option — not merely that a call happened.
 """
 import pytest
-from gspread.utils import ValueInputOption, rowcol_to_a1
+from gspread.utils import ValueInputOption, a1_range_to_grid_range, rowcol_to_a1
 
-from app.domain.lead import COL_DATE_SENT, COL_MESSAGE, COL_STATUS
+from app.domain.lead import (
+    COL_DATE_SENT,
+    COL_MESSAGE,
+    COL_PLATFORM,
+    COL_STATUS,
+    COL_TARGET,
+    COL_VACANCY,
+    COLUMNS,
+    STATUS_NEW,
+    Lead,
+)
 from app.infrastructure import sheets_repo as sr
 from app.infrastructure.sheets_repo import SheetsRepo, _with_retry
 
@@ -60,6 +70,20 @@ def _repo(ws):
     repo = SheetsRepo.__new__(SheetsRepo)
     repo._ws = ws
     return repo
+
+
+def _lead(row=2, platform="threads",
+          target="https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"):
+    """A real Lead: update_resolved rewrites its row, so the fields matter."""
+    return Lead(row=row, lead_id="7", platform=platform, target=target,
+                vacancy_context="короткий текст", raw_text=target,
+                status=STATUS_NEW)
+
+
+@pytest.fixture
+def fake_ws_repo():
+    ws = _FakeWorksheet()
+    return _repo(ws), ws
 
 
 # --- the assumption the ranged write rests on -------------------------------
@@ -172,3 +196,60 @@ def test_with_retry_returns_the_result_without_sleeping():
     slept = []
     assert _with_retry(lambda: "ok", sleep=slept.append) == "ok"
     assert slept == []
+
+
+# --- resolved threads leads -------------------------------------------------
+
+def test_lead_column_indexes_match_the_header():
+    assert COLUMNS[COL_PLATFORM - 1] == "Платформа"
+    assert COLUMNS[COL_TARGET - 1] == "Источник"
+    assert COLUMNS[COL_VACANCY - 1] == "Вакансия"
+
+
+def test_platform_target_and_vacancy_are_adjacent():
+    """update_resolved writes them as ONE span; if a column is ever inserted
+    between them that span would silently overwrite the wrong cell."""
+    assert COL_TARGET == COL_PLATFORM + 1
+    assert COL_VACANCY == COL_TARGET + 1
+
+
+def test_update_resolved_writes_the_row_in_one_batch(fake_ws_repo):
+    """A threads lead becomes a telegram lead: platform, target and vacancy
+    text must land together or not at all — a half-applied rewrite would leave
+    the lead pointing at a Threads URL with a Telegram platform."""
+    repo, ws = fake_ws_repo
+    lead = _lead(row=5)
+
+    repo.update_resolved(lead, "telegram", "@skyluckwalker",
+                         "Ищу Full Stack Developer", note="резолв из Threads")
+
+    assert ws.calls == 1, "должна быть одна операция записи"
+    (data, kw), = ws.batches
+    assert [d["range"] for d in data] == ["D5:F5", "J5"]
+    assert [d["values"] for d in data] == [
+        [["telegram", "@skyluckwalker", "Ищу Full Stack Developer"]],
+        [["резолв из Threads"]],
+    ]
+    assert kw["value_input_option"] == ValueInputOption.raw
+
+
+def test_update_resolved_without_a_note_writes_only_the_span(fake_ws_repo):
+    repo, ws = fake_ws_repo
+    repo.update_resolved(_lead(row=5), "telegram", "@x", "текст")
+
+    (data, _), = ws.batches
+    assert [d["range"] for d in data] == ["D5:F5"]
+
+
+def test_update_resolved_never_touches_status(fake_ws_repo):
+    """The lead stays `new` — it has not been sent yet, so no written range may
+    cover Статус, not even as part of a wider span."""
+    repo, ws = fake_ws_repo
+    repo.update_resolved(_lead(row=5), "telegram", "@x", "текст", note="n")
+
+    (data, _), = ws.batches
+    status = COL_STATUS - 1                      # grid ranges are 0-based
+    for d in data:
+        span = a1_range_to_grid_range(d["range"])
+        assert not (span["startColumnIndex"] <= status
+                    < span["endColumnIndex"]), d["range"]
