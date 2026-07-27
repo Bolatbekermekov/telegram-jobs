@@ -383,11 +383,14 @@ def test_the_model_recovers_a_contact_the_rules_cannot_see():
 
 
 def test_the_model_is_given_the_thread_text_with_mentions_unmasked():
-    """It has to see "@ skyluckwalker" as written to read it at all."""
+    """The at-signs are the strongest signal that a mention IS a mention, and
+    reading which one is the contact is the whole reason the model is asked. Uses
+    the GLUED form on purpose: with the typed-space form nothing is masked, so this
+    test would pass without testing anything."""
     asked = []
-    resolve_threads_lead(_lead(), FakeRepo(), render=lambda url: _FULL,
+    resolve_threads_lead(_lead(), FakeRepo(), render=lambda url: _GLUED,
                          llm=lambda text: asked.append(text) or _FOUND)
-    assert asked == [_FULL]
+    assert asked == [_GLUED]
 
 
 def test_a_glued_handle_also_goes_through_the_model():
@@ -443,14 +446,34 @@ def test_a_model_answer_that_fails_validation_falls_back_to_the_dm():
 
 # --- what this design still gets wrong ------------------------------------
 
-def test_known_limit_a_tme_channel_beats_a_human_contact():
-    """DOCUMENTS A LIMIT. detect_contact ranks t.me above everything, so a post
-    saying "пишите @hr_acme, или подпишитесь на t.me/acmejobs" resolves to the
-    CHANNEL — the outreach goes to a feed instead of a person. Shape cannot tell a
-    channel link from a personal one; both are `t.me/name`. Bounded by the fact
-    that it is still the author's own published link, not a stranger's.
+def test_known_limit_any_unambiguous_shape_wins_even_a_bystanders():
+    """DOCUMENTS A LIMIT, and states its real breadth.
+
+    Shape decides, and shape cannot say WHOSE. Any unambiguous contact in the
+    thread is taken — a channel link instead of the person who said to write to
+    them, or a third party's address the author merely mentioned. It is NOT
+    bounded to "the author's own published link": every case below points at
+    somebody who is not hiring, and all of them auto-send.
+
+    Not closable in the resolver without either re-ranking `detect_contact` (a
+    reviewed mirror of the intake bot's rules, out of bounds here) or bringing back
+    the text heuristics round 5 deleted. Whose-address is the same semantic
+    question as which-mention, and the model is only asked when the rules find
+    nothing at all.
     """
-    out, review = resolve_threads_lead(
-        _lead(), FakeRepo(),
-        render=lambda url: "Пишите @hr_acme\nили в канал https://t.me/acmejobs")
-    assert (out.target, review) == ("https://t.me/acmejobs", "")
+    def resolved(text):
+        out, review = resolve_threads_lead(_lead(), FakeRepo(),
+                                           render=lambda url: text)
+        return out.platform, out.target, review
+
+    # a channel, where the post says to write to a person
+    assert resolved("Пишите @hr_acme\nили в канал https://t.me/acmejobs") == (
+        "telegram", "https://t.me/acmejobs", "")
+    # a bystander's channel, where applying goes through a form
+    assert resolved("Спасибо @kollega за наводку, его канал t.me/kollega_blog.\n"
+                    "Мы ищем разработчика, отклики через форму на сайте.") == (
+        "telegram", "t.me/kollega_blog", "")
+    # a bystander's LinkedIn — the residual is not a t.me quirk
+    assert resolved("Резюме смотрел @kollega, его профиль linkedin.com/in/kollega. "
+                    "Отклики через форму.") == (
+        "linkedin", "linkedin.com/in/kollega", "")

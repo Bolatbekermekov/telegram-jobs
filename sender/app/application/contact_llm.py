@@ -5,8 +5,16 @@ purpose, because it decides where a message is later sent. That rule is not
 repealed here, it is narrowed — and this module is where the narrowing is
 enforced:
 
-  1. Rules decide first. This is reached only when `detect_contact` returned
-     None, so every pre-existing lead keeps its deterministic path.
+  1. Rules decide first, on what SHAPE decides. This is reached only when the
+     rules found no unambiguous contact — an email, a `t.me/…` link, a platform
+     URL. Every pre-existing lead keeps its deterministic path, because outside
+     Threads prose that is the only kind of contact there is.
+     Narrowed by the human's ruling after four rounds of review: a bare `@handle`
+     in thread prose is NOT a rules contact, so "Для отклика пишите в Telegram:
+     @hiring_acme" reaches this module even though `detect_contact` does return a
+     hit for it. Deciding whether a mention is the apply contact or a bystander
+     («Спасибо @kollega за репост») is semantic, and this is the only component
+     that can read it — which is exactly why the answer is held for a human.
   2. Threads only. The caller is `resolve_threads_lead`; intake, hh, LinkedIn
      and wellfound never touch it.
   3. The model's answer is vetted, not trusted. `parse_contact_response` drops

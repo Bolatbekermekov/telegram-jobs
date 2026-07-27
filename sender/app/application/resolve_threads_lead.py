@@ -40,9 +40,18 @@ What the rules answer is the question they can:
     goes through the five checks in `contact_llm` and carries REVIEW_MODEL, so it
     is held under AUTO_SEND and shown to a human in the default mode.
 
-The cost is deliberate: "Для отклика в Telegram: @hr_acme" no longer auto-sends on
-the rules alone. Under AUTO_SEND=false — the documented default — that is one
-keypress, because the contact is printed before the send prompt.
+The cost is deliberate, and it runs in two directions. A genuine contact line —
+"Для отклика в Telegram: @hr_acme" — no longer auto-sends on the rules alone; under
+AUTO_SEND=false, the documented default, that is one keypress, because the contact
+is printed before the send prompt. The sharper one: because a mention never
+competes, an unambiguous shape wins even when the post says it is the wrong one.
+
+    "Пишите мне @hr_acme. Прошлый работодатель — hr@oldcorp.io,
+     там уже не набирают."          -> auto-sends to hr@oldcorp.io
+
+Shape cannot say whose address it is, and that is the same semantic question as
+which mention is the contact — so this is not fixable by a rule either. It is the
+accepted price of never messaging a bystander on a rule's say-so.
 """
 import re
 from dataclasses import replace
@@ -85,12 +94,16 @@ def _route(text, author, detect, llm):
     # further down the post is a contact, "@kollega" is only a name. Terminates
     # because each pass strictly shrinks the text; the equality check also stops a
     # detector — an injectable seam — that returns a handle the text does not hold.
+    # `scan` is a detection-loop local: `text` must stay untouched, because the
+    # at-signs are the strongest signal that a mention IS a mention and the model
+    # below is asked precisely to read which mention is the contact.
+    scan = text
     while contact is not None and _is_bare_mention(contact):
-        masked = _mask_handle(text, contact.target)
-        if masked == text:
+        masked = _mask_handle(scan, contact.target)
+        if masked == scan:
             break
-        text = masked
-        contact = detect(text)
+        scan = masked
+        contact = detect(scan)
 
     if contact is not None:
         return contact.platform, contact.target, ""
