@@ -48,6 +48,12 @@ _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECA
 # unwritten pending a human decision, so such a handle stays undetected and
 # _HANDLE_RE stays an exact copy of the intake's.
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
+# The capture above is `\w{4,}` and stops at the first dot, so "@maria.hr" arrives at
+# the rule as "@maria" — a different, real user. This yields the WHOLE dotted token at
+# a match position, which is what the rule needs to see to refuse it. (Dots are legal
+# in a Threads/Instagram handle — that namespace is Instagram's — and illegal in a
+# Telegram username, which is the whole basis for refusing.)
+_HANDLE_TOKEN_RE = re.compile(r"[\w.]+")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
 _HH_HOST = r"(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)"
@@ -89,8 +95,24 @@ def detect_contact(text: str) -> Contact | None:
     m = _TME_RE.search(text)
     if m:
         return Contact("telegram", _clean(m.group(0)))
-    m = _HANDLE_RE.search(text)
-    if m:
+    for m in _HANDLE_RE.finditer(text):
+        # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
+        # Telegram target — it is an Instagram/Threads handle, or a period whose space
+        # the writer forgot. _HANDLE_RE captures `\w{4,}` and stops at the dot, so
+        # returning the match would store "@maria": a real, unrelated user nobody
+        # wrote in the thread. Refuse the whole handle and keep going — hence
+        # `finditer`, so a real handle later in the same text still wins. If nothing
+        # else answers, the lead keeps its Threads DM fallback, which is weak but at
+        # least reaches the person who actually posted.
+        # A TRAILING dot is sentence punctuation ("пиши @ivan.") and is stripped
+        # first — that shape is a plain handle and still wins.
+        # The intake's author exemption has no counterpart here on purpose: there is
+        # no Threads rule and no post URL in this copy, so it never had an author to
+        # exempt. Refusing dotted handles is NOT part of that exemption and must stay
+        # mirrored — it is the same rule in both apps.
+        token = _HANDLE_TOKEN_RE.match(text, m.start(1)).group(0).rstrip(".")
+        if "." in token:
+            continue
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:

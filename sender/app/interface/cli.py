@@ -19,6 +19,10 @@ from app.application.generate_message import (
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import (
+    CONFIRM_QUIT,
+    CONFIRM_SEND,
+    CONFIRM_SKIP,
+    confirm_action,
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
@@ -267,15 +271,21 @@ def run() -> None:
                     # generate_body runs fresh every run and the next roll is free.
                     print("⚠️  Остался [плейсхолдер]. Редактора здесь нет: выйди по q "
                           "и запусти прогон заново — текст генерится с нуля.")
-                choice = _prompt("[s]end / [k]skip / [q]uit: ").lower()
-                if choice in ("k", "skip"):
+                action = confirm_action(_prompt("[s]end / [k]skip / [q]uit: "))
+                if action == CONFIRM_SKIP:
                     repo.mark_status(lead, STATUS_SKIPPED)
                     print("⏭  Пропущено.")
                     continue
-                if choice in ("q", "quit"):
+                if action == CONFIRM_QUIT:
                     print("Выход по запросу.")
                     quit_requested = True
                     break
+                if action != CONFIRM_SEND:
+                    # Only an explicit `s` sends — see `confirm_action`. No status:
+                    # the lead stays `new` and the next run offers it again.
+                    print("↩️  Отправка только по 's'. Ничего не отправлено, "
+                          "лид остаётся 'new'.")
+                    continue
 
             result = sender.execute(lead, content)
             if result.ok:

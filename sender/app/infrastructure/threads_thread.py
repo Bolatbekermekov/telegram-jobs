@@ -225,12 +225,20 @@ def load_whole_thread(page) -> int:
     """
     seen = -1
     for _ in range(_SCROLL_ROUNDS):
-        page.evaluate(_SCROLL_JS)
-        page.wait_for_timeout(_SCROLL_SETTLE_MS)
-        n = page.evaluate(_COUNT_JS)
-        # The page is not ours; never trust its shape. A non-int here must end the
-        # loop, not raise: resolve_thread's except would swallow it into "", turning
-        # a scroll that could not be counted into a lead with no vacancy text.
+        # The whole body is guarded, not just the count's shape. Every call here can
+        # raise on a page that is still perfectly readable: Playwright answers an SPA
+        # navigating under us (a login interstitial mid-scroll is the live case) with
+        # "Execution context was destroyed", and that is far likelier than a count of
+        # the wrong type. Breaking degrades to "read what we already have"; letting it
+        # propagate hands resolve_thread's except a "" — a lead with NO vacancy text,
+        # from a page whose read works. The guard below is the same decision for the
+        # count's shape, kept because `break` and `raise` are not the same answer.
+        try:
+            page.evaluate(_SCROLL_JS)
+            page.wait_for_timeout(_SCROLL_SETTLE_MS)
+            n = page.evaluate(_COUNT_JS)
+        except Exception:  # noqa: BLE001 — an unscrolled thread is not an unread one
+            break
         if not isinstance(n, int) or n <= seen:
             break
         seen = n

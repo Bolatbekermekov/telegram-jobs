@@ -178,6 +178,38 @@ def test_load_whole_thread_stops_instead_of_raising_on_an_uncountable_page():
     assert load_whole_thread(page) == 0
 
 
+def _page_whose_scroll_raises(exc=None):
+    """A page that reads fine and cannot be scrolled — the live shape of an SPA
+    navigating under us (a login interstitial reached mid-scroll), which Playwright
+    reports as "Execution context was destroyed"."""
+    page = FakePage()
+    inner = page.evaluate
+
+    def evaluate(script):
+        if "scrollTop" in script:
+            raise exc or RuntimeError("Execution context was destroyed")
+        return inner(script)
+
+    page.evaluate = evaluate
+    return page
+
+
+def test_load_whole_thread_stops_instead_of_raising_when_the_scroll_itself_raises():
+    """The count's TYPE was guarded and the evaluate CALL was not, which is the
+    likelier raise of the two by far."""
+    assert load_whole_thread(_page_whose_scroll_raises()) == 0
+
+
+def test_a_scroll_that_raises_still_returns_what_the_page_already_showed():
+    """Degrade to "read what we have", never to "read nothing". Unguarded, the raise
+    reaches resolve_thread's except and becomes "" — a lead with NO vacancy text and
+    no contact, off a page that reads perfectly well."""
+    text = resolve_thread(_page_whose_scroll_raises(), _URL)
+    assert "Ищу Full Stack Developer." in text
+    assert "Что важно: опыт с Lovable." in text
+    assert "Навайбкодили нейрослоп." not in text     # still only the author's posts
+
+
 def test_resolve_thread_scrolls_before_it_reads():
     """Order is load-bearing: reading first would capture only the top of the
     thread and the scroll would be wasted."""

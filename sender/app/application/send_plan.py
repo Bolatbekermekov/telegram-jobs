@@ -9,6 +9,7 @@ mid-run rate limits are handled by the loop itself, which leaves those leads
 import re
 
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
+from app.infrastructure.channels.threads import normalize_target
 from app.infrastructure.threads_thread import author_from_url
 
 
@@ -60,6 +61,46 @@ def hold_reason(auto_send: bool, review: str = "", contact: str = "",
     if source_url:
         parts.append(f"тред: {source_url}")
     return STATUS_MANUAL, "; ".join(parts)
+
+
+# What an answer at the interactive confirmation prompt means. Pure, and out here
+# rather than inline in the loop, so the one rule that matters can be pinned by a
+# test: nothing but an explicit "s" sends.
+CONFIRM_SEND = "send"
+CONFIRM_SKIP = "skip"
+CONFIRM_QUIT = "quit"
+CONFIRM_HOLD = "hold"
+
+
+def confirm_action(choice: str) -> str:
+    """Read one confirmation answer. Sends ONLY on an explicit s/send.
+
+    The loop used to handle k/skip and q/quit and let everything else fall through
+    into `sender.execute`. Everything else is a lot: `e` and `r`, which the README
+    documented until two commits ago; any typo; and a bare Enter — the exact reflex
+    after the «Остался [плейсхолдер]» warning printed one line above the prompt,
+    which is what makes a user reach for a key in the first place.
+
+    It compounds off-screen. `_prompt` answers `EOFError` with "", so `make run` on a
+    non-TTY stdin (cron, a pipe, an editor's run button) walked the whole queue
+    sending everything — unattended, and WITHOUT the placeholder gate, which only
+    runs under AUTO_SEND. Auto mode is a deliberate switch; inheriting it from a
+    closed stdin is not.
+
+    `hold` — anything unrecognised — writes no status: the lead stays `new` and the
+    next run offers it again, the same self-healing the placeholder and
+    generation-failure paths already rely on. Deliberately NOT `skip`, which is
+    terminal, and deliberately not a re-prompt: "" is what a closed stdin returns
+    forever, so a loop asking again would spin.
+    """
+    c = (choice or "").strip().lower()
+    if c in ("s", "send"):
+        return CONFIRM_SEND
+    if c in ("k", "skip"):
+        return CONFIRM_SKIP
+    if c in ("q", "quit"):
+        return CONFIRM_QUIT
+    return CONFIRM_HOLD
 
 
 def unresolved_thread(target: str) -> bool:
@@ -124,6 +165,17 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
     at all. See `unresolved_thread` for why that is a question about shape and not
     about identity with `source_url`.
 
+    A target that is neither a post URL nor a usable handle — a blank Источник, a
+    note to self, two handles in one cell — is answered HERE too, and before the
+    session is consulted, so that a broken row gets ONE answer instead of two. It
+    used to get two: `manual` with no session (this gate fired) and `failed` with
+    one (the gate passed, the channel opened and `ThreadsChannel.send` raised on the
+    unparseable handle). The row is identical in both runs; only whether a burner
+    Instagram exists differed, which is nothing to do with the row. `failed` was
+    also the wrong word for a human triaging the sheet — it reads as "the platform
+    hiccuped, it'll retry", and retrying a malformed cell never helps. `manual` is
+    the feature's parking status: you have to do something.
+
     `session_live() -> bool` is a callable, not a bool, and is consulted last, so no
     lead that is not on the DM fallback reads the Threads state file at all.
 
@@ -145,12 +197,22 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
         return None
     if unresolved_thread(author):
         return None                      # nobody to write to — still `new`, retried
+    if not normalize_target(author):
+        # Asked AFTER `unresolved_thread`, which is load-bearing: `normalize_target`
+        # happily pulls the author out of a post URL, so asking it first would park
+        # every thread that failed to render as `manual` and forfeit its retry.
+        parts = ["Источник не похож на хендл Threads — отправить нечего",
+                 "впиши контакт вручную и верни Статус в 'new'"]
+        if source_url and source_url != author:
+            parts.append(f"тред: {source_url}")
+        return STATUS_MANUAL, "; ".join(parts)
     if session_live():
         return None
+    # `author` is necessarily non-empty here: `normalize_target("")` is "", so a blank
+    # Источник left above as a broken row. Both routes out are therefore always real.
     parts = ["сессии Threads нет — DM автору отправить нечем",
-             "выполни `make login_threads` на отдельном (burner) Instagram"]
-    if author:
-        parts.append(f"или напиши автору вручную: {author}")
+             "выполни `make login_threads` на отдельном (burner) Instagram",
+             f"или напиши автору вручную: {author}"]
     if source_url and source_url != author:
         # On a re-queued lead the source IS the handle; appending it would add
         # nothing and read as a broken link.

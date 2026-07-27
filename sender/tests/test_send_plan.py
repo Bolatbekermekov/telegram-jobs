@@ -1,4 +1,9 @@
 from app.application.send_plan import (
+    CONFIRM_HOLD,
+    CONFIRM_QUIT,
+    CONFIRM_SEND,
+    CONFIRM_SKIP,
+    confirm_action,
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
@@ -220,13 +225,54 @@ def test_the_note_does_not_repeat_the_handle_as_a_thread_url():
     assert note.count("@hr_acme") == 1
 
 
-def test_the_note_without_an_author_offers_only_the_login_route():
-    """The `if author:` false branch: no handle to offer, so the note must stop
-    cleanly rather than trail off into «напиши автору вручную: »."""
+# --- a broken Источник gets ONE answer, not one per session state --------------
+# The same row used to land `manual` with no session (this gate fired) and `failed`
+# with one (the gate passed, the channel opened, `ThreadsChannel.send` raised on the
+# unparseable handle) — so the status depended on whether a burner Instagram exists,
+# which has nothing to do with the row. `failed` also reads to a human triaging the
+# sheet as "the platform hiccuped, it'll retry", and retrying a malformed cell never
+# helps. Validated in the gate that already runs before the channel opens.
+
+_BROKEN = ["", "   ", "напишу позже", "@hr_acme и @hr_beta", "@" + "x" * 40]
+
+
+def test_a_broken_source_is_manual_whatever_the_session_state():
+    for target in _BROKEN:
+        for session in (lambda: False, lambda: True):
+            gated = dm_fallback_reason("threads", session,
+                                       author=target, source_url=_URL)
+            assert gated is not None, target
+            assert gated[0] == STATUS_MANUAL, target
+
+
+def test_a_broken_source_says_so_instead_of_blaming_the_session():
+    """Logging in does not fix a cell that names nobody, so the note must not send
+    the human off to `make login_threads`."""
     _, note = dm_fallback_reason("threads", lambda: False, author="", source_url=_URL)
-    assert "login_threads" in note
-    assert "вручную" not in note
-    assert _URL in note
+    assert "login_threads" not in note
+    assert "Источник" in note
+    assert _URL in note, "иначе не открыть тред, чтобы вписать контакт руками"
+
+
+def test_a_broken_source_is_decided_before_the_session_is_read():
+    calls = []
+
+    def _session():
+        calls.append(1)
+        return True
+
+    dm_fallback_reason("threads", _session, author="", source_url=_URL)
+    assert calls == [], "сломанная строка — ответ один, состояние сессии ни при чём"
+
+
+def test_an_unrendered_thread_still_outranks_the_broken_source_check():
+    """Order is load-bearing: `normalize_target` happily pulls the author out of a
+    post URL, so asking it first would park every thread that failed to render as
+    `manual` and forfeit the retry that is the whole point of leaving it `new`."""
+    assert dm_fallback_reason("threads", lambda: True,
+                              author=_URL, source_url=_URL) is None
+    assert dm_fallback_reason("threads", lambda: False,
+                              author=_URL, source_url=_URL) is None
 
 
 # --- placeholders are a different animal ----------------------------------
@@ -272,3 +318,45 @@ def test_a_bracketed_proper_noun_now_holds_the_lead_too():
 def test_a_clean_body_has_no_placeholder():
     assert not has_placeholder("Здравствуйте! Меня зовут Болатбек.")
     assert not has_placeholder("")
+
+
+# --- the confirmation prompt: only an explicit 's' sends -----------------------
+# The loop handled k/skip and q/quit and let EVERYTHING else fall through into
+# `sender.execute`: `e`, `r` (both documented in the README until two commits ago),
+# any typo, and a bare Enter — the exact reflex after the «Остался [плейсхолдер]»
+# warning printed one line above the prompt.
+
+
+def test_send_needs_an_explicit_s():
+    assert confirm_action("s") == CONFIRM_SEND
+    assert confirm_action("send") == CONFIRM_SEND
+    assert confirm_action(" S ") == CONFIRM_SEND
+    assert confirm_action("SEND") == CONFIRM_SEND
+
+
+def test_skip_and_quit_still_answer_as_they_did():
+    assert confirm_action("k") == CONFIRM_SKIP
+    assert confirm_action("skip") == CONFIRM_SKIP
+    assert confirm_action("q") == CONFIRM_QUIT
+    assert confirm_action("quit") == CONFIRM_QUIT
+
+
+def test_a_bare_enter_never_sends():
+    """"" is also what `_prompt` returns on EOFError, so `make run` with a non-TTY
+    stdin used to walk the queue sending everything — unattended and WITHOUT the
+    placeholder gate, which only runs under AUTO_SEND."""
+    assert confirm_action("") == CONFIRM_HOLD
+    assert confirm_action("   ") == CONFIRM_HOLD
+
+
+def test_an_unrecognised_key_never_sends():
+    """Including the two the README used to promise, which is what makes a user
+    press them: the outcome must be "nothing happened", not "message sent"."""
+    for key in ("e", "r", "y", "yes", "да", "sned", "1", "-"):
+        assert confirm_action(key) == CONFIRM_HOLD, key
+
+
+def test_hold_is_not_skip():
+    """`skip` is terminal — a typo must not burn the lead. `hold` writes no status,
+    so the lead stays `new` and the next run offers it again."""
+    assert CONFIRM_HOLD != CONFIRM_SKIP
