@@ -262,7 +262,11 @@ def run() -> None:
             if not config.AUTO_SEND:
                 _show(content.body)
                 if "[" in content.body:
-                    print("⚠️  Остался [плейсхолдер] — заполни через edit перед отправкой.")
+                    # No editor in this loop (only s/k/q), so the advice has to be
+                    # something the human can actually do: quit and re-run, because
+                    # generate_body runs fresh every run and the next roll is free.
+                    print("⚠️  Остался [плейсхолдер]. Редактора здесь нет: выйди по q "
+                          "и запусти прогон заново — текст генерится с нуля.")
                 choice = _prompt("[s]end / [k]skip / [q]uit: ").lower()
                 if choice in ("k", "skip"):
                     repo.mark_status(lead, STATUS_SKIPPED)
