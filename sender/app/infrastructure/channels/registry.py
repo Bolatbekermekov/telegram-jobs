@@ -3,6 +3,7 @@ from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
 from app.infrastructure.channels.telegram import TelegramChannel
+from app.infrastructure.channels.threads import ThreadsChannel
 from app.infrastructure.channels.wellfound import WellfoundChannel
 
 
@@ -67,4 +68,7 @@ def build_channel(platform: str, config):
         # (past Cloudflare + logged in), not a launched browser off storage_state.
         return WellfoundChannel(config.WELLFOUND_CDP_URL,
                                 dry_run=getattr(config, "APPLY_DRY_RUN", False))
+    if platform == "threads":
+        # The DM fallback: only reached when the thread carried no contact at all.
+        return ThreadsChannel(config.THREADS_STATE_PATH, config.BROWSER_HEADLESS)
     raise ValueError(f"unknown platform: {platform}")

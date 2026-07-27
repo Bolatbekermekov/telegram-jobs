@@ -5,6 +5,7 @@ from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
 from app.infrastructure.channels.telegram import TelegramChannel
+from app.infrastructure.channels.threads import ThreadsChannel
 from app.infrastructure.channels.wellfound import WellfoundChannel
 
 _CHANNELS = [
@@ -12,6 +13,7 @@ _CHANNELS = [
     HeadHunterChannel("hh.json", True),
     LinkedInChannel("l.json", True),
     WellfoundChannel("http://127.0.0.1:9222"),
+    ThreadsChannel("t.json", True),
     # TelegramChannel constructs a TelegramClient; skip instantiation, check class attrs.
 ]
 
@@ -19,7 +21,7 @@ _CHANNELS = [
 @pytest.mark.parametrize("ch", _CHANNELS)
 def test_satisfies_protocol(ch):
     assert isinstance(ch, OutreachChannel)
-    assert ch.name in {"telegram", "linkedin", "hh", "email", "wellfound"}
+    assert ch.name in {"telegram", "linkedin", "hh", "email", "wellfound", "threads"}
     assert ch.body_limit is None or isinstance(ch.body_limit, int)
     assert isinstance(ch.needs_subject, bool)
 

@@ -3,6 +3,7 @@ import pytest
 from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
+from app.infrastructure.channels.threads import ThreadsChannel
 from app.infrastructure.channels.wellfound import WellfoundChannel
 
 
@@ -13,6 +14,7 @@ class _Cfg:
     TELEGRAM_API_ID = 1; TELEGRAM_API_HASH = "h"; SESSION_PATH = "s"
     LINKEDIN_STATE_PATH = "l.json"; WELLFOUND_STATE_PATH = "w.json"
     WELLFOUND_CDP_URL = "http://127.0.0.1:9222"; APPLY_DRY_RUN = True
+    THREADS_STATE_PATH = "t.json"
     BROWSER_HEADLESS = True
 
 
@@ -29,6 +31,16 @@ def test_build_wellfound_channel_attaches_over_cdp_with_dry_run():
     assert isinstance(ch, WellfoundChannel)
     assert ch._cdp_url == "http://127.0.0.1:9222"   # CDP attach, not storage_state
     assert ch._dry_run is True                       # honours APPLY_DRY_RUN
+
+
+def test_build_threads_channel_uses_the_burner_session():
+    # The DM fallback still needs a channel object built for it: without this
+    # branch a threads lead with no contact in its thread dies on ValueError,
+    # which the send loop reads as a broken channel and stops the whole run.
+    ch = build_channel("threads", _Cfg())
+    assert isinstance(ch, ThreadsChannel)
+    assert ch._state_path == "t.json"
+    assert ch._headless is True
 
 
 def test_unknown_platform_raises():

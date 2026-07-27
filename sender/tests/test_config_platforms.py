@@ -23,3 +23,13 @@ def test_hh_always_enabled_browser_login():
 def test_hh_state_path_configured():
     from app import config
     assert config.HH_STATE_PATH.endswith("hh_state.json")
+
+
+def test_threads_always_enabled_browser_login():
+    # Browser login is interactive (make login_threads); no env vars required.
+    assert platform_enabled("threads", {}) is True
+
+
+def test_threads_state_path_configured():
+    from app import config
+    assert config.THREADS_STATE_PATH.endswith("threads_state.json")
