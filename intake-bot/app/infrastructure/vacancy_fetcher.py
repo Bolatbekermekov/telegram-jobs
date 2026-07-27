@@ -1,30 +1,53 @@
 """Fetch a vacancy page so a link-only message still gets a real description.
 
-Both sites are read anonymously, with a plain GET:
+Every site is read anonymously, with a plain GET:
 
 * hh — its public API answers 403 to an unauthenticated client (checked
   2026-07-20 on api.hh.ru/vacancies/<id>, every User-Agent), but the ordinary
   page comes back in well under a second.
-* LinkedIn — the public job view is served without a login, so this needs no
-  session and carries none of the ban risk that automating a logged-in LinkedIn
-  does. Only `/jobs/view/` is supported; `/posts/` answers 404 to a plain GET.
+* LinkedIn — the public job view AND hiring posts are served without a login, so
+  this needs no session and carries none of the ban risk that automating a
+  logged-in LinkedIn does. `/jobs/view/` is read from the job-page markup;
+  `/posts/…` and `/feed/update/…` come back 200 (NOT 404 — that was stale) with
+  the post text in the og:description meta.
+* Threads — the exact inverse of the two above: the server-rendered page comes
+  back only to a NON-browser UA, and its og:description carries the ROOT post
+  alone. The rest of the thread — the author's self-replies, where the contact to
+  apply to usually sits — needs a real browser, so the sender reads it later from
+  the laptop.
 
 Best-effort by design: the bot runs on a serverless function with a short budget
-and a datacenter IP that either site may throttle, so every failure returns "" and
-the caller falls back to summarising whatever the message itself contained.
+and a datacenter IP that any of these sites may throttle, so every failure returns
+"" and the caller falls back to summarising whatever the message itself contained.
 """
 import re
 
-from app.domain.vacancy_text import extract_hh_vacancy, extract_linkedin_vacancy
+from app.domain.vacancy_text import (
+    extract_hh_vacancy, extract_linkedin_post, extract_linkedin_vacancy,
+    extract_threads_post,
+)
 
-# A browser UA: a bot-looking one gets throttled by both sites.
+# A browser UA: a bot-looking one gets throttled by hh and LinkedIn.
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+# Threads is the exact inverse of hh/LinkedIn: it serves the server-rendered page
+# (the one that carries og:description) only to a NON-browser client. Verified live
+# 2026-07-26 — a browser UA gets a 258 KB JS shell with no og tags, an EMPTY UA gets
+# nothing either, and so do the social-crawler UAs (facebookexternalhit, Twitterbot,
+# TelegramBot, Slackbot). Plain HTTP-client UAs work: curl/*, python-httpx/*,
+# python-requests/*, Python-urllib/*, Googlebot, and this one.
+# Do NOT "unify" the two constants — that silently empties every Threads lead.
+_CLIENT_UA = "vacancy-intake-bot/1.0"
 
 _HH_VACANCY_RE = re.compile(
     r"^https?://(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)/vacancy/\d+", re.IGNORECASE)
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://(?:[\w.-]*\.)?linkedin\.com/jobs/view/\d+", re.IGNORECASE)
+_LINKEDIN_POST_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?linkedin\.com/(?:posts/|feed/update/)", re.IGNORECASE)
+_THREADS_POST_RE = re.compile(
+    r"^https?://(?:www\.)?threads\.(?:com|net)/@[\w.]+/post/[\w-]+", re.IGNORECASE)
 
 # hh answers in ~0.6s and LinkedIn in ~2-3s, so this is head-room, not the norm.
 # It stays small on purpose: the bot runs on a serverless function whose own
@@ -48,11 +71,21 @@ def is_linkedin_job_url(url: str) -> bool:
     return bool(_LINKEDIN_JOB_RE.match((url or "").strip()))
 
 
+def is_linkedin_post_url(url: str) -> bool:
+    return bool(_LINKEDIN_POST_RE.match((url or "").strip()))
+
+
+def is_threads_post_url(url: str) -> bool:
+    return bool(_THREADS_POST_RE.match((url or "").strip()))
+
+
 def is_fetchable_vacancy_url(url: str) -> bool:
-    return is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+    return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+            or is_linkedin_post_url(url) or is_threads_post_url(url))
 
 
-def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None) -> str:
+def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
+         *, ua: str = _UA) -> str:
     """GET `url`, retrying once on throttling or a network blip.
 
     A 403/404 is the site's final answer (restricted or removed vacancy) — retry
@@ -65,7 +98,7 @@ def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None) 
     _sleep = time.sleep if sleep is None else sleep
     for attempt in range(attempts):
         try:
-            resp = httpx.get(url, headers={"User-Agent": _UA}, timeout=timeout,
+            resp = httpx.get(url, headers={"User-Agent": ua}, timeout=timeout,
                              follow_redirects=True)
             if resp.status_code == 200:
                 return resp.text
@@ -82,14 +115,20 @@ def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None) 
 def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
     """Vacancy text behind `url`, or "" if it can't be read for any reason."""
     url = (url or "").strip()
+    ua = _UA
     if is_hh_vacancy_url(url):
         extract = extract_hh_vacancy
     elif is_linkedin_job_url(url):
         extract = extract_linkedin_vacancy
+    elif is_linkedin_post_url(url):
+        extract = extract_linkedin_post
+    elif is_threads_post_url(url):
+        extract = extract_threads_post
+        ua = _CLIENT_UA          # a browser UA gets an empty JS shell here
     else:
         return ""
     try:
-        return extract(_get(url, timeout))
+        return extract(_get(url, timeout, ua=ua))
     except Exception:  # noqa: BLE001 — never let intake fail over a missing description
         return ""
 

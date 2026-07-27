@@ -22,7 +22,7 @@ STATUS_NEW = "new"
 class ExtractedLead:
     """Result of parsing a raw vacancy message."""
 
-    platform: str          # telegram | email | linkedin | hh | wellfound
+    platform: str          # telegram | email | linkedin | hh | wellfound | threads
     target: str            # @nick / t.me / email / profile or vacancy URL (stored in «Источник»)
     vacancy_context: str   # role / conditions / salary, summarized
     raw_text: str          # original text the user sent

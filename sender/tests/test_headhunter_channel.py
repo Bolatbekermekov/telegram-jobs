@@ -94,6 +94,10 @@ class _FakePage:
     def wait_for_timeout(self, ms):
         pass
 
+    def evaluate(self, expr):
+        # _neutralize_cookie_banner runs page.evaluate(...) to hide the banner.
+        self.actions.append(("evaluate",))
+
 
 class _FakeKeyboard:
     def __init__(self, page):
@@ -142,6 +146,26 @@ def test_apply_without_letter_toggle_fills_directly():
     assert ("click", SEL_SUBMIT) in page.actions
 
 
+def test_apply_neutralizes_cookie_banner_before_the_letter_toggle():
+    """The cookie banner overlays the letter toggle; clearing it is what stopped
+    'поле письма не появилось' when the toggle click was being swallowed."""
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1,
+                      SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+    assert ("evaluate",) in page.actions
+    # It runs before the toggle click, not after.
+    assert page.actions.index(("evaluate",)) < page.actions.index(("click", SEL_LETTER_TOGGLE))
+
+
+def test_chat_neutralizes_cookie_banner_before_sending_the_letter():
+    """Row #101/#103: the letter never reached the chat because the banner
+    intercepted the message-field click. Clear it first."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_SEND_ENABLED: 1})
+    attach_cv_via_chat(page, None, None, letter="Здравствуйте")
+    assert ("evaluate",) in page.actions
+    assert ("fill", SEL_CHAT_MSG, "Здравствуйте") in page.actions
+
+
 def test_apply_confirms_country_popup_then_sends():
     # Vacancy in another country: hh shows a consent popup before the letter form.
     page = _FakePage({SEL_APPLY: 1, SEL_COUNTRY_CONFIRM: 1,
@@ -150,6 +174,13 @@ def test_apply_confirms_country_popup_then_sends():
     assert ("click", SEL_COUNTRY_CONFIRM) in page.actions
     assert ("fill", SEL_LETTER_INPUT, "hi") in page.actions
     assert ("click", SEL_SUBMIT) in page.actions
+
+
+def test_relocation_warning_modal_is_handled():
+    """The "You are applying from another country / Still apply" modal
+    (relocation-warning-confirm) BLOCKS the letter form; clicking it is what
+    unblocked the 6 RU vacancies that reported 'поле письма не появилось'."""
+    assert "relocation-warning-confirm" in SEL_COUNTRY_CONFIRM
 
 
 def test_apply_one_click_no_letter_form_succeeds():

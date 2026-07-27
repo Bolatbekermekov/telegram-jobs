@@ -16,7 +16,7 @@ class SendResult:
     ok: bool
     error: str = ""
     rate_limited: bool = False
-    invited: bool = False        # connection request sent; CV pending acceptance
+    invited: bool = False        # connection request + cover letter sent (no CV); a normal send
     manual: bool = False         # apply couldn't be automated (CAPTCHA/login/unknown form)
 
 

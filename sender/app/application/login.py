@@ -6,7 +6,7 @@ After that the worker runs headless without prompting.
 """
 
 # `make login` walks this list; wellfound goes last — its Chrome stays open (CDP).
-LOGIN_ORDER = ["telegram", "linkedin", "hh", "wellfound"]
+LOGIN_ORDER = ["telegram", "linkedin", "hh", "threads", "wellfound"]
 
 
 def telegram_session_file(session_path: str) -> str:

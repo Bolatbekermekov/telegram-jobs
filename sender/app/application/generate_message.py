@@ -21,6 +21,21 @@ class GenerateMessage:
         return body
 
 
+def generate_body(generator, lead):
+    """(body, None) on success; (None, exc) if generation failed.
+
+    Message generation calls out to OpenAI, so a network blip or an API outage
+    raises mid-run. Letting that propagate aborts the ENTIRE send loop and strands
+    every remaining lead (row 82 killed a 27-lead run on one DNS hiccup). A failed
+    generation is transient and per-lead, so return the error for the caller to log
+    and skip — the lead stays `new` and retries next run. Only real errors are
+    absorbed; KeyboardInterrupt/SystemExit (BaseException) still stop the run."""
+    try:
+        return generator.execute(lead), None
+    except Exception as exc:  # noqa: BLE001 — a generation failure must not abort the run
+        return None, exc
+
+
 def subject_for(vacancy_context: str) -> str:
     """A short email subject derived from the vacancy text (first non-empty line)."""
     for line in vacancy_context.splitlines():

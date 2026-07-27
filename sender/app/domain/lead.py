@@ -15,7 +15,10 @@ COLUMNS = [
     "Заметка",
 ]
 
-# 1-based column indexes used for targeted cell updates.
+# 1-based column indexes used for targeted cell updates, in sheet order.
+COL_PLATFORM = COLUMNS.index("Платформа") + 1
+COL_TARGET = COLUMNS.index("Источник") + 1
+COL_VACANCY = COLUMNS.index("Вакансия") + 1
 COL_MESSAGE = COLUMNS.index("Сообщение") + 1
 COL_STATUS = COLUMNS.index("Статус") + 1
 COL_DATE_SENT = COLUMNS.index("Дата отправки") + 1
@@ -25,8 +28,6 @@ STATUS_NEW = "new"
 STATUS_SENT = "sent"
 STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
-# A connection request (with note) was sent; CV goes after the person accepts.
-STATUS_INVITED = "invited"
 # Apply couldn't be automated (CAPTCHA/login/unknown form) — do it by hand.
 STATUS_MANUAL = "manual"
 
@@ -38,7 +39,7 @@ DEFAULT_PLATFORM = "telegram"
 class Lead:
     row: int               # 1-based row number in the sheet (incl. header offset)
     lead_id: str
-    platform: str          # telegram | linkedin | hh | email | wellfound
+    platform: str          # telegram | linkedin | hh | email | wellfound | threads
     target: str            # @nick / profile URL / vacancy URL / email
     vacancy_context: str
     raw_text: str

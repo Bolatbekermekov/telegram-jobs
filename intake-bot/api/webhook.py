@@ -230,16 +230,26 @@ async def telegram_webhook(
 
     try:
         lead = _build_use_case().execute(text)
+        extra = ""
+        if lead.platform == "threads":
+            # Phrased as a fact about the platform, NOT a claim about this fetch.
+            # A fetch only happens for a link-only message, and even then it can
+            # come back empty (post deleted, or Meta changes which UA gets the
+            # server-rendered page). "Прочитан частично" would be false when the
+            # message carried its own text, and in the empty case it would dress
+            # up a total failure as a partial success.
+            extra = ("\n\nℹ️ У Threads без браузера читается только первый пост — "
+                     "полный тред и контакт для отклика дочитаю при отправке с ноута.")
         _reply(
             chat_id,
             f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}\n"
-            f"Вакансия: {lead.vacancy_context}",
+            f"Вакансия: {lead.vacancy_context}{extra}",
         )
     except ValueError:
         _reply(
             chat_id,
             "⚠️ Не нашёл контакт. Пришли вакансию с одним из: @ник, t.me-ссылка, "
-            "email, или ссылка LinkedIn / hh.ru / Wellfound.",
+            "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads.",
         )
     except Exception as exc:  # noqa: BLE001
         _reply(chat_id, f"❌ Ошибка при сохранении: {exc}")

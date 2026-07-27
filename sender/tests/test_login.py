@@ -49,8 +49,18 @@ def test_telegram_session_file_appends_telethon_suffix():
 
 
 def test_platforms_needing_login_keeps_order_and_skips_existing():
-    has = {"telegram": True, "linkedin": False, "hh": False, "wellfound": True}
-    assert platforms_needing_login(has) == ["linkedin", "hh"]
+    has = {"telegram": True, "linkedin": False, "hh": False, "threads": False,
+           "wellfound": True}
+    assert platforms_needing_login(has) == ["linkedin", "hh", "threads"]
+
+
+def test_threads_is_in_the_login_order():
+    assert "threads" in LOGIN_ORDER
+
+
+def test_threads_logs_in_before_wellfound():
+    """Wellfound's Chrome stays open for CDP and must stay last."""
+    assert LOGIN_ORDER.index("threads") < LOGIN_ORDER.index("wellfound")
 
 
 def test_platforms_needing_login_unknown_platform_means_login():

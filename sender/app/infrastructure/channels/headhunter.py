@@ -30,8 +30,16 @@ def to_session_domain(url: str) -> str:
 
 SEL_APPLY = "[data-qa='vacancy-response-link-top']:visible"
 SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
-# Consent popup shown when applying to a vacancy in another country (KZ↔RU).
-SEL_COUNTRY_CONFIRM = "[data-qa='countries-profile-visibility-popup-confirm']"
+# Consent popups shown when applying to a vacancy in another country (the account
+# is in KZ, the vacancies are RU). TWO different ones appear:
+#  * the profile-visibility popup (older), and
+#  * the "You are applying from another country / Still apply" relocation warning
+#    (data-qa relocation-warning-*), which BLOCKS the response form until its
+#    "Still apply" is clicked — an unhandled block reported as "поле письма не
+#    появилось" (seen live 2026-07-22 on RU gamedev vacancies).
+# Both confirm buttons are clicked when present.
+SEL_COUNTRY_CONFIRM = ("[data-qa='countries-profile-visibility-popup-confirm'], "
+                       "[data-qa='relocation-warning-confirm']")
 SEL_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
 SEL_LETTER_INPUT = "[data-qa='vacancy-response-popup-form-letter-input']"
 SEL_SUBMIT = "[data-qa='vacancy-response-submit-popup']"
@@ -150,6 +158,26 @@ def _dump_chat_debug(page, debug_dir, tag) -> None:
         pass
 
 
+def _neutralize_cookie_banner(page) -> None:
+    """Disable hh's bottom cookie-policy banner so it can't swallow clicks.
+
+    The banner (`data-qa=cookies-policy-informer`, id `bottom-cookies-policy-informer`)
+    is a fixed overlay along the bottom of the page. It sits over the response
+    form's letter toggle and the chat composer's message field / send button, so a
+    normal click lands on the banner instead — and the cover letter silently never
+    reaches the employer (seen live 2026-07-22 on vacancy 134940090 and 135327464,
+    where the response went through but the letter click timed out on the banner).
+    Killing its pointer events clears the intercept without needing its dismiss
+    button; best-effort, since the banner is absent once cookies are accepted."""
+    try:
+        page.evaluate(
+            "() => document.querySelectorAll("
+            "\"[data-qa='cookies-policy-informer'], #bottom-cookies-policy-informer\")"
+            ".forEach(el => { el.style.pointerEvents = 'none'; el.style.display = 'none'; })")
+    except Exception:  # noqa: BLE001 — best-effort; a missing banner is fine
+        pass
+
+
 def _chat_send(chat) -> None:
     """Send the composed chatik message. A disabled duplicate of the send button
     exists (global chat widget), so click only the enabled one; fall back to
@@ -171,6 +199,7 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
     Best-effort and self-diagnosing: raises ChannelError (with a DOM dump) if
     the chat or its file input can't be found — the caller treats that as a
     warning, since the application itself already went through."""
+    _neutralize_cookie_banner(page)
     opener = page.locator(SEL_CHAT_OPEN_BTN)
     if opener.count() == 0:
         _dump_chat_debug(page, debug_dir, "hh_chat_no_open_button")
@@ -189,6 +218,10 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
             chat.wait_for_timeout(6000)
         except Exception:  # noqa: BLE001 — fall back to the in-page chat panel
             chat.wait_for_timeout(2000)
+
+    # The chat (in-page panel or new tab) carries the same cookie banner over its
+    # composer — clear it there too, or the message-field click below is swallowed.
+    _neutralize_cookie_banner(chat)
 
     # 1) Cover letter as a chat message — only when it wasn't already sent via
     #    the response form (e.g. one-click-apply vacancies pass it here).
@@ -314,9 +347,16 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
             f"{SEL_ALREADY_APPLIED}", timeout=15000)
     except Exception:  # noqa: BLE001
         pass
-    # Consent popup for a vacancy in another country — optional.
+    # Clear the cookie banner before any click below: it overlays the letter
+    # toggle, so an intercepted toggle click leaves the letter field unexpanded
+    # and the run reports "поле письма не появилось".
+    _neutralize_cookie_banner(page)
+    # Consent popup for a vacancy in another country — optional. The relocation
+    # warning BLOCKS the response form, so after confirming, wait for it to close
+    # and the form (or the submitted-response chat) to render before going on.
     if page.locator(SEL_COUNTRY_CONFIRM).count() > 0:
         page.locator(SEL_COUNTRY_CONFIRM).first.click()
+        page.wait_for_timeout(2500)
     # The cover-letter field may need expanding first — also optional.
     if page.locator(SEL_LETTER_TOGGLE).count() > 0:
         page.locator(SEL_LETTER_TOGGLE).first.click()

@@ -11,7 +11,9 @@ from app.domain.lead import (
     COL_DATE_SENT,
     COL_MESSAGE,
     COL_NOTE,
+    COL_PLATFORM,
     COL_STATUS,
+    COL_VACANCY,
     COLUMNS,
     DEFAULT_PLATFORM,
     STATUS_NEW,
@@ -108,6 +110,41 @@ class SheetsRepo:
         updates = [{
             "range": rowcol_to_a1(lead.row, COL_STATUS),
             "values": [[status]],
+        }]
+        if note:
+            updates.append({
+                "range": rowcol_to_a1(lead.row, COL_NOTE),
+                "values": [[note]],
+            })
+        _with_retry(lambda: self._ws.batch_update(
+            updates, value_input_option=ValueInputOption.raw))
+
+    def update_resolved(self, lead: Lead, platform: str, target: str,
+                        vacancy_context: str, note: str = "") -> None:
+        """Rewrite where a lead goes and what it says, in one API call.
+
+        A Threads lead arrives pointing at a post URL carrying only the root
+        post's text. Once the thread is read the real contact is usually
+        somewhere else entirely ("Для отклика присылайте портфолио в Telegram:
+        @…"), so platform, target and vacancy text all change together.
+
+        Платформа / Источник / Вакансия are adjacent columns, so they go as one
+        span. Заметка is a separate range: Сообщение / Статус / Дата отправки
+        sit between, and one wide span would blank the message and the send
+        timestamp.
+
+        Статус is deliberately untouched — the lead has not been sent yet, it
+        stays `new`. A half-applied rewrite is the worst outcome available here:
+        a lead labelled telegram whose target is still a Threads URL, which the
+        send loop would try to DM as if it were a handle. Hence one atomic write.
+
+        RAW, not USER_ENTERED: the vacancy text is scraped, so a leading `=`
+        must be stored as text, never evaluated as a formula.
+        """
+        updates = [{
+            "range": (f"{rowcol_to_a1(lead.row, COL_PLATFORM)}"
+                      f":{rowcol_to_a1(lead.row, COL_VACANCY)}"),
+            "values": [[platform, target, vacancy_context]],
         }]
         if note:
             updates.append({

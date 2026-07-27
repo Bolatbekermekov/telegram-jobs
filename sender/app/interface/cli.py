@@ -4,21 +4,33 @@ Leads are processed in sheet order (by id, top to bottom). At most one channel
 is open at a time — browser channels and the Telegram userbot can't share a
 process — so ChannelSwitcher stops the current channel and starts the next
 whenever the platform changes between consecutive leads. Default mode asks
-send/edit/skip per lead; AUTO_SEND=true sends automatically. Per-platform daily
-limits and anti-ban delays apply.
+send/edit/skip per lead; AUTO_SEND=true sends automatically — except leads held
+for a human by send_plan.hold_reason, which get `manual` instead of a send.
+Per-platform daily limits and anti-ban delays apply.
 """
 import random
 import time
 
 from app import config
 from app.application.format_content import format_for_channel
-from app.application.generate_message import GenerateMessage, subject_for
+from app.application.generate_message import (
+    GenerateMessage, generate_body, subject_for,
+)
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
-from app.application.send_plan import skip_reason
+from app.application.send_plan import (
+    CONFIRM_QUIT,
+    CONFIRM_SEND,
+    CONFIRM_SKIP,
+    confirm_action,
+    dm_fallback_reason,
+    has_placeholder,
+    hold_reason,
+    skip_reason,
+    unresolved_thread,
+)
 from app.domain.lead import (
     STATUS_FAILED,
-    STATUS_INVITED,
     STATUS_MANUAL,
     STATUS_SENT,
     STATUS_SKIPPED,
@@ -28,7 +40,9 @@ from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.sheets_repo import SheetsRepo
 
-_KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound"}
+# Platforms the send loop can build a channel for. A platform missing here is a
+# per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
+_KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads"}
 
 
 def _prompt(msg: str) -> str:
@@ -90,6 +104,7 @@ def run() -> None:
     sent_per_platform: dict[str, int] = {}
     rate_limited: set[str] = set()       # platforms that rate-limited us this run
     quit_requested = False
+    gen_failures = 0                     # consecutive message-generation failures
 
     # Strict id order: walk leads top-to-bottom. ChannelSwitcher keeps a single
     # channel open and switches only when the platform changes (Telethon and
@@ -115,6 +130,88 @@ def run() -> None:
                 print(f"⏭  Лид #{lead.lead_id} [{platform}]: {note} — пропуск.")
                 continue
 
+            if lead.platform == "threads":
+                # og:description gave the intake the root post only; the rest of the
+                # vacancy and the contact live in the author's self-replies, which
+                # need a browser. Anonymous render: reading a public post must not
+                # touch the saved session. This runs BEFORE the channel is opened —
+                # resolving changes lead.platform, and opening first would raise a
+                # Threads browser for a lead that should go out over Telegram.
+                from app.application.resolve_threads_lead import resolve_threads_lead
+                from app.infrastructure.openai_contact import OpenAIContactDetector
+                from app.infrastructure.threads_session import has_valid_session
+                from app.infrastructure.threads_thread import render_thread
+                print("Читаю тред Threads...")
+                thread_url = lead.target      # resolving replaces it with the contact
+                lead, review = resolve_threads_lead(
+                    lead, repo,
+                    render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
+                    # The writing model, not the cheap one: once per lead, and a
+                    # wrong answer is a message to the wrong person.
+                    llm=OpenAIContactDetector(
+                        config.OPENAI_API_KEY, config.OPENAI_MODEL,
+                        max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS))
+                if lead.platform != platform:
+                    print(f"   контакт найден: {lead.platform} → {lead.target}")
+                    platform = lead.platform
+                elif unresolved_thread(lead.target):
+                    # Still pointing at the post, so the thread never rendered and
+                    # resolving handed the lead back untouched, writing no status.
+                    # Leave it that way: `new` means the next run tries again, and
+                    # that retry is worth protecting — a successful render may find a
+                    # real contact in a self-reply and send over Telegram, never
+                    # touching the DM fallback. There is nothing to send from the root
+                    # post alone, and falling through would either kill the run (no
+                    # session -> ChannelUnavailable -> SystemExit) or DM the author
+                    # without the vacancy text. A lead already on the DM fallback
+                    # points at a handle, not a post, so re-queueing it by hand works.
+                    print(f"⏭  Лид #{lead.lead_id}: тред не прочитался — "
+                          "оставляю 'new', повторю в следующем прогоне.")
+                    continue
+                else:
+                    print(f"   контакта в треде нет, буду писать автору: {lead.target}")
+
+                hold = hold_reason(config.AUTO_SEND, review=review,
+                                   contact=f"{lead.platform} → {lead.target}",
+                                   source_url=thread_url)
+                if hold is not None:
+                    # Checked before the channel opens and before the message is
+                    # generated — nothing to generate for a lead we won't send.
+                    # Also before the rate-limit re-test below: the hold has to be
+                    # written now, because the row is already rewritten to an
+                    # ordinary platform and the next run would raise no flag.
+                    status, note = hold
+                    repo.mark_status(lead, status, note=note)
+                    print(f"✋ Лид #{lead.lead_id}: {note}")
+                    continue
+
+                if platform in rate_limited:
+                    # Re-tested after resolving: the check at the top of the loop
+                    # saw `threads`, and this lead is now telegram/email/hh. In a
+                    # loop built around ban avoidance, a resolved lead must not be
+                    # the one thing that walks past the guard. No status written —
+                    # same as the guard above, it retries next run.
+                    print(f"⏭  Лид #{lead.lead_id}: платформа '{platform}' "
+                          "ограничила нас в этом прогоне — оставляю на следующий.")
+                    continue
+
+                gated = dm_fallback_reason(
+                    platform, lambda: has_valid_session(config.THREADS_STATE_PATH),
+                    author=lead.target, source_url=thread_url)
+                if gated is not None:
+                    # The lead is on the DM fallback and there is no burner session.
+                    # Gated HERE, before the channel opens, precisely so start() is
+                    # never reached: its ChannelUnavailable meets the handler below,
+                    # which ends the whole run — correct for a channel that is meant
+                    # to work, but this one has no session by default and may never
+                    # get one. One contactless Threads lead must not cost every other
+                    # platform's leads their run. Before generation too: nothing to
+                    # pay OpenAI for on a message that cannot be sent.
+                    status, note = gated
+                    repo.mark_status(lead, status, note=note)
+                    print(f"✋ Лид #{lead.lead_id}: {note}")
+                    continue
+
             try:
                 channel = switcher.for_platform(platform)
             except Exception as exc:  # noqa: BLE001
@@ -139,24 +236,56 @@ def run() -> None:
             print("-" * 60)
 
             print("Генерирую сообщение...")
-            body = generator.execute(lead)
+            body, gen_err = generate_body(generator, lead)
+            if gen_err is not None:
+                # Generation hit OpenAI/network — don't crash the run (row 82).
+                # Leave the lead `new` and move on; bail after 3 in a row, since
+                # that means OpenAI is down and every remaining lead would fail too.
+                gen_failures += 1
+                print(f"⚠️  #{lead.lead_id}: не смог сгенерировать сообщение "
+                      f"({type(gen_err).__name__}). Оставляю 'new'.")
+                if gen_failures >= 3:
+                    print("🛑 OpenAI недоступен (3 ошибки подряд) — останавливаю прогон. "
+                          "Остальные лиды остаются 'new'. Проверь сеть/квоту и запусти снова.")
+                    break
+                continue
+            gen_failures = 0
             subject = subject_for(lead.vacancy_context or lead.raw_text)
             attachment = config.CV_PATH if config.ATTACH_CV else None
             content = format_for_channel(channel, body, subject, attachment)
 
+            if config.AUTO_SEND and has_placeholder(content.body):
+                # What the README has always promised for auto mode: a template
+                # must not reach a live recruiter just because nobody was there to
+                # read it. NO status — unlike a contact, the body is regenerated
+                # from scratch every run, so `new` self-heals for free next time.
+                print(f"⏭  Лид #{lead.lead_id}: в тексте остался [плейсхолдер] — "
+                      "оставляю 'new', перегенерирую в следующий прогон.")
+                continue
+
             if not config.AUTO_SEND:
                 _show(content.body)
                 if "[" in content.body:
-                    print("⚠️  Остался [плейсхолдер] — заполни через edit перед отправкой.")
-                choice = _prompt("[s]end / [k]skip / [q]uit: ").lower()
-                if choice in ("k", "skip"):
+                    # No editor in this loop (only s/k/q), so the advice has to be
+                    # something the human can actually do: quit and re-run, because
+                    # generate_body runs fresh every run and the next roll is free.
+                    print("⚠️  Остался [плейсхолдер]. Редактора здесь нет: выйди по q "
+                          "и запусти прогон заново — текст генерится с нуля.")
+                action = confirm_action(_prompt("[s]end / [k]skip / [q]uit: "))
+                if action == CONFIRM_SKIP:
                     repo.mark_status(lead, STATUS_SKIPPED)
                     print("⏭  Пропущено.")
                     continue
-                if choice in ("q", "quit"):
+                if action == CONFIRM_QUIT:
                     print("Выход по запросу.")
                     quit_requested = True
                     break
+                if action != CONFIRM_SEND:
+                    # Only an explicit `s` sends — see `confirm_action`. No status:
+                    # the lead stays `new` and the next run offers it again.
+                    print("↩️  Отправка только по 's'. Ничего не отправлено, "
+                          "лид остаётся 'new'.")
+                    continue
 
             result = sender.execute(lead, content)
             if result.ok:
@@ -168,13 +297,13 @@ def run() -> None:
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
             elif result.invited:
-                # Connection request with a note was sent — a real outreach
-                # action (counted in the run total); CV goes after acceptance.
-                repo.mark_status(lead, STATUS_INVITED, note=result.error)
+                # A LinkedIn connection request carrying the cover letter went out.
+                # It's the whole outreach — no CV, no follow-up after they accept —
+                # so record it as a normal send (won't be retried).
+                repo.mark_sent(lead, content.body, STATUS_SENT)
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
-                print(f"📨 Запрос на контакт отправлен [{platform}] "
-                      f"(всего за прогон: {sent_per_platform[platform]}). "
-                      "CV — после подтверждения.")
+                print(f"📨 Запрос на контакт с письмом отправлен [{platform}] "
+                      f"(всего за прогон: {sent_per_platform[platform]}).")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
@@ -414,6 +543,65 @@ def run_login_hh():
     print(f"✅ Сессия сохранена в {config.HH_STATE_PATH}. Этот Chrome можно закрыть.")
 
 
+def run_login_threads():
+    """One-time interactive Threads login; saves the browser session to a file.
+
+    Use a SEPARATE (burner) Instagram account: Threads runs on Instagram, and a
+    disabled Instagram disables its Threads profile automatically.
+
+    Only the DM fallback needs this session. Reading a thread to find the real
+    contact is anonymous (infrastructure/threads_thread.py), so skipping this
+    login costs nothing until a thread turns out to carry no contact at all.
+    """
+    from playwright.sync_api import sync_playwright
+
+    saved = False
+    # `with`, and the session pull guarded, the same way run_login_hh and
+    # run_login_wellfound do it. Not defensive padding: the natural thing to do
+    # once you are logged in is to CLOSE the window, and then storage_state()
+    # raises on a dead context. Unguarded that is a raw Playwright traceback on
+    # top of a login that actually WORKED, with the browser and the driver both
+    # left running — and it is the first thing the human does after creating the
+    # burner account, so it is the worst possible place to be unhelpful.
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=False)
+        try:
+            context = browser.new_context()
+            context.new_page().goto("https://www.threads.com/login")
+            print("Войди в Threads в открывшемся окне (через отдельный "
+                  "Instagram-аккаунт), затем нажми Enter здесь...")
+            input()
+            try:
+                context.storage_state(path=config.THREADS_STATE_PATH)
+                saved = True
+            except Exception as exc:  # noqa: BLE001
+                # Nothing to recover: the cookies live in that browser context and
+                # a closed window takes them with it. Say so, instead of a stack
+                # trace that reads like the login itself failed.
+                print(f"⚠️ Не смог забрать сессию из браузера: {exc}")
+                print("   Скорее всего окно закрыли до того, как ты нажал Enter — "
+                      "куки живут внутри него, и после закрытия взять их уже "
+                      "неоткуда. Запусти `make login_threads` ещё раз и НЕ закрывай "
+                      "окно, пока не нажмёшь Enter здесь.")
+        finally:
+            try:
+                browser.close()
+            except Exception:  # noqa: BLE001 — already gone is the normal case here
+                pass
+
+    if not saved:
+        return
+
+    # A saved state is not a session: Playwright stores whatever cookies the
+    # context held, and a logged-out context yields a file with no auth in it.
+    from app.infrastructure.threads_session import has_valid_session
+    if has_valid_session(config.THREADS_STATE_PATH):
+        print(f"✅ Сессия Threads сохранена: {config.THREADS_STATE_PATH}")
+    else:
+        print("⚠️ Файл сохранён, но живого `sessionid` в нём нет — вход не удался. "
+              "Проверь, что действительно залогинился, и повтори.")
+
+
 def run_login_all():
     """One command: log in to every platform, skipping ones with a live session.
 
@@ -431,10 +619,19 @@ def run_login_all():
         telegram_session_file,
     )
 
+    from app.infrastructure.linkedin_session import has_valid_session
+    from app.infrastructure.threads_session import (
+        has_valid_session as threads_has_valid_session,
+    )
+
     has_session = {
         "telegram": Path(telegram_session_file(config.SESSION_PATH)).exists(),
-        "linkedin": Path(config.LINKEDIN_STATE_PATH).exists(),
+        # A LinkedIn state file can exist yet be logged out (no live li_at); that
+        # is not a session to skip — re-login instead.
+        "linkedin": has_valid_session(config.LINKEDIN_STATE_PATH),
         "hh": Path(config.HH_STATE_PATH).exists(),
+        # Same trap as LinkedIn: a state file without a live sessionid is a guest.
+        "threads": threads_has_valid_session(config.THREADS_STATE_PATH),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
     }
     todo = platforms_needing_login(has_session)
@@ -450,7 +647,8 @@ def run_login_all():
         subprocess.call([sys.executable, str(qr_script)])
 
     actions = {"telegram": _login_telegram, "linkedin": run_login_browser,
-               "hh": run_login_hh, "wellfound": run_login_wellfound}
+               "hh": run_login_hh, "threads": run_login_threads,
+               "wellfound": run_login_wellfound}
     for p in todo:
         print(f"\n🔑 {p}: вход...")
         try:

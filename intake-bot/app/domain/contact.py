@@ -1,8 +1,12 @@
 """Deterministic detection of (platform, target) from free vacancy text.
 
-Priority order: telegram > email > linkedin > hh > wellfound. The first rule
-that matches wins. Platform detection is rule-based on purpose: it decides where
-the message is later sent, so it must not depend on an LLM guess.
+Priority order: telegram > email > linkedin > hh > wellfound > threads. The first
+rule that matches wins. Platform detection is rule-based on purpose: it decides
+where the message is later sent, so it must not depend on an LLM guess.
+
+Threads is deliberately last: a recruiter who drops a thread link next to their own
+@nick or e-mail is reachable there directly, and a direct channel beats a public
+post. Only the post author's own handle is exempt (see detect_contact).
 """
 import re
 from dataclasses import dataclass
@@ -10,7 +14,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Contact:
-    platform: str   # telegram | email | linkedin | hh | wellfound
+    platform: str   # telegram | email | linkedin | hh | wellfound | threads
     target: str     # @nick / t.me URL / email / profile or vacancy URL
 
 
@@ -19,6 +23,17 @@ _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECA
 # A Telegram @handle anchored to start-or-whitespace, so it never matches the
 # "@" inside an email address (e.g. john@gmail.com).
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
+# The capture above is `\w{4,}` and stops at the first dot, so "@maria.hr" arrives at
+# the rule as "@maria" — a different, real user. This reads the whole HANDLE-SHAPED
+# head at a match position instead, which is what the rule needs to see to refuse it.
+# Dots are legal in a Threads/Instagram handle (that namespace is Instagram's) and
+# illegal in a Telegram username, which is the whole basis for refusing.
+# The charset is what decides where a handle ends, and it is ASCII — letters, digits,
+# periods, underscores — so the first non-ASCII character ENDS the handle: "@ivan.Пиши"
+# heads "ivan.", i.e. a plain "@ivan" followed by a sentence, not a dotted handle.
+# `*`, not `+`, because `\w` matches Cyrillic too: "@Иван_Петров" has an EMPTY ASCII
+# head, and `+` would fail to match there and raise on `.group(0)`.
+_ASCII_HANDLE_RE = re.compile(r"[A-Za-z0-9._]*")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
 # HeadHunter runs one network across national domains (hh.kz, hh.uz, …) and the
@@ -31,6 +46,35 @@ _HH_VACANCY_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/vacancy/\d+\S*", re.IGNO
 _HH_RE = re.compile(rf"(?:https?://)?{_HH_HOST}/\S+", re.IGNORECASE)
 _WELLFOUND_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:wellfound\.com|angel\.co)/\S+", re.IGNORECASE)
+
+# Threads (Meta). Posts live at /@user/post/<id>. threads.net is an alias that
+# 301s to threads.com (verified 2026-07-26: identical bytes), so it is folded onto
+# .com — the sender opens exactly what the sheet holds. The iOS/Android share sheet
+# appends a tracking blob (?xmt=…&slof=1) that is noise for us. The left boundary
+# keeps the host from matching inside a look-alike one (notthreads.com), which would
+# otherwise be canonicalised into a threads.com URL nobody ever sent.
+_THREADS_HOST = r"(?:www\.)?threads\.(?:com|net)"
+_THREADS_RE = re.compile(
+    rf"(?<![\w.-])(?:https?://)?{_THREADS_HOST}/@[\w.]+/post/[\w-]+\S*", re.IGNORECASE)
+_THREADS_PARTS_RE = re.compile(
+    rf"^(?:https?://)?{_THREADS_HOST}/@([\w.]+)/post/([\w-]+)", re.IGNORECASE)
+
+
+def canonical_threads_url(url: str) -> str:
+    """A shared Threads link -> the plain post URL the sender can open."""
+    m = _THREADS_PARTS_RE.match(url)
+    if not m:
+        return url
+    return f"https://www.threads.com/@{m.group(1)}/post/{m.group(2)}"
+
+
+def threads_author(url: str) -> str:
+    """'@handle' of the post author from the URL, or '' when it is not a Threads
+    post link. Authoritative author comes from the rendered page in the sender;
+    this is what the intake has to work with."""
+    m = _THREADS_PARTS_RE.match(url)
+    return "@" + m.group(1) if m else ""
+
 
 _TRAILING = ".,);]>\"'"
 
@@ -63,15 +107,61 @@ def canonical_hh_url(url: str) -> str:
 
 
 def detect_contact(text: str) -> Contact | None:
+    # The Threads link is located up front, but only to protect its author handle:
+    # "вакансия от @lnkrnchk <threads link>" would otherwise match _HANDLE_RE and
+    # be stored as a Telegram contact, and the send loop would DM a user that does
+    # not exist there. A DIFFERENT @handle still wins, as it always did — and every
+    # handle is scanned, not just the first, because the message may credit the author
+    # before it gives the real contact ("вакансия от @lnkrnchk, пиши @ivan_hr") just
+    # as easily as after it. Only a message whose every handle is the author falls
+    # through to threads.
+    tm = _THREADS_RE.search(text)
+    threads_url = canonical_threads_url(_clean(tm.group(0))) if tm else ""
+    author = threads_author(threads_url).lower()
+
     m = _TME_RE.search(text)
     if m:
         return Contact("telegram", _clean(m.group(0)))
-    m = _HANDLE_RE.search(text)
-    if m:
+    for m in _HANDLE_RE.finditer(text):
+        # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
+        # Telegram target — it is an Instagram/Threads handle. _HANDLE_RE captures
+        # `\w{4,}` and stops at the dot, so returning the match would store "@maria":
+        # a real, unrelated user nobody wrote in the message. Refuse the whole handle
+        # and keep going. If no other handle and no other rule answers, the intake
+        # replies «⚠️ Не нашёл контакт» and asks for a resend, which is honest; a
+        # truncated stranger is not.
+        #
+        # WHICH dot counts is decided by what follows it, and that is not a nicety.
+        # A handle continues only in the ASCII charset Instagram/Threads uses, so a
+        # dot followed by non-ASCII cannot be a handle carrying on — it is a period
+        # whose space the writer forgot. "пиши @ivan.Пиши в личку" is therefore an
+        # ordinary "@ivan" and still wins, while "@maria.hr" is refused: the rule
+        # rejects exactly the shape that is provably not Telegram, and nothing else.
+        # A TRAILING dot is sentence punctuation ("пиши @ivan.") and is stripped
+        # before the test, so that shape is a plain handle and wins too.
+        #
+        # This is the general form of the author leak closed earlier, and it subsumes
+        # it for every dotted shape — "@ivan.hr", "@lnkrnchk.hr", "@ivan.hr.Пиши" are
+        # refused for everyone, author or not — so the three author clauses that used
+        # to sit here collapse into the one below.
+        handle = _ASCII_HANDLE_RE.match(text, m.start(1)).group(0).rstrip(".")
+        if "." in handle:
+            continue
+        # What is left is an UNDOTTED author, who is a valid Telegram shape and would
+        # otherwise be DMed at a handle that does not exist there. Compared on the
+        # handle head rather than on the capture, and that is load-bearing in both
+        # directions: "@lnkrnchk.Пиши" reduces to "lnkrnchk" — the author, who must
+        # not leak — while a bare prefix test would swallow "@lnkrnchk_hr", who is a
+        # different person and a real contact.
+        if author and handle.lower() == author[1:]:
+            continue
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:
-        return Contact("email", m.group(0))
+        # `_clean` like every sibling rule: _EMAIL_RE's tail class `[\w.-]+` eats the
+        # period that ended the sentence, and "hr@acme.io." is what an MTA rejects at
+        # RCPT TO — the lead lands `failed` and the recruiter is never written to.
+        return Contact("email", _clean(m.group(0)))
     m = _LINKEDIN_RE.search(text)
     if m:
         return Contact("linkedin", _clean(m.group(0)))
@@ -81,4 +171,6 @@ def detect_contact(text: str) -> Contact | None:
     m = _WELLFOUND_RE.search(text)
     if m:
         return Contact("wellfound", _clean(m.group(0)))
+    if threads_url:
+        return Contact("threads", threads_url)
     return None

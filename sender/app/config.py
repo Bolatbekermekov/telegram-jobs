@@ -97,6 +97,12 @@ WELLFOUND_STATE_PATH = os.environ.get(
     "WELLFOUND_STATE_PATH", str(_ROOT / "sender" / "wellfound_state.json"))
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
 
+# Threads (Meta). Runs on an Instagram account, so automating it risks THAT
+# account — use a separate (burner) Instagram, never your personal one: a
+# disabled Instagram disables its Threads profile automatically.
+THREADS_STATE_PATH = os.environ.get(
+    "THREADS_STATE_PATH", str(_ROOT / "sender" / "threads_state.json"))
+
 # --- External-apply autofill (LinkedIn jobs whose only route is a company ATS) ---
 EXTERNAL_APPLY_ENABLED = os.environ.get("EXTERNAL_APPLY_ENABLED", "true").lower() == "true"
 # true = fill the form but DO NOT click Submit (dry run for obkatka).
@@ -197,4 +203,6 @@ def platform_enabled(platform: str, env=None) -> bool:
         return True  # browser login is interactive; always available
     if platform == "email":
         return bool(env.get("SMTP_HOST") and env.get("SMTP_USER"))
+    if platform == "threads":
+        return True  # browser login is interactive; always available
     return False
