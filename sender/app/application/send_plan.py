@@ -9,6 +9,7 @@ mid-run rate limits are handled by the loop itself, which leaves those leads
 import re
 
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
+from app.infrastructure.threads_thread import author_from_url
 
 
 def skip_reason(lead, known) -> tuple[str, str] | None:
@@ -61,26 +62,38 @@ def hold_reason(auto_send: bool, review: str = "", contact: str = "",
     return STATUS_MANUAL, "; ".join(parts)
 
 
-def thread_unread(target: str, source_url: str) -> bool:
-    """True when resolving left the lead untouched, i.e. the thread never rendered.
+def unresolved_thread(target: str) -> bool:
+    """True when the lead still points at a thread POST rather than at a person.
 
-    `resolve_threads_lead` hands the lead back exactly as it came when `render`
-    returns "" — a login wall, a timeout or a network blip, all expected — and
-    writes no status, deliberately, so the lead stays `new` and the next run tries
-    again. The only visible trace of that is the target: it is still the post URL
-    it arrived as, rather than the author handle or a contact found in the thread.
+    Asked of the target's SHAPE, deliberately, and of nothing else. `author_from_url`
+    accepts only a `…/@handle/post/<id>` URL, so a target it recognises is a thread
+    nobody has read yet, and a target it rejects — `@hr_acme` — is somebody to write
+    to. No history is inferred and no second value is consulted.
 
-    Two callers need it and must agree, hence one definition:
-      * `dm_fallback_reason` — an unread thread is not a DM-fallback lead, so the
-        no-session gate must not park it as `manual`;
+    That matters, because the obvious formulation is wrong. Deriving "the resolver
+    never ran" from `target == source_url` holds for a thread that failed to render,
+    but ALSO for a lead already resolved onto the DM fallback and re-queued by hand:
+    its row holds Источник=@hr_acme, `render` refuses that (it is not a post URL),
+    `resolve_threads_lead` hands the lead back untouched, and the identity is true a
+    second time — so the lead read as "never rendered", was skipped with no status,
+    and sat `new` forever. That is exactly the recovery this feature promises: the
+    gate note tells the human to run `make login_threads` and put Статус back to
+    `new`, and nothing would have happened when they did.
+
+    Two callers need this and must agree, hence one definition:
+      * `dm_fallback_reason` — a lead with nobody to write to is not a DM-fallback
+        lead, so the no-session gate must not park it as `manual`;
       * the send loop — which must `continue` on it instead of falling through to
         the channel. Falling through is not harmless: with no session
         `ThreadsChannel.start()` raises `ChannelUnavailable`, which the loop answers
         with `SystemExit(1)`, killing the run for every other platform too; with a
         session it would DM the author off the root post alone, without the vacancy
-        text and the contact that the unread self-replies were supposed to carry.
+        text and the contact the unread self-replies were supposed to carry.
+
+    A thread that never renders is therefore retried every run and never sent, which
+    is visible in the sheet as a Threads row that keeps coming back `new`.
     """
-    return bool(source_url) and target == source_url
+    return bool(author_from_url(target))
 
 
 def dm_fallback_reason(platform: str, session_live, author: str = "",
@@ -101,16 +114,15 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
     contactless Threads lead must not take Telegram, hh and every other platform's
     leads down with it.
 
-    `author` is `lead.target` after resolving, `source_url` the thread URL it pointed
-    at before. When they are still equal the resolve did NOT happen — `render` failed
-    (login wall, timeout, network blip, all expected) and `resolve_threads_lead` handed
-    the lead back untouched, deliberately, so that it stays `new` and the next run
-    tries again. That lead is not on the DM fallback and must not be gated: parking it
-    as `manual` would forfeit the retry and, with it, the better outcome behind the
-    retry — the next render may find a real contact in a self-reply and send over
-    Telegram, never touching this channel at all. A thread that never renders is
-    retried every run and never sent; that is visible in the sheet and consistent with
-    how a failed generation is already handled.
+    `author` is `lead.target` after resolving. When it is still a thread post URL the
+    resolve did NOT happen — `render` failed (login wall, timeout, network blip, all
+    expected) and `resolve_threads_lead` handed the lead back untouched, deliberately,
+    so that it stays `new` and the next run tries again. That lead is not on the DM
+    fallback and must not be gated: parking it as `manual` would forfeit the retry
+    and, with it, the better outcome behind the retry — the next render may find a
+    real contact in a self-reply and send over Telegram, never touching this channel
+    at all. See `unresolved_thread` for why that is a question about shape and not
+    about identity with `source_url`.
 
     `session_live() -> bool` is a callable, not a bool, and is consulted last, so no
     lead that is not on the DM fallback reads the Threads state file at all.
@@ -122,18 +134,27 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
     lead would hit the same wall every time, silently, forever.
 
     The note carries both ways out, because there are genuinely two: log in, or send
-    it yourself. `author` is what the row's Источник now holds.
+    it yourself. `author` is what the row's Источник now holds, and `source_url` the
+    thread it came from — which is why the URL goes in, exactly as `hold_reason` does
+    it: by the time this writes, `update_resolved` has replaced Источник with the
+    handle and `mark_status` is about to overwrite Заметка, which held «…DM автору:
+    <URL>». Without it the human is told to write to a handle by hand with no way
+    left to open the post and read what the vacancy is.
     """
     if platform != "threads":
         return None
-    if thread_unread(author, source_url):
-        return None                      # thread unread — still `new`, retried later
+    if unresolved_thread(author):
+        return None                      # nobody to write to — still `new`, retried
     if session_live():
         return None
     parts = ["сессии Threads нет — DM автору отправить нечем",
              "выполни `make login_threads` на отдельном (burner) Instagram"]
     if author:
         parts.append(f"или напиши автору вручную: {author}")
+    if source_url and source_url != author:
+        # On a re-queued lead the source IS the handle; appending it would add
+        # nothing and read as a broken link.
+        parts.append(f"тред: {source_url}")
     return STATUS_MANUAL, "; ".join(parts)
 
 

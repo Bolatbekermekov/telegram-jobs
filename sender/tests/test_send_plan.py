@@ -3,7 +3,7 @@ from app.application.send_plan import (
     has_placeholder,
     hold_reason,
     skip_reason,
-    thread_unread,
+    unresolved_thread,
 )
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 
@@ -116,16 +116,22 @@ def test_a_resolved_contact_is_not_gated_and_never_reads_the_threads_state():
     assert calls == [], "состояние Threads читается только для threads-лида"
 
 
-# The carve-out: an unread thread is not a DM-fallback lead, it is a lead that has
-# not been resolved yet. `resolve_threads_lead` hands it back untouched on a render
-# failure — login wall, timeout, network blip — precisely so it stays `new` and the
-# next run tries again. Gating it to `manual` would forfeit that retry AND the good
-# outcome behind it: the next render may find a real contact in a self-reply and
-# send over Telegram, never touching the DM fallback at all.
+# The carve-out: a lead still pointing at the POST is not a DM-fallback lead, it is
+# a lead that has not been resolved yet. `resolve_threads_lead` hands it back
+# untouched on a render failure — login wall, timeout, network blip — precisely so
+# it stays `new` and the next run tries again. Gating it to `manual` would forfeit
+# that retry AND the good outcome behind it: the next render may find a real contact
+# in a self-reply and send over Telegram, never touching the DM fallback at all.
+#
+# The question is asked of the target's SHAPE, not of value identity with the URL the
+# lead arrived as. Identity was wrong: a lead already resolved onto the DM fallback
+# has Источник=@hr_acme, `render` refuses it (author_from_url wants a /post/ URL),
+# the resolver hands it back untouched, and target == source_url all over again —
+# so the re-queued lead read as "never rendered" and was stuck `new` forever.
 
 
 def test_an_unrendered_thread_stays_new_for_the_next_run():
-    """Target still equals the post URL => the resolve never happened."""
+    """Target is still a post URL => there is nobody to write to yet."""
     assert dm_fallback_reason("threads", lambda: False,
                               author=_URL, source_url=_URL) is None
 
@@ -151,32 +157,76 @@ def test_an_unrendered_thread_never_reads_the_threads_state_either():
     assert calls == [], "нерезолвленный тред — не DM-фолбэк, сессия ни при чём"
 
 
-def test_a_resolved_author_that_merely_looks_like_a_url_is_still_gated():
-    """The check is identity with THIS lead's source, not 'does it look like a
-    URL' — a different URL means the resolve did happen."""
-    other = "https://www.threads.com/@someone/post/DIFFERENT"
+# --- the re-queued lead: the recovery this whole task exists to create ----------
+# The gate note tells the human to run `make login_threads` and put Статус back to
+# `new`. The row it comes back on holds Платформа=threads, Источник=@hr_acme.
+
+
+def test_a_requeued_dm_fallback_lead_is_gated_again_when_there_is_still_no_session():
     gated = dm_fallback_reason("threads", lambda: False,
-                               author=other, source_url=_URL)
+                               author="@hr_acme", source_url="@hr_acme")
     assert gated is not None
     assert gated[0] == STATUS_MANUAL
 
 
-def test_thread_unread_is_target_identity_with_the_source():
-    """The rule itself, used twice: by the gate above (an unread thread is not a
-    DM-fallback lead) and by the loop, which must `continue` on it rather than fall
-    through to the channel. Falling through is not harmless — with no session
-    ThreadsChannel.start() raises ChannelUnavailable and the loop answers that with
-    SystemExit(1), which is the run-killing bug this whole gate exists to prevent."""
-    assert thread_unread(_URL, _URL) is True
-    assert thread_unread("@lnkrnchk", _URL) is False
-    assert thread_unread("https://www.threads.com/@other/post/Z", _URL) is False
+def test_a_requeued_dm_fallback_lead_reaches_the_channel_once_a_session_exists():
+    """The point of re-queueing. Reading this as "тред не прочитался" and skipping
+    it left the lead permanently unsendable — the human logs in, re-queues, and
+    nothing ever happens."""
+    assert dm_fallback_reason("threads", lambda: True,
+                              author="@hr_acme", source_url="@hr_acme") is None
 
 
-def test_thread_unread_needs_a_source_to_compare_against():
-    """No source URL means nothing to conclude — never call a lead unread on the
-    strength of two empty strings."""
-    assert thread_unread("", "") is False
-    assert thread_unread("@lnkrnchk", "") is False
+def test_a_resolved_author_is_never_confused_with_a_post_url():
+    """The discriminator: a handle is somebody to write to, a /post/ URL is not."""
+    assert unresolved_thread(_URL) is True
+    assert unresolved_thread("https://www.threads.net/@hr.acme/post/Z") is True
+    assert unresolved_thread("@hr_acme") is False
+    assert unresolved_thread("hr_acme") is False
+
+
+def test_a_profile_url_without_a_post_is_not_a_thread_to_read():
+    """author_from_url wants the /post/ segment, so a bare profile URL is not an
+    unread thread — there is nothing to render there."""
+    assert unresolved_thread("https://www.threads.com/@hr_acme") is False
+    assert unresolved_thread("") is False
+
+
+def test_a_different_post_url_is_still_unresolved():
+    """Not identity with THIS lead's source: any /post/ URL means the lead still
+    points at a thread rather than at a person, however it got there."""
+    assert unresolved_thread("https://www.threads.com/@someone/post/DIFFERENT") is True
+
+
+# --- the note has to survive the row being overwritten -------------------------
+
+
+def test_the_gated_note_keeps_a_pointer_to_the_thread():
+    """update_resolved has already replaced Источник with the handle and mark_status
+    overwrites Заметка, which held «…DM автору: <URL>». Without the URL here the
+    human is told to write to @hr_acme by hand and can no longer open the post to
+    read what the vacancy even is."""
+    _, note = dm_fallback_reason("threads", lambda: False,
+                                 author="@lnkrnchk", source_url=_URL)
+    assert _URL in note
+
+
+def test_the_note_does_not_repeat_the_handle_as_a_thread_url():
+    """On a re-queued lead the source is the handle, not a URL — appending it as
+    «тред: @hr_acme» would add nothing and read as a broken link."""
+    _, note = dm_fallback_reason("threads", lambda: False,
+                                 author="@hr_acme", source_url="@hr_acme")
+    assert "тред:" not in note
+    assert note.count("@hr_acme") == 1
+
+
+def test_the_note_without_an_author_offers_only_the_login_route():
+    """The `if author:` false branch: no handle to offer, so the note must stop
+    cleanly rather than trail off into «напиши автору вручную: »."""
+    _, note = dm_fallback_reason("threads", lambda: False, author="", source_url=_URL)
+    assert "login_threads" in note
+    assert "вручную" not in note
+    assert _URL in note
 
 
 # --- placeholders are a different animal ----------------------------------

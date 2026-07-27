@@ -23,7 +23,7 @@ from app.application.send_plan import (
     has_placeholder,
     hold_reason,
     skip_reason,
-    thread_unread,
+    unresolved_thread,
 )
 from app.domain.lead import (
     STATUS_FAILED,
@@ -150,15 +150,17 @@ def run() -> None:
                 if lead.platform != platform:
                     print(f"   контакт найден: {lead.platform} → {lead.target}")
                     platform = lead.platform
-                elif thread_unread(lead.target, thread_url):
-                    # The thread never rendered, so resolving handed the lead back
-                    # untouched and wrote no status. Leave it that way: `new` means
-                    # the next run tries again, and that retry is worth protecting —
-                    # a successful render may find a real contact in a self-reply and
-                    # send over Telegram, never touching the DM fallback. There is
-                    # nothing to send from the root post alone, and falling through
-                    # would either kill the run (no session -> ChannelUnavailable ->
-                    # SystemExit) or DM the author without the vacancy text.
+                elif unresolved_thread(lead.target):
+                    # Still pointing at the post, so the thread never rendered and
+                    # resolving handed the lead back untouched, writing no status.
+                    # Leave it that way: `new` means the next run tries again, and
+                    # that retry is worth protecting — a successful render may find a
+                    # real contact in a self-reply and send over Telegram, never
+                    # touching the DM fallback. There is nothing to send from the root
+                    # post alone, and falling through would either kill the run (no
+                    # session -> ChannelUnavailable -> SystemExit) or DM the author
+                    # without the vacancy text. A lead already on the DM fallback
+                    # points at a handle, not a post, so re-queueing it by hand works.
                     print(f"⏭  Лид #{lead.lead_id}: тред не прочитался — "
                           "оставляю 'new', повторю в следующем прогоне.")
                     continue
