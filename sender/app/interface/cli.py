@@ -529,6 +529,40 @@ def run_login_hh():
     print(f"✅ Сессия сохранена в {config.HH_STATE_PATH}. Этот Chrome можно закрыть.")
 
 
+def run_login_threads():
+    """One-time interactive Threads login; saves the browser session to a file.
+
+    Use a SEPARATE (burner) Instagram account: Threads runs on Instagram, and a
+    disabled Instagram disables its Threads profile automatically.
+
+    Only the DM fallback needs this session. Reading a thread to find the real
+    contact is anonymous (infrastructure/threads_thread.py), so skipping this
+    login costs nothing until a thread turns out to carry no contact at all.
+    """
+    from playwright.sync_api import sync_playwright
+
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch(headless=False)
+    context = browser.new_context()
+    page = context.new_page()
+    page.goto("https://www.threads.com/login")
+    print("Войди в Threads в открывшемся окне (через отдельный Instagram-аккаунт), "
+          "затем нажми Enter здесь...")
+    input()
+    context.storage_state(path=config.THREADS_STATE_PATH)
+    browser.close()
+    pw.stop()
+
+    # A saved state is not a session: Playwright stores whatever cookies the
+    # context held, and a logged-out context yields a file with no auth in it.
+    from app.infrastructure.threads_session import has_valid_session
+    if has_valid_session(config.THREADS_STATE_PATH):
+        print(f"✅ Сессия Threads сохранена: {config.THREADS_STATE_PATH}")
+    else:
+        print("⚠️ Файл сохранён, но живого `sessionid` в нём нет — вход не удался. "
+              "Проверь, что действительно залогинился, и повтори.")
+
+
 def run_login_all():
     """One command: log in to every platform, skipping ones with a live session.
 
@@ -547,6 +581,9 @@ def run_login_all():
     )
 
     from app.infrastructure.linkedin_session import has_valid_session
+    from app.infrastructure.threads_session import (
+        has_valid_session as threads_has_valid_session,
+    )
 
     has_session = {
         "telegram": Path(telegram_session_file(config.SESSION_PATH)).exists(),
@@ -554,6 +591,8 @@ def run_login_all():
         # is not a session to skip — re-login instead.
         "linkedin": has_valid_session(config.LINKEDIN_STATE_PATH),
         "hh": Path(config.HH_STATE_PATH).exists(),
+        # Same trap as LinkedIn: a state file without a live sessionid is a guest.
+        "threads": threads_has_valid_session(config.THREADS_STATE_PATH),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
     }
     todo = platforms_needing_login(has_session)
@@ -569,7 +608,8 @@ def run_login_all():
         subprocess.call([sys.executable, str(qr_script)])
 
     actions = {"telegram": _login_telegram, "linkedin": run_login_browser,
-               "hh": run_login_hh, "wellfound": run_login_wellfound}
+               "hh": run_login_hh, "threads": run_login_threads,
+               "wellfound": run_login_wellfound}
     for p in todo:
         print(f"\n🔑 {p}: вход...")
         try:
