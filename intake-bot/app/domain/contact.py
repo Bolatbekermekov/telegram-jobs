@@ -24,11 +24,16 @@ _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECA
 # "@" inside an email address (e.g. john@gmail.com).
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
 # The capture above is `\w{4,}` and stops at the first dot, so "@maria.hr" arrives at
-# the rule as "@maria" — a different, real user. This yields the WHOLE dotted token at
-# a match position, which is what the rule needs to see to refuse it. (Dots are legal
-# in a Threads/Instagram handle — that namespace is Instagram's — and illegal in a
-# Telegram username, which is the whole basis for refusing.)
-_HANDLE_TOKEN_RE = re.compile(r"[\w.]+")
+# the rule as "@maria" — a different, real user. This reads the whole HANDLE-SHAPED
+# head at a match position instead, which is what the rule needs to see to refuse it.
+# Dots are legal in a Threads/Instagram handle (that namespace is Instagram's) and
+# illegal in a Telegram username, which is the whole basis for refusing.
+# The charset is what decides where a handle ends, and it is ASCII — letters, digits,
+# periods, underscores — so the first non-ASCII character ENDS the handle: "@ivan.Пиши"
+# heads "ivan.", i.e. a plain "@ivan" followed by a sentence, not a dotted handle.
+# `*`, not `+`, because `\w` matches Cyrillic too: "@Иван_Петров" has an EMPTY ASCII
+# head, and `+` would fail to match there and raise on `.group(0)`.
+_ASCII_HANDLE_RE = re.compile(r"[A-Za-z0-9._]*")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _LINKEDIN_RE = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
 # HeadHunter runs one network across national domains (hh.kz, hh.uz, …) and the
@@ -119,28 +124,36 @@ def detect_contact(text: str) -> Contact | None:
         return Contact("telegram", _clean(m.group(0)))
     for m in _HANDLE_RE.finditer(text):
         # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
-        # Telegram target — it is an Instagram/Threads handle, or a period whose space
-        # the writer forgot. _HANDLE_RE captures `\w{4,}` and stops at the dot, so
-        # returning the match would store "@maria": a real, unrelated user nobody
-        # wrote in the message. Refuse the whole handle and keep going. If no other
-        # handle and no other rule answers, the intake replies «⚠️ Не нашёл контакт»
-        # and asks for a resend, which is honest; a truncated stranger is not.
+        # Telegram target — it is an Instagram/Threads handle. _HANDLE_RE captures
+        # `\w{4,}` and stops at the dot, so returning the match would store "@maria":
+        # a real, unrelated user nobody wrote in the message. Refuse the whole handle
+        # and keep going. If no other handle and no other rule answers, the intake
+        # replies «⚠️ Не нашёл контакт» and asks for a resend, which is honest; a
+        # truncated stranger is not.
+        #
+        # WHICH dot counts is decided by what follows it, and that is not a nicety.
+        # A handle continues only in the ASCII charset Instagram/Threads uses, so a
+        # dot followed by non-ASCII cannot be a handle carrying on — it is a period
+        # whose space the writer forgot. "пиши @ivan.Пиши в личку" is therefore an
+        # ordinary "@ivan" and still wins, while "@maria.hr" is refused: the rule
+        # rejects exactly the shape that is provably not Telegram, and nothing else.
         # A TRAILING dot is sentence punctuation ("пиши @ivan.") and is stripped
-        # first — that shape is a plain handle and still wins.
+        # before the test, so that shape is a plain handle and wins too.
         #
         # This is the general form of the author leak closed earlier, and it subsumes
-        # it for every dotted shape: "@ivan.hr", "@lnkrnchk.hr", "@lnkrnchk.Пиши",
-        # "@ivan.hr.Пиши" are now refused for everyone, author or not, so the three
-        # author clauses that used to sit here collapse into the one below.
-        token = _HANDLE_TOKEN_RE.match(text, m.start(1)).group(0).rstrip(".")
-        if "." in token:
+        # it for every dotted shape — "@ivan.hr", "@lnkrnchk.hr", "@ivan.hr.Пиши" are
+        # refused for everyone, author or not — so the three author clauses that used
+        # to sit here collapse into the one below.
+        handle = _ASCII_HANDLE_RE.match(text, m.start(1)).group(0).rstrip(".")
+        if "." in handle:
             continue
         # What is left is an UNDOTTED author, who is a valid Telegram shape and would
-        # otherwise be DMed at a handle that does not exist there. With no dot in the
-        # token, the token IS the capture, so comparing either is the same test. A
-        # prefix test would be wrong: it swallows "@lnkrnchk_hr", who is a different
-        # person from the author "@lnkrnchk".
-        if author and token.lower() == author[1:]:
+        # otherwise be DMed at a handle that does not exist there. Compared on the
+        # handle head rather than on the capture, and that is load-bearing in both
+        # directions: "@lnkrnchk.Пиши" reduces to "lnkrnchk" — the author, who must
+        # not leak — while a bare prefix test would swallow "@lnkrnchk_hr", who is a
+        # different person and a real contact.
+        if author and handle.lower() == author[1:]:
             continue
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)

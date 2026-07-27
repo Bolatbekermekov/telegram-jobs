@@ -115,18 +115,22 @@ _GOLDEN = [
     ("CV -> hr @ acme.com или https://linkedin.com/in/ivan",
      "linkedin", "https://linkedin.com/in/ivan"),
     # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
-    # Telegram target — it is an Instagram/Threads handle, or a period whose space
-    # the writer forgot. The capture stops at the dot, so taking the match stored
-    # "@maria": a real, unrelated user who was never written in the message. The
-    # author exemption did not cover this — it is author-relative, and maria is
-    # nobody's author. Refusing and falling through is the answer; when no other
-    # rule answers either, the intake says it found no contact and asks for a
-    # resend, which beats messaging the wrong person.
+    # Telegram target — it is an Instagram/Threads handle. The capture stops at the
+    # dot, so taking the match stored "@maria": a real, unrelated user who was never
+    # written in the message. The author exemption did not cover this — it is
+    # author-relative, and maria is nobody's author. Refusing and falling through is
+    # the answer; when no other rule answers either, the intake says it found no
+    # contact and asks for a resend, which beats messaging the wrong person.
     ("пиши @maria.hr", None, None),
     # The refusal is per handle, not per message: a real handle later in the same
     # text still wins.
     ("пиши @maria.hr или @ivan_hr", "telegram", "@ivan_hr"),
-    # The guard against over-refusing: a TRAILING dot is sentence punctuation, not
+    # The other direction, and the reason the rule looks at what FOLLOWS the dot:
+    # Instagram/Threads handles are ASCII, so a dot followed by non-ASCII cannot be
+    # a handle continuing — it is a period whose space the writer forgot. This is a
+    # plain "@ivan" and must not be refused along with the dotted handles.
+    ("пиши @ivan.Пиши в личку", "telegram", "@ivan"),
+    # Same guard from the other end: a TRAILING dot is sentence punctuation, not
     # part of a handle, so this stays an ordinary Telegram contact.
     ("пиши @ivan_hr.", "telegram", "@ivan_hr"),
 ]
