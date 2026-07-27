@@ -1,7 +1,12 @@
 """ThreadsChannel is the DM fallback: used only when the thread carried no contact."""
 import pytest
 
-from app.domain.channel import ChannelUnavailable, ManualApplyRequired, OutreachContent
+from app.domain.channel import (
+    ChannelError,
+    ChannelUnavailable,
+    ManualApplyRequired,
+    OutreachContent,
+)
 from app.infrastructure.channels.threads import ThreadsChannel, normalize_target
 
 
@@ -19,6 +24,36 @@ def test_normalize_target():
     assert normalize_target("skyluckwalker") == "skyluckwalker"
     assert normalize_target("https://www.threads.com/@skyluckwalker") == "skyluckwalker"
     assert normalize_target("  @Sky_1  ") == "Sky_1"
+
+
+def test_normalize_target_digs_the_handle_out_of_any_threads_url():
+    """Источник is hand-editable, so it is not always the canonical form. A post
+    URL, the mobile host and a URL sitting inside a sentence all name one author."""
+    assert normalize_target("https://m.threads.com/@hr_acme/post/DbL4LxBl6v9") == "hr_acme"
+    assert normalize_target("https://www.threads.net/@hr_acme") == "hr_acme"
+    assert normalize_target("threads.com/@hr.acme") == "hr.acme"
+    assert normalize_target("пиши автору https://www.threads.com/@hr_acme") == "hr_acme"
+
+
+def test_normalize_target_refuses_what_is_not_a_handle():
+    """Not cosmetic. Today every target dead-ends at ManualApplyRequired, so nothing
+    can be mis-sent — but the moment _deliver is implemented, a string that merely
+    CONTAINS a URL, or two handles, would be typed into the DM composer as if it
+    were one username. "" is the existing "I can't tell who to write to" signal:
+    send() turns it into a ChannelError."""
+    for junk in ["", "   ", "спросить у Пети", "https://example.com/@nick",
+                 "https://notthreads.com/@nick", "@nick, а не ответит — пиши @other",
+                 "@" + "n" * 31]:
+        assert normalize_target(junk) == "", junk
+
+
+def test_an_unparseable_target_is_a_channel_error_not_a_send():
+    """It must never reach _deliver: a lead nobody can be identified from is a
+    broken row, and the run says so instead of DMing something shaped like prose."""
+    ch = ThreadsChannel("s.json", True)
+    ch._deliver = lambda handle, body: pytest.fail("_deliver must not be reached")
+    with pytest.raises(ChannelError):
+        ch.send("спросить у Пети", OutreachContent(body="Привет"))
 
 
 def test_start_without_a_live_session_is_channel_unavailable(tmp_path, monkeypatch):
@@ -44,8 +79,9 @@ def test_attachment_is_ignored_not_an_error():
 def test_the_unpinned_composer_is_a_manual_apply():
     """The DM composer's selectors are not pinned yet — they cannot be read without
     a logged-in account, and this project pins selectors from the live page rather
-    than guessing them. Until Task 10 does that, reaching the composer must raise
-    the project's own "couldn't be automated" signal."""
+    than guessing them. That account does not exist yet, so this is still true at
+    the end of the feature: reaching the composer must raise the project's own
+    "couldn't be automated" signal, never a bare crash."""
     ch = ThreadsChannel("s.json", True)
     with pytest.raises(ManualApplyRequired) as exc:
         ch.send("@sky", OutreachContent(body="Привет"))

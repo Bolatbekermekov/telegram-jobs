@@ -30,17 +30,40 @@ from app.infrastructure.threads_session import has_valid_session
 # measured; 500 is the conservative floor. Raise it only after checking live.
 _BODY_LIMIT = 500
 
+# A Threads/Instagram username: ASCII letters, digits, dots, underscores, ≤30.
+# Case is PRESERVED, not folded: the composer is given what the sheet holds.
+_VALID_HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
+
+# The host is matched with its subdomains (`m.threads.com` is the phone's share
+# sheet) but not as a suffix — the leading `(?:^|[\s(<])` is what keeps
+# "notthreads.com/@nick" from being read as Threads. `search`, not `match`,
+# because Источник is hand-editable and a URL can arrive inside a sentence; the
+# capture stops at `/`, so a post URL yields the author rather than the post id.
 _HANDLE_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?threads\.(?:com|net)/@?([\w.]+)", re.IGNORECASE)
+    r"(?:^|[\s(<])(?:https?://)?(?:[\w-]+\.)*threads\.(?:com|net)/@?"
+    r"([A-Za-z0-9._]{1,30})",
+    re.IGNORECASE)
 
 
 def normalize_target(target: str) -> str:
-    """'@nick', 'nick', 'https://www.threads.com/@nick' -> 'nick'."""
+    """'@nick', 'nick', 'https://m.threads.com/@nick/post/X' -> 'nick'. "" if unsure.
+
+    Validated, not merely stripped, and the validation is the point. Источник is a
+    spreadsheet cell a human edits, so it can hold a post URL, a sentence around a
+    URL, two handles, or a note to self. Whatever comes out of here is typed into a
+    DM composer as a username, so anything that is not exactly one username shape
+    must resolve to "" — `send` raises ChannelError on "", which surfaces the broken
+    row instead of messaging whoever the garbage happens to resolve to.
+
+    While `_deliver` is unimplemented every target ends at ManualApplyRequired and
+    nothing can be mis-sent; this guard exists so that stops being true safely.
+    """
     t = (target or "").strip()
-    m = _HANDLE_RE.match(t)
+    m = _HANDLE_RE.search(t)
     if m:
         t = m.group(1)
-    return t.lstrip("@")
+    t = t.lstrip("@")
+    return t if _VALID_HANDLE_RE.match(t) else ""
 
 
 class ThreadsChannel:
@@ -90,7 +113,11 @@ class ThreadsChannel:
         Not implemented yet, and deliberately so: the composer's DOM cannot be read
         without a logged-in Threads account, and this project pins selectors from
         the live page with the date they were captured rather than guessing them.
-        This is the one place in the feature whose DOM was not verifiable up front.
+        This is the one place in the feature whose DOM was not verifiable up front,
+        and it is still open at the end of the feature — the burner Instagram it
+        needs does not exist yet. Closing it: `make login_threads`, open the
+        composer by hand, pin its selectors here with the date, following
+        channels/linkedin.py::fill_and_send.
 
         `ManualApplyRequired`, not `NotImplementedError`: this is exactly the case
         that exception names — the outreach could not be automated, so a human does
@@ -102,5 +129,6 @@ class ThreadsChannel:
             "DM-композер Threads ещё не автоматизирован: его селекторы снимаются "
             "только с живой страницы под залогиненным аккаунтом, а гадать их в "
             "этом проекте нельзя. Что закрывает: `make login_threads` на отдельном "
-            "(burner) Instagram, дальше Task 10 фиксирует селекторы. Пока — напиши "
+            "(burner) Instagram — аккаунта под это пока нет, поэтому шаг остаётся "
+            "открытым намеренно. Пока — напиши "
             f"автору вручную: @{handle}")
