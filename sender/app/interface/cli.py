@@ -23,6 +23,7 @@ from app.application.send_plan import (
     has_placeholder,
     hold_reason,
     skip_reason,
+    thread_unread,
 )
 from app.domain.lead import (
     STATUS_FAILED,
@@ -149,6 +150,18 @@ def run() -> None:
                 if lead.platform != platform:
                     print(f"   контакт найден: {lead.platform} → {lead.target}")
                     platform = lead.platform
+                elif thread_unread(lead.target, thread_url):
+                    # The thread never rendered, so resolving handed the lead back
+                    # untouched and wrote no status. Leave it that way: `new` means
+                    # the next run tries again, and that retry is worth protecting —
+                    # a successful render may find a real contact in a self-reply and
+                    # send over Telegram, never touching the DM fallback. There is
+                    # nothing to send from the root post alone, and falling through
+                    # would either kill the run (no session -> ChannelUnavailable ->
+                    # SystemExit) or DM the author without the vacancy text.
+                    print(f"⏭  Лид #{lead.lead_id}: тред не прочитался — "
+                          "оставляю 'new', повторю в следующем прогоне.")
+                    continue
                 else:
                     print(f"   контакта в треде нет, буду писать автору: {lead.target}")
 
@@ -178,7 +191,7 @@ def run() -> None:
 
                 gated = dm_fallback_reason(
                     platform, lambda: has_valid_session(config.THREADS_STATE_PATH),
-                    author=lead.target)
+                    author=lead.target, source_url=thread_url)
                 if gated is not None:
                     # The lead is on the DM fallback and there is no burner session.
                     # Gated HERE, before the channel opens, precisely so start() is

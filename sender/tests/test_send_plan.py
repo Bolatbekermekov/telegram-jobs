@@ -3,6 +3,7 @@ from app.application.send_plan import (
     has_placeholder,
     hold_reason,
     skip_reason,
+    thread_unread,
 )
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 
@@ -81,7 +82,8 @@ def test_the_dm_fallback_without_a_session_is_manual():
     cannot be attempted at all, and the lead must say so instead of taking the run
     down with it: ChannelUnavailable out of start() is answered with SystemExit(1),
     which would kill Telegram/hh/every other platform's leads in the same run."""
-    gated = dm_fallback_reason("threads", lambda: False, author="@lnkrnchk")
+    gated = dm_fallback_reason("threads", lambda: False,
+                               author="@lnkrnchk", source_url=_URL)
     assert gated is not None
     status, _ = gated
     assert status == STATUS_MANUAL, "`skipped` — терминальный статус, который человек запретил"
@@ -89,13 +91,15 @@ def test_the_dm_fallback_without_a_session_is_manual():
 
 def test_the_gated_note_carries_both_routes_out():
     """Acting by hand needs both doors: log in, or write to the author yourself."""
-    _, note = dm_fallback_reason("threads", lambda: False, author="@lnkrnchk")
+    _, note = dm_fallback_reason("threads", lambda: False,
+                                 author="@lnkrnchk", source_url=_URL)
     assert "login_threads" in note
     assert "@lnkrnchk" in note
 
 
 def test_a_live_session_lets_the_lead_reach_the_channel():
-    assert dm_fallback_reason("threads", lambda: True, author="@lnkrnchk") is None
+    assert dm_fallback_reason("threads", lambda: True,
+                              author="@lnkrnchk", source_url=_URL) is None
 
 
 def test_a_resolved_contact_is_not_gated_and_never_reads_the_threads_state():
@@ -107,16 +111,72 @@ def test_a_resolved_contact_is_not_gated_and_never_reads_the_threads_state():
         calls.append(1)
         return False
 
-    assert dm_fallback_reason("telegram", _session, author="@acmecorp") is None
+    assert dm_fallback_reason("telegram", _session,
+                              author="@acmecorp", source_url=_URL) is None
     assert calls == [], "состояние Threads читается только для threads-лида"
 
 
-def test_an_unknown_author_still_gates_rather_than_sends():
-    """A thread whose author could not be parsed is still unsendable without a
-    session; the note just has one door instead of two."""
-    gated = dm_fallback_reason("threads", lambda: False, author="")
+# The carve-out: an unread thread is not a DM-fallback lead, it is a lead that has
+# not been resolved yet. `resolve_threads_lead` hands it back untouched on a render
+# failure — login wall, timeout, network blip — precisely so it stays `new` and the
+# next run tries again. Gating it to `manual` would forfeit that retry AND the good
+# outcome behind it: the next render may find a real contact in a self-reply and
+# send over Telegram, never touching the DM fallback at all.
+
+
+def test_an_unrendered_thread_stays_new_for_the_next_run():
+    """Target still equals the post URL => the resolve never happened."""
+    assert dm_fallback_reason("threads", lambda: False,
+                              author=_URL, source_url=_URL) is None
+
+
+def test_an_unrendered_thread_is_not_gated_even_with_a_live_session():
+    """Nothing about the session makes an unread thread sendable — it has no
+    author handle to DM. It is `new` either way."""
+    assert dm_fallback_reason("threads", lambda: True,
+                              author=_URL, source_url=_URL) is None
+
+
+def test_an_unrendered_thread_never_reads_the_threads_state_either():
+    """The retry is decided before the session is: no state file read for a lead
+    that is not on the DM fallback, whichever way it failed to get there."""
+    calls = []
+
+    def _session():
+        calls.append(1)
+        return False
+
+    assert dm_fallback_reason("threads", _session,
+                              author=_URL, source_url=_URL) is None
+    assert calls == [], "нерезолвленный тред — не DM-фолбэк, сессия ни при чём"
+
+
+def test_a_resolved_author_that_merely_looks_like_a_url_is_still_gated():
+    """The check is identity with THIS lead's source, not 'does it look like a
+    URL' — a different URL means the resolve did happen."""
+    other = "https://www.threads.com/@someone/post/DIFFERENT"
+    gated = dm_fallback_reason("threads", lambda: False,
+                               author=other, source_url=_URL)
     assert gated is not None
     assert gated[0] == STATUS_MANUAL
+
+
+def test_thread_unread_is_target_identity_with_the_source():
+    """The rule itself, used twice: by the gate above (an unread thread is not a
+    DM-fallback lead) and by the loop, which must `continue` on it rather than fall
+    through to the channel. Falling through is not harmless — with no session
+    ThreadsChannel.start() raises ChannelUnavailable and the loop answers that with
+    SystemExit(1), which is the run-killing bug this whole gate exists to prevent."""
+    assert thread_unread(_URL, _URL) is True
+    assert thread_unread("@lnkrnchk", _URL) is False
+    assert thread_unread("https://www.threads.com/@other/post/Z", _URL) is False
+
+
+def test_thread_unread_needs_a_source_to_compare_against():
+    """No source URL means nothing to conclude — never call a lead unread on the
+    strength of two empty strings."""
+    assert thread_unread("", "") is False
+    assert thread_unread("@lnkrnchk", "") is False
 
 
 # --- placeholders are a different animal ----------------------------------
