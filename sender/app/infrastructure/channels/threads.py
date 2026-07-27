@@ -18,7 +18,12 @@ DOM interaction is confined to _deliver().
 """
 import re
 
-from app.domain.channel import ChannelError, ChannelUnavailable, OutreachContent
+from app.domain.channel import (
+    ChannelError,
+    ChannelUnavailable,
+    ManualApplyRequired,
+    OutreachContent,
+)
 from app.infrastructure.threads_session import has_valid_session
 
 # Threads posts cap at 500 characters. The DM limit is not documented and was not
@@ -82,11 +87,20 @@ class ThreadsChannel:
     def _deliver(self, handle: str, body: str) -> None:
         """Open the DM composer for `handle` and send `body`.
 
-        Selectors are pinned during the live acceptance step of Task 10 — a DM
-        composer cannot be read without a logged-in account, so this is the one
-        place in the feature whose DOM was not verifiable up front.
+        Not implemented yet, and deliberately so: the composer's DOM cannot be read
+        without a logged-in Threads account, and this project pins selectors from
+        the live page with the date they were captured rather than guessing them.
+        This is the one place in the feature whose DOM was not verifiable up front.
+
+        `ManualApplyRequired`, not `NotImplementedError`: this is exactly the case
+        that exception names — the outreach could not be automated, so a human does
+        it by hand — and it is the one `SendOutreach` maps to `manual`, which is
+        what the lead must land on. A bare `NotImplementedError` would fall through
+        to the generic handler and be recorded as an ordinary failure.
         """
-        raise NotImplementedError(
-            "DM-композер Threads не реализован: селекторы снимаются на живом "
-            "залогиненном аккаунте (Task 10). До этого threads-лид без контакта "
-            "в треде помечается `manual`.")
+        raise ManualApplyRequired(
+            "DM-композер Threads ещё не автоматизирован: его селекторы снимаются "
+            "только с живой страницы под залогиненным аккаунтом, а гадать их в "
+            "этом проекте нельзя. Что закрывает: `make login_threads` на отдельном "
+            "(burner) Instagram, дальше Task 10 фиксирует селекторы. Пока — напиши "
+            f"автору вручную: @{handle}")

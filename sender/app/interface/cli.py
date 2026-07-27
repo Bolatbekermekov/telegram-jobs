@@ -18,7 +18,12 @@ from app.application.generate_message import (
 )
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
-from app.application.send_plan import has_placeholder, hold_reason, skip_reason
+from app.application.send_plan import (
+    dm_fallback_reason,
+    has_placeholder,
+    hold_reason,
+    skip_reason,
+)
 from app.domain.lead import (
     STATUS_FAILED,
     STATUS_MANUAL,
@@ -129,6 +134,7 @@ def run() -> None:
                 # Threads browser for a lead that should go out over Telegram.
                 from app.application.resolve_threads_lead import resolve_threads_lead
                 from app.infrastructure.openai_contact import OpenAIContactDetector
+                from app.infrastructure.threads_session import has_valid_session
                 from app.infrastructure.threads_thread import render_thread
                 print("Читаю тред Threads...")
                 thread_url = lead.target      # resolving replaces it with the contact
@@ -168,6 +174,23 @@ def run() -> None:
                     # same as the guard above, it retries next run.
                     print(f"⏭  Лид #{lead.lead_id}: платформа '{platform}' "
                           "ограничила нас в этом прогоне — оставляю на следующий.")
+                    continue
+
+                gated = dm_fallback_reason(
+                    platform, lambda: has_valid_session(config.THREADS_STATE_PATH),
+                    author=lead.target)
+                if gated is not None:
+                    # The lead is on the DM fallback and there is no burner session.
+                    # Gated HERE, before the channel opens, precisely so start() is
+                    # never reached: its ChannelUnavailable meets the handler below,
+                    # which ends the whole run — correct for a channel that is meant
+                    # to work, but this one has no session by default and may never
+                    # get one. One contactless Threads lead must not cost every other
+                    # platform's leads their run. Before generation too: nothing to
+                    # pay OpenAI for on a message that cannot be sent.
+                    status, note = gated
+                    repo.mark_status(lead, status, note=note)
+                    print(f"✋ Лид #{lead.lead_id}: {note}")
                     continue
 
             try:

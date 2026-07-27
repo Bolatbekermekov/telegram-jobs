@@ -1,7 +1,7 @@
 """ThreadsChannel is the DM fallback: used only when the thread carried no contact."""
 import pytest
 
-from app.domain.channel import ChannelUnavailable, OutreachContent
+from app.domain.channel import ChannelUnavailable, ManualApplyRequired, OutreachContent
 from app.infrastructure.channels.threads import ThreadsChannel, normalize_target
 
 
@@ -39,3 +39,29 @@ def test_attachment_is_ignored_not_an_error():
     ch._deliver = lambda handle, body: sent.update(handle=handle, body=body)
     ch.send("@sky", OutreachContent(body="Привет", attachment_path="/cv/me.pdf"))
     assert sent == {"handle": "sky", "body": "Привет"}
+
+
+def test_the_unpinned_composer_is_a_manual_apply():
+    """The DM composer's selectors are not pinned yet — they cannot be read without
+    a logged-in account, and this project pins selectors from the live page rather
+    than guessing them. Until Task 10 does that, reaching the composer must raise
+    the project's own "couldn't be automated" signal."""
+    ch = ThreadsChannel("s.json", True)
+    with pytest.raises(ManualApplyRequired) as exc:
+        ch.send("@sky", OutreachContent(body="Привет"))
+    assert "login_threads" in str(exc.value)
+
+
+def test_a_lead_reaching_the_composer_lands_on_manual():
+    """The whole point of the exception choice, asserted end to end: SendOutreach
+    maps it to manual=True, so the send loop writes `manual` — not a bare failure."""
+    from app.application.send_outreach import SendOutreach
+
+    class _Lead:
+        target = "@sky"
+
+    res = SendOutreach(ThreadsChannel("s.json", True)).execute(
+        _Lead(), OutreachContent(body="Привет"))
+    assert res.ok is False
+    assert res.manual is True
+    assert "login_threads" in res.error

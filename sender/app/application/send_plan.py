@@ -61,6 +61,43 @@ def hold_reason(auto_send: bool, review: str = "", contact: str = "",
     return STATUS_MANUAL, "; ".join(parts)
 
 
+def dm_fallback_reason(platform: str, session_live, author: str = "") -> tuple[str, str] | None:
+    """Why the Threads DM fallback can't even be attempted, as (status, note), or None.
+
+    Only ever true of a lead whose thread named no contact at all, so it stayed on
+    `threads` and would be DM'd to its author — the weakest route in the feature and
+    the one everything else is built to avoid needing.
+
+    Checked BEFORE the channel is opened, which is the whole point. `ThreadsChannel.
+    start()` answers a dead session with `ChannelUnavailable`, and the send loop
+    answers that with `SystemExit(1)` — right for a channel that is supposed to work
+    (a broken session must not go unnoticed while the healthy platforms drain), wrong
+    for this one, where "no session" is the expected state until a burner Instagram
+    exists and possibly forever, since the human may decide never to create one. One
+    contactless Threads lead must not take Telegram, hh and every other platform's
+    leads down with it.
+
+    `session_live() -> bool` is a callable, not a bool, so a lead the thread resolved
+    onto Telegram or email never reads the Threads state file at all.
+
+    The status is `manual`, for the same reason `hold_reason` uses it: it is outside
+    `fetch_new_leads`, it says the truth ("needs a person"), and it is not the
+    terminal `skipped` the human forbade. `new` would be worse than useless here —
+    nothing about the next run is different, so the lead would hit the same wall
+    every time, silently, forever.
+
+    The note carries both ways out, because there are genuinely two: log in, or send
+    it yourself. `author` is what the row's Источник now holds.
+    """
+    if platform != "threads" or session_live():
+        return None
+    parts = ["сессии Threads нет — DM автору отправить нечем",
+             "выполни `make login_threads` на отдельном (burner) Instagram"]
+    if author:
+        parts.append(f"или напиши автору вручную: {author}")
+    return STATUS_MANUAL, "; ".join(parts)
+
+
 # A slot the writer was supposed to fill: bracketed prose starting in lower case
 # ("[почему именно эта компания]", "[название компании]", "[your name]"). The
 # lower-case start is what separates it from a bracketed proper noun the letter

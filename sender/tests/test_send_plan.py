@@ -1,4 +1,9 @@
-from app.application.send_plan import has_placeholder, hold_reason, skip_reason
+from app.application.send_plan import (
+    dm_fallback_reason,
+    has_placeholder,
+    hold_reason,
+    skip_reason,
+)
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 
 _KNOWN_T = {"telegram", "linkedin", "hh"}
@@ -62,6 +67,56 @@ def test_interactive_mode_is_never_held():
     s/k/q is already their decision."""
     assert hold_reason(auto_send=False, review=_REVIEW) is None
     assert hold_reason(auto_send=False) is None
+
+
+# --- the DM fallback with no burner session -------------------------------
+# Same seam convention as hold_reason above: `run()` has no test harness, so these
+# assert the decision, and the loop's part is the same two lines —
+# mark_status(lead, status, note=note) then `continue`.
+
+
+def test_the_dm_fallback_without_a_session_is_manual():
+    """The human may never create the burner Instagram — this path is the weak
+    fallback the whole feature is built to avoid needing. Without a session the DM
+    cannot be attempted at all, and the lead must say so instead of taking the run
+    down with it: ChannelUnavailable out of start() is answered with SystemExit(1),
+    which would kill Telegram/hh/every other platform's leads in the same run."""
+    gated = dm_fallback_reason("threads", lambda: False, author="@lnkrnchk")
+    assert gated is not None
+    status, _ = gated
+    assert status == STATUS_MANUAL, "`skipped` — терминальный статус, который человек запретил"
+
+
+def test_the_gated_note_carries_both_routes_out():
+    """Acting by hand needs both doors: log in, or write to the author yourself."""
+    _, note = dm_fallback_reason("threads", lambda: False, author="@lnkrnchk")
+    assert "login_threads" in note
+    assert "@lnkrnchk" in note
+
+
+def test_a_live_session_lets_the_lead_reach_the_channel():
+    assert dm_fallback_reason("threads", lambda: True, author="@lnkrnchk") is None
+
+
+def test_a_resolved_contact_is_not_gated_and_never_reads_the_threads_state():
+    """The thread named a real contact, so the lead now goes out over Telegram —
+    whether a Threads burner exists is none of its business."""
+    calls = []
+
+    def _session():
+        calls.append(1)
+        return False
+
+    assert dm_fallback_reason("telegram", _session, author="@acmecorp") is None
+    assert calls == [], "состояние Threads читается только для threads-лида"
+
+
+def test_an_unknown_author_still_gates_rather_than_sends():
+    """A thread whose author could not be parsed is still unsendable without a
+    session; the note just has one door instead of two."""
+    gated = dm_fallback_reason("threads", lambda: False, author="")
+    assert gated is not None
+    assert gated[0] == STATUS_MANUAL
 
 
 # --- placeholders are a different animal ----------------------------------
