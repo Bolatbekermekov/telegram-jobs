@@ -541,17 +541,42 @@ def run_login_threads():
     """
     from playwright.sync_api import sync_playwright
 
-    pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=False)
-    context = browser.new_context()
-    page = context.new_page()
-    page.goto("https://www.threads.com/login")
-    print("Войди в Threads в открывшемся окне (через отдельный Instagram-аккаунт), "
-          "затем нажми Enter здесь...")
-    input()
-    context.storage_state(path=config.THREADS_STATE_PATH)
-    browser.close()
-    pw.stop()
+    saved = False
+    # `with`, and the session pull guarded, the same way run_login_hh and
+    # run_login_wellfound do it. Not defensive padding: the natural thing to do
+    # once you are logged in is to CLOSE the window, and then storage_state()
+    # raises on a dead context. Unguarded that is a raw Playwright traceback on
+    # top of a login that actually WORKED, with the browser and the driver both
+    # left running — and it is the first thing the human does after creating the
+    # burner account, so it is the worst possible place to be unhelpful.
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=False)
+        try:
+            context = browser.new_context()
+            context.new_page().goto("https://www.threads.com/login")
+            print("Войди в Threads в открывшемся окне (через отдельный "
+                  "Instagram-аккаунт), затем нажми Enter здесь...")
+            input()
+            try:
+                context.storage_state(path=config.THREADS_STATE_PATH)
+                saved = True
+            except Exception as exc:  # noqa: BLE001
+                # Nothing to recover: the cookies live in that browser context and
+                # a closed window takes them with it. Say so, instead of a stack
+                # trace that reads like the login itself failed.
+                print(f"⚠️ Не смог забрать сессию из браузера: {exc}")
+                print("   Скорее всего окно закрыли до того, как ты нажал Enter — "
+                      "куки живут внутри него, и после закрытия взять их уже "
+                      "неоткуда. Запусти `make login_threads` ещё раз и НЕ закрывай "
+                      "окно, пока не нажмёшь Enter здесь.")
+        finally:
+            try:
+                browser.close()
+            except Exception:  # noqa: BLE001 — already gone is the normal case here
+                pass
+
+    if not saved:
+        return
 
     # A saved state is not a session: Playwright stores whatever cookies the
     # context held, and a logged-out context yields a file with no auth in it.

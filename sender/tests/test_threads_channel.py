@@ -37,14 +37,30 @@ def test_normalize_target_digs_the_handle_out_of_any_threads_url():
 
 def test_normalize_target_refuses_what_is_not_a_handle():
     """Not cosmetic. Today every target dead-ends at ManualApplyRequired, so nothing
-    can be mis-sent — but the moment _deliver is implemented, a string that merely
-    CONTAINS a URL, or two handles, would be typed into the DM composer as if it
-    were one username. "" is the existing "I can't tell who to write to" signal:
-    send() turns it into a ChannelError."""
+    can be mis-sent — but the moment _deliver is implemented, whatever comes out of
+    here is typed into the DM composer as a username. So anything that is not one
+    handle must resolve to "", the existing "I can't tell who to write to" signal
+    that send() turns into a ChannelError.
+
+    The limit of the guard, stated so the next reader does not over-trust it: the
+    shape check runs on the WHOLE string and only when no Threads URL matched. Two
+    BARE handles are therefore refused (that string never matches the URL pattern,
+    so it has to pass the whole-string check) — but two URLs are NOT: the first one
+    wins, pinned in the test below."""
     for junk in ["", "   ", "спросить у Пети", "https://example.com/@nick",
                  "https://notthreads.com/@nick", "@nick, а не ответит — пиши @other",
                  "@" + "n" * 31]:
         assert normalize_target(junk) == "", junk
+
+
+def test_normalize_target_takes_the_first_of_two_threads_urls():
+    """The documented limit of the guard above, pinned rather than left to chance.
+    A cell naming two different people resolves to the first, silently — the URL
+    branch returns before any whole-string check can object. Harmless while the
+    composer is unimplemented; whoever writes `_deliver` should know this is a
+    first-wins rule and not mistake it for a refusal."""
+    two = "https://www.threads.com/@hr_acme и https://www.threads.com/@other"
+    assert normalize_target(two) == "hr_acme"
 
 
 def test_an_unparseable_target_is_a_channel_error_not_a_send():
