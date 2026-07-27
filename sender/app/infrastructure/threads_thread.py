@@ -36,9 +36,11 @@ _GOTO_TIMEOUT_MS = 30000
 #    is locale-independent (unlike the «Автор»/"Author" badge);
 #  * a post block = `a.closest('[data-pressable-container]')`. Threads marks every
 #    post card with that attribute, exactly one per card: measured on the target
-#    thread, 10 containers for 10 posts, none nested; on a profile feed, 16 for
-#    15 posts plus 1 quoted card. The whole-thread wrapper («Ветка … просмотров»)
-#    is NOT a pressable container, so it can no longer be picked up at all;
+#    thread, 10 containers for the 10 posts rendered at the time, none nested; on a
+#    profile feed, 16 for 15 posts plus 1 quoted card. (The same thread yields 13
+#    once scrolled — see _SCROLL_JS below. The ratio is what was measured here, not
+#    the total.) The whole-thread wrapper («Ветка … просмотров») is NOT a pressable
+#    container, so it can no longer be picked up at all;
 #  * quote posts DO nest one card inside another. The outer card is the author's own
 #    post and the inner one is what they quoted, so any block CONTAINED by another
 #    block is dropped. Measured on @mosseri's feed, keeping the inner card instead
@@ -153,6 +155,47 @@ _READ_BLOCKS_JS = """
 """
 
 
+# Threads PAGINATES a thread on scroll, and it does not scroll the window: the posts
+# live inside an overflow container (`div#scrollview` at the time of writing), so
+# `window.scrollTo` and a wheel event over the document are both no-ops — the count
+# never moves. Hence the walk from a post card up to its first scrollable ancestor:
+# semantic, not pinned to Meta's generated id, and it degrades to
+# `document.scrollingElement` if the card attribute is ever renamed.
+#
+# Measured live and anonymously 2026-07-27 — goto+2500ms (what this used to do) vs
+# the same page scrolled to the bottom, counting [data-pressable-container]:
+#
+#     @mosseri/post/Dac8hv6lrYM   (281 replies)   14 -> 22
+#     @lnkrnchk/post/DbL4LxBl6v9  (the canary)     8 -> 13
+#
+# and the control is what makes it pagination rather than slow hydration: on the
+# first thread, waiting 32 s WITHOUT scrolling left the count at 14 for every one of
+# 21 samples. Under-reading matters here specifically because the author's own
+# self-replies — the only reason this module exists — sit BELOW the root post.
+#
+# What this does NOT do is defeat the anonymous ceiling: a dozen or so replies in,
+# Threads puts a "Log in or sign up" interstitial under the thread and stops serving
+# more, and no amount of scrolling moves that. The loop takes everything the
+# anonymous view is willing to render and stops when the count stops growing.
+_SCROLL_JS = """
+() => {
+  let sc = document.querySelector('[data-pressable-container]');
+  while (sc && !(sc.scrollHeight > sc.clientHeight + 50
+                 && /auto|scroll/.test(getComputedStyle(sc).overflowY))) {
+    sc = sc.parentElement;
+  }
+  (sc || document.scrollingElement).scrollTop = 1e9;
+  window.scrollTo(0, document.documentElement.scrollHeight);
+}
+"""
+_COUNT_JS = "() => document.querySelectorAll('[data-pressable-container]').length"
+
+# Bounded on purpose: the send loop pays this per lead. Two rounds is the normal
+# cost (one that loads, one that proves nothing more came), i.e. ~2.4 s.
+_SCROLL_ROUNDS = 6
+_SCROLL_SETTLE_MS = 1200
+
+
 def author_from_url(url: str) -> str:
     """'@handle' of the post author from the post URL, or '' if not a post URL."""
     m = _AUTHOR_RE.match((url or "").strip())
@@ -174,6 +217,26 @@ def read_thread_blocks(page) -> list[tuple[str, list[str]]]:
     return blocks
 
 
+def load_whole_thread(page) -> int:
+    """Scroll to the bottom until the post count stops growing. Returns that count.
+
+    Bounded twice — by `_SCROLL_ROUNDS` and by the count going flat — because the
+    page is not ours and an infinite feed would otherwise never end the loop.
+    """
+    seen = -1
+    for _ in range(_SCROLL_ROUNDS):
+        page.evaluate(_SCROLL_JS)
+        page.wait_for_timeout(_SCROLL_SETTLE_MS)
+        n = page.evaluate(_COUNT_JS)
+        # The page is not ours; never trust its shape. A non-int here must end the
+        # loop, not raise: resolve_thread's except would swallow it into "", turning
+        # a scroll that could not be counted into a lead with no vacancy text.
+        if not isinstance(n, int) or n <= seen:
+            break
+        seen = n
+    return max(seen, 0)
+
+
 def resolve_thread(page, url: str) -> str:
     """The author's own posts in `url`, joined, or "" if the thread can't be read.
 
@@ -186,6 +249,7 @@ def resolve_thread(page, url: str) -> str:
     try:
         page.goto(url, timeout=_GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
         page.wait_for_timeout(_SETTLE_MS)
+        load_whole_thread(page)
         # Assembly stays inside the try as well, so the never-raise contract does not
         # depend on how another module behaves on a shape neither of us predicted.
         return author_thread_text(read_thread_blocks(page), author)

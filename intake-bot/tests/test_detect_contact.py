@@ -246,6 +246,25 @@ def test_a_missing_space_after_a_sentence_dot_does_not_leak_the_author():
     assert detect_contact(f"вакансия от @lnkrnchk.Пиши в личку {url}").platform == "threads"
 
 
+def test_a_missing_space_after_a_DOTTED_author_does_not_leak_the_author():
+    """The last of the fabricated-target class, and the one the two clauses above
+    both missed: for a dotted author the token runs on into the next sentence
+    ("ivan.hr.Пиши"), so it equals neither the author nor anything the truncated
+    capture can catch — and "@ivan", a real, unrelated Telegram user who is never
+    named in the message, was stored as the contact."""
+    url = "https://www.threads.com/@ivan.hr/post/DbL4LxBl6v9"
+    assert detect_contact(f"вакансия от @ivan.hr.Пиши в личку {url}").platform == "threads"
+
+
+def test_the_author_dot_clause_does_not_swallow_a_different_person():
+    """The exemption is `author + "."`, never a bare prefix: "@lnkrnchk_hr" is a
+    different person from the author "@lnkrnchk" and must still win as a real
+    Telegram contact. Pinned next to the case above because widening one to fix
+    the other is exactly the mistake."""
+    url = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
+    assert detect_contact(f"пиши @lnkrnchk_hr {url}") == Contact("telegram", "@lnkrnchk_hr")
+
+
 def test_email_in_the_message_still_beats_a_threads_link():
     c = detect_contact(f"{_CLEAN} резюме на hr@acme.com")
     assert c.platform == "email"
@@ -280,6 +299,12 @@ _GOLDEN = [
     ("Контакт: https://t.me/ivanhr спасибо", "telegram", "https://t.me/ivanhr"),
     ("Ищем backend. Пиши @ivan_hr по вакансии", "telegram", "@ivan_hr"),
     ("резюме на hr@acme.com", "email", "hr@acme.com"),
+    # _EMAIL_RE's tail class `[\w.-]+` eats the period that ended the sentence, so
+    # without `_clean` the target is "hr@acme.io." — which most MTAs reject at
+    # RCPT TO, landing the lead `failed` with the recruiter never contacted. Newly
+    # load-bearing: Threads prose is the first free text detect_contact reads, and
+    # prose ends its sentences with periods.
+    ("резюме на hr@acme.io.", "email", "hr@acme.io"),
     # The (?:^|\s) anchor: the "@" inside a well-formed email is not a handle.
     ("john@gmail.com", "email", "john@gmail.com"),
     # Ordering: the handle rule is second of six, so a later handle beats an earlier email.

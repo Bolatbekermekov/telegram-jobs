@@ -94,7 +94,10 @@ def detect_contact(text: str) -> Contact | None:
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:
-        return Contact("email", m.group(0))
+        # `_clean` like every sibling rule: _EMAIL_RE's tail class `[\w.-]+` eats the
+        # period that ended the sentence, and "hr@acme.io." is what an MTA rejects at
+        # RCPT TO — the lead lands `failed` and the recruiter is never written to.
+        return Contact("email", _clean(m.group(0)))
     m = _LINKEDIN_RE.search(text)
     if m:
         return Contact("linkedin", _clean(m.group(0)))

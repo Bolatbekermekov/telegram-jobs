@@ -28,8 +28,14 @@ def test_normalize_target():
 
 def test_normalize_target_digs_the_handle_out_of_any_threads_url():
     """Источник is hand-editable, so it is not always the canonical form. A post
-    URL, the mobile host and a URL sitting inside a sentence all name one author."""
-    assert normalize_target("https://m.threads.com/@hr_acme/post/DbL4LxBl6v9") == "hr_acme"
+    URL, the .net alias and a URL sitting inside a sentence all name one author.
+
+    No mobile host is pinned here on purpose: `m.threads.com` used to be asserted
+    as "the phone's share sheet", and it is NXDOMAIN (checked 2026-07-27 against
+    the system resolver, 8.8.8.8 and 1.1.1.1). The regex still tolerates subdomains
+    as slack for a hand-edited cell, but no test may claim that host exists."""
+    assert normalize_target(
+        "https://www.threads.com/@hr_acme/post/DbL4LxBl6v9") == "hr_acme"
     assert normalize_target("https://www.threads.net/@hr_acme") == "hr_acme"
     assert normalize_target("threads.com/@hr.acme") == "hr.acme"
     assert normalize_target("пиши автору https://www.threads.com/@hr_acme") == "hr_acme"

@@ -128,15 +128,27 @@ def detect_contact(text: str) -> Contact | None:
         #             from the author while the capture still is exactly the author —
         #             and that handle was never written in the message. Not redundant:
         #             deleting this clause reintroduces the fabricated target.
+        #   author. — the mirror of the clause above, for a DOTTED author: in
+        #             "вакансия от @ivan.hr.Пиши в личку" the token runs on into the
+        #             next sentence ("ivan.hr.Пиши"), so it equals neither the author
+        #             nor anything the capture ("@ivan") can catch, and "@ivan" — a
+        #             real, unrelated Telegram user — was stored. The dot after the
+        #             full author handle is what identifies him. It cannot over-match
+        #             the way a bare prefix test would: "@lnkrnchk_hr" is a different
+        #             person and there is no dot, so it still wins.
         # A trailing dot is sentence punctuation; a Threads handle cannot end in one.
         token = _HANDLE_TOKEN_RE.match(text, m.start(1)).group(0).rstrip(".")
         if author and (token.lower() == author[1:]
+                       or token.lower().startswith(author[1:] + ".")
                        or ("@" + m.group(1)).lower() == author):
             continue
         return Contact("telegram", "@" + m.group(1))
     m = _EMAIL_RE.search(text)
     if m:
-        return Contact("email", m.group(0))
+        # `_clean` like every sibling rule: _EMAIL_RE's tail class `[\w.-]+` eats the
+        # period that ended the sentence, and "hr@acme.io." is what an MTA rejects at
+        # RCPT TO — the lead lands `failed` and the recruiter is never written to.
+        return Contact("email", _clean(m.group(0)))
     m = _LINKEDIN_RE.search(text)
     if m:
         return Contact("linkedin", _clean(m.group(0)))

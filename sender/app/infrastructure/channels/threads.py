@@ -34,11 +34,19 @@ _BODY_LIMIT = 500
 # Case is PRESERVED, not folded: the composer is given what the sheet holds.
 _VALID_HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
 
-# The host is matched with its subdomains (`m.threads.com` is the phone's share
-# sheet) but not as a suffix — the leading `(?:^|[\s(<])` is what keeps
-# "notthreads.com/@nick" from being read as Threads. `search`, not `match`,
-# because Источник is hand-editable and a URL can arrive inside a sentence; the
-# capture stops at `/`, so a post URL yields the author rather than the post id.
+# The host is matched with its subdomains but not as a suffix — the leading
+# `(?:^|[\s(<])` is what keeps "notthreads.com/@nick" from being read as Threads.
+# The subdomain tolerance is slack for a hand-edited cell and NOT a real format.
+# An earlier comment here called `m.threads.com` "the phone's share sheet"; that
+# was wrong. Measured 2026-07-27: `m.threads.com` and `m.threads.net` are NXDOMAIN
+# on the system resolver, on 8.8.8.8 and on 1.1.1.1 alike, while the control
+# `m.facebook.com` resolves — Meta runs no `m.` host for Threads at all. The share
+# sheet emits `https://www.threads.com/@user/post/<id>?xmt=…`, which is why the
+# intake's narrower `(?:www\.)?threads\.(?:com|net)` loses nothing by not matching
+# a mobile host. Do not reintroduce the claim, in either app.
+# `search`, not `match`, because Источник is hand-editable and a URL can arrive
+# inside a sentence; the capture stops at `/`, so a post URL yields the author
+# rather than the post id.
 _HANDLE_RE = re.compile(
     r"(?:^|[\s(<])(?:https?://)?(?:[\w-]+\.)*threads\.(?:com|net)/@?"
     r"([A-Za-z0-9._]{1,30})",
@@ -46,7 +54,7 @@ _HANDLE_RE = re.compile(
 
 
 def normalize_target(target: str) -> str:
-    """'@nick', 'nick', 'https://m.threads.com/@nick/post/X' -> 'nick'. "" if unsure.
+    """'@nick', 'nick', 'https://www.threads.com/@nick/post/X' -> 'nick'. "" if unsure.
 
     Validated, not merely stripped, and the validation is the point. Источник is a
     spreadsheet cell a human edits, so it can hold a post URL, a sentence around a

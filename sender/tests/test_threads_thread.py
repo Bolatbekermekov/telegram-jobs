@@ -5,7 +5,8 @@ import pytest
 from app.domain.contact import detect_contact
 from app.domain.threads_post import post_body
 from app.infrastructure.threads_thread import (
-    author_from_url, read_thread_blocks, render_thread, resolve_thread,
+    _COUNT_JS, _SCROLL_ROUNDS, _SETTLE_MS, author_from_url, load_whole_thread,
+    read_thread_blocks, render_thread, resolve_thread,
 )
 
 _URL = "https://www.threads.com/@lnkrnchk/post/DbL4LxBl6v9"
@@ -27,6 +28,7 @@ class FakePage:
         self._goto_error = goto_error
         self._eval_error = eval_error
         self.goto_calls = []
+        self.evaluated = []
 
     def goto(self, url, **kwargs):
         self.goto_calls.append(url)
@@ -39,6 +41,14 @@ class FakePage:
     def evaluate(self, script):
         if self._eval_error:
             raise self._eval_error
+        # Script-aware, because the reader now runs three different scripts and a
+        # page that answered all of them with the block list would not be a fake of
+        # anything: `load_whole_thread` compares the count to an int.
+        self.evaluated.append(script)
+        if "scrollTop" in script:
+            return None
+        if ".length" in script:
+            return len(self._blocks)
         return self._blocks
 
 
@@ -110,6 +120,75 @@ def test_render_thread_rejects_a_non_threads_url_without_launching_a_browser():
     is even imported — which is also what keeps this test offline."""
     assert render_thread("https://hh.ru/vacancy/1") == ""
     assert render_thread("") == ""
+
+
+# --- the thread is paginated, so it has to be scrolled --------------------------
+#
+# goto + settle alone renders the top of the thread only, and the author's own
+# self-replies — the entire reason this module exists — sit BELOW the root post.
+# Measured live 2026-07-27 (see the comment on _SCROLL_JS): 14 -> 22 containers on a
+# 281-reply thread, 8 -> 13 on the canary thread, while waiting 32 s without
+# scrolling moved neither.
+
+class _GrowingPage:
+    """A page that reveals more posts on every scroll — Threads' own pagination.
+
+    `counts=None` means a feed that never stops growing, which is what the round
+    bound exists for.
+    """
+
+    def __init__(self, counts=None):
+        self._counts = counts
+        self.scrolls = 0
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def evaluate(self, script):
+        if "scrollTop" in script:
+            self.scrolls += 1
+            return None
+        if self._counts is None:
+            return self.scrolls * 10
+        return self._counts[min(self.scrolls, len(self._counts) - 1)]
+
+
+def test_load_whole_thread_scrolls_until_the_count_stops_growing():
+    """Two rounds is the normal cost: one that loads the rest, one that proves
+    nothing more is coming."""
+    page = _GrowingPage([8, 13, 13, 13])
+    assert load_whole_thread(page) == 13
+    assert page.scrolls == 2
+
+
+def test_load_whole_thread_is_bounded_when_the_feed_never_ends():
+    """The page is not ours. An infinite feed must cost a fixed number of rounds,
+    not hang the send loop, which pays this per lead."""
+    page = _GrowingPage()
+    load_whole_thread(page)
+    assert page.scrolls == _SCROLL_ROUNDS
+
+
+def test_load_whole_thread_stops_instead_of_raising_on_an_uncountable_page():
+    """A non-int count must END the loop, never raise: resolve_thread's except
+    would turn it into "", i.e. a lead with no vacancy text at all, which is a far
+    worse outcome than one unscrolled thread."""
+    page = FakePage()
+    page.evaluate = lambda script: "not a number"
+    assert load_whole_thread(page) == 0
+
+
+def test_resolve_thread_scrolls_before_it_reads():
+    """Order is load-bearing: reading first would capture only the top of the
+    thread and the scroll would be wasted."""
+    page = FakePage()
+    resolve_thread(page, _URL)
+    assert any("scrollTop" in s for s in page.evaluated)
+    scrolled = next(i for i, s in enumerate(page.evaluated) if "scrollTop" in s)
+    read = next(i for i, s in enumerate(page.evaluated)
+                if "data-pressable-container" in s and "scrollTop" not in s
+                and ".length" not in s)
+    assert scrolled < read
 
 
 # --- the contact, which is the whole point of reading the thread ----------------
@@ -351,3 +430,50 @@ def test_live_render_thread_emits_no_interface_chrome():
 def test_live_render_thread_returns_empty_for_a_dead_post():
     """A deleted or private post must degrade to "", not raise."""
     assert render_thread("https://www.threads.com/@lnkrnchk/post/ZZZZnotapost") == ""
+
+
+# A third party's post with 281 replies, i.e. a thread that cannot possibly fit in
+# one render. The canary above proves the SELECTORS still work; this one proves the
+# reader is not merely getting away with a short thread. Numbers measured 2026-07-27:
+# 14 containers at goto+settle, 22 after scrolling. If @mosseri ever deletes it, put
+# any public post with 30+ replies here — the assertions are about the delta, not
+# about this post.
+_LONG_URL = "https://www.threads.com/@mosseri/post/Dac8hv6lrYM"
+
+
+@pytest.mark.live
+def test_live_a_long_thread_is_only_read_whole_after_scrolling():
+    """The one untested link in the core promise: goto + settle renders the TOP of
+    a thread, and the author's self-replies — the only reason this module exists —
+    sit below the root post.
+
+    A failure here is most likely one of two things, in this order:
+      * rate limiting. Repeated anonymous loads of the same post get a gated view
+        (root only, replies behind a "Log in or sign up" interstitial, count near
+        zero). It clears after several minutes. `before` will be tiny.
+      * Meta changed the scroll container, so `_SCROLL_JS` finds nothing to scroll
+        and `after == before`. Then the fix is in `_SCROLL_JS`, not here.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_context().new_page()
+            page.goto(_LONG_URL, timeout=45000, wait_until="domcontentloaded")
+            page.wait_for_timeout(_SETTLE_MS)
+            before = page.evaluate(_COUNT_JS)
+            after = load_whole_thread(page)
+        finally:
+            browser.close()
+
+    assert before >= 5, (
+        f"only {before} posts rendered before scrolling — this is what a rate-limited "
+        "anonymous view looks like; wait several minutes and re-run before touching "
+        "the selectors")
+    assert after > before, (
+        f"scrolling loaded nothing ({before} -> {after}) on a 281-reply thread: either "
+        "Meta changed the scroll container or the whole thread now arrives at once")
+    assert after >= 15, (
+        f"only {after} posts after scrolling (measured 22 on 2026-07-27) — the "
+        "anonymous ceiling moved, or the thread was gated mid-read")

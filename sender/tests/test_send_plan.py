@@ -241,10 +241,32 @@ def test_a_placeholder_is_detected():
     assert has_placeholder("Hi, [your name] here")
 
 
-def test_a_bracketed_proper_noun_is_not_a_placeholder():
-    """`"[" in body` parked a lead for quoting a job title. It must not."""
-    assert not has_placeholder("Видел вакансию [Senior Dev] — очень интересно.")
-    assert not has_placeholder("Откликаюсь на [Python Backend Engineer].")
+def test_a_capitalised_placeholder_is_detected_too():
+    """The four probes that showed README's [!CAUTION] promise was false.
+
+    The net used to require a lower-case first letter, so only the first of these
+    was caught and the other three were AUTO-SENT to a live recruiter. That is
+    backwards: a model writing a Russian cover letter capitalises a bracketed slot
+    opening a sentence essentially always, so the capitalised forms are the common
+    shape, not the exotic one.
+    """
+    assert has_placeholder("Здравствуйте, [название компании]!")
+    assert has_placeholder("Здравствуйте, [Название компании]!")
+    assert has_placeholder("[Your name]")
+    assert has_placeholder("[ПОЧЕМУ ИМЕННО ЭТА КОМПАНИЯ]")
+
+
+def test_a_bracketed_proper_noun_now_holds_the_lead_too():
+    """The accepted price of the case-insensitive net, pinned as a decision rather
+    than left as a surprise: a job title the letter legitimately quotes reads as a
+    placeholder. It costs ONE regeneration and nothing else — `has_placeholder`
+    writes no status, so the lead stays `new` and the body is generated afresh next
+    run — against a false negative that costs a template in a recruiter's inbox.
+    Not a livelock either: the generator is instructed to write names as plain text
+    without brackets, so this is a stray shape, not the model's habit.
+    """
+    assert has_placeholder("Видел вакансию [Senior Dev] — очень интересно.")
+    assert has_placeholder("Откликаюсь на [Python Backend Engineer].")
 
 
 def test_a_clean_body_has_no_placeholder():

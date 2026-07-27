@@ -158,11 +158,20 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
     return STATUS_MANUAL, "; ".join(parts)
 
 
-# A slot the writer was supposed to fill: bracketed prose starting in lower case
-# ("[почему именно эта компания]", "[название компании]", "[your name]"). The
-# lower-case start is what separates it from a bracketed proper noun the letter
-# legitimately quotes — "вакансию [Senior Dev]" must not park a lead.
-_PLACEHOLDER_RE = re.compile(r"\[\s*[a-zа-яё][^\]\n]*\]")
+# A slot the writer was supposed to fill: bracketed prose in ANY case
+# ("[название компании]", "[Название компании]", "[Your name]",
+# "[ПОЧЕМУ ИМЕННО ЭТА КОМПАНИЯ]").
+#
+# IGNORECASE is load-bearing, not tidiness. A lower-case-only rule was tried and
+# it is what let the last three of those through: a model writing a Russian cover
+# letter capitalises a bracketed slot opening a sentence essentially always, so
+# the common shape was the one the net missed, and README's [!CAUTION] promise
+# that auto mode never sends a message with a placeholder in it was false.
+# The price of widening — a bracketed proper noun the letter legitimately quotes,
+# "вакансию [Senior Dev]" — is one free regeneration, because `has_placeholder`
+# writes NO status (see below). A false negative is a template in a recruiter's
+# inbox. The two costs are not comparable, so the net stays wide.
+_PLACEHOLDER_RE = re.compile(r"\[\s*[a-zа-яё][^\]\n]*\]", re.IGNORECASE)
 
 
 def has_placeholder(body: str) -> bool:
