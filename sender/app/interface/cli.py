@@ -15,7 +15,7 @@ from dataclasses import replace
 from app import config
 from app.application.format_content import format_for_channel
 from app.application.generate_message import (
-    GenerateMessage, generate_body, subject_for,
+    GenerateMessage, generate_body, generate_for, subject_for,
 )
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
@@ -202,7 +202,7 @@ def _followup_invited(repo, switcher, generator) -> None:
             print(f"   #{lead.lead_id}: прочитано {len(fetched)} симв., "
                   "записал в таблицу.")
 
-        body, gen_err = generate_body(generator, lead)
+        body, note, gen_err = generate_for(generator, lead, channel)
         if gen_err is not None:
             print(f"   #{lead.lead_id}: не смог сгенерировать текст "
                   f"({type(gen_err).__name__}) — оставляю 'invited'.")
@@ -213,7 +213,7 @@ def _followup_invited(repo, switcher, generator) -> None:
             continue
         subject = subject_for(lead.vacancy_context or lead.raw_text)
         attachment = config.CV_PATH if config.ATTACH_CV else None
-        content = format_for_channel(channel, body, subject, attachment)
+        content = format_for_channel(channel, body, subject, attachment, note)
         result = SendOutreach(channel).execute(lead, content)
         if result.ok:
             if _record_sent(repo, lead, content.body, "linkedin"):
@@ -424,7 +424,7 @@ def run() -> None:
             print("-" * 60)
 
             print("Генерирую сообщение...")
-            body, gen_err = generate_body(generator, lead)
+            body, note, gen_err = generate_for(generator, lead, channel)
             if gen_err is not None:
                 # Generation hit OpenAI/network — don't crash the run (row 82).
                 # Leave the lead `new` and move on; bail after 3 in a row, since
@@ -440,9 +440,12 @@ def run() -> None:
             gen_failures = 0
             subject = subject_for(lead.vacancy_context or lead.raw_text)
             attachment = config.CV_PATH if config.ATTACH_CV else None
-            content = format_for_channel(channel, body, subject, attachment)
+            content = format_for_channel(channel, body, subject, attachment, note)
 
-            if config.AUTO_SEND and has_placeholder(content.body):
+            # Записка это тоже текст, который прочитает живой человек, и шаблон в
+            # ней ничем не лучше шаблона в письме.
+            if config.AUTO_SEND and (has_placeholder(content.body)
+                                     or has_placeholder(content.note)):
                 # What the README has always promised for auto mode: a template
                 # must not reach a live recruiter just because nobody was there to
                 # read it. NO status — unlike a contact, the body is regenerated

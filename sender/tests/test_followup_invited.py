@@ -261,3 +261,30 @@ def test_a_refusal_on_a_link_we_cannot_fetch_still_reaches_the_generator(monkeyp
 
     assert repo.vacancies == []
     assert len(channel.sent) == 1
+
+
+class _NoteChannel(_Channel):
+    """Канал, который просит записку — как настоящий LinkedInChannel."""
+    note_limit = 200
+
+
+class _NoteGen:
+    def execute(self, lead):
+        return "Письмо."
+
+    def execute_with_note(self, lead, note_limit):
+        return "Полное письмо принявшему контакту.", "Короткая записка."
+
+
+def test_the_accepted_contact_gets_the_whole_letter_and_the_note_rides_along():
+    """Человек принял заявку, значит письмо идёт прямым сообщением и резать его
+    нечем. Записка едет своим полем на случай, если канал пойдёт путём
+    приглашения."""
+    lead = _lead()
+    repo = _Repo([lead])
+    channel = _NoteChannel(state="accepted")
+    _followup_invited(repo, _Switcher(channel), _NoteGen())
+
+    (_target, content), = channel.sent
+    assert content.body == "Полное письмо принявшему контакту."
+    assert content.note == "Короткая записка."
