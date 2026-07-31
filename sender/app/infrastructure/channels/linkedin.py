@@ -145,6 +145,34 @@ SEL_INVITE_SEND_PLAIN = (
     "button[aria-label*='Отправить без' i], button[aria-label*='Send without' i]")
 _NOTE_LIMIT = 200
 
+# Конец предложения: знак, за которым идёт пробел или конец строки. Просмотр
+# вперёд обязателен — точка внутри «Atlanti.ai» или «t.me» концом мысли не
+# является, а без этого условия записка обрывалась бы ровно на названии продукта.
+_SENTENCE_END = re.compile(r"[.!?…](?=\s|$)")
+
+
+def _trim_to_sentence(text: str, limit: int) -> str:
+    """`text`, сокращённый до `limit` символов по границе предложения.
+
+    Письмо пишется прозой на 100-160 слов, и срез по ближайшему пробелу
+    заканчивает его на полумысли: именно так лиды 156/160/161/172/177/179
+    получили «…Это близко» и «…нужно доводить». Если не влезает даже первое
+    предложение, отступаем к границе слова: обрезанное предложение всё равно
+    лучше пустой записки, отправлять больше нечего.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    # Регулярка идёт по ПОЛНОМУ тексту, а не по окну обрезки: `$` в просмотре
+    # вперёд означал бы конец окна, и точка, попавшая ровно на границу, сошла бы
+    # за конец предложения — «Смотри Atlanti.ai …» с лимитом 15 обрывалось на
+    # «Смотри Atlanti.», ровно на середине домена.
+    ends = [m.end() for m in _SENTENCE_END.finditer(text) if m.end() <= limit]
+    if ends:
+        return text[:ends[-1]].rstrip()
+    cut = text.rfind(" ", 0, limit)
+    return text[:cut].rstrip() if cut > 0 else text[:limit]
+
 
 def _attach_cv(page, path: str) -> None:
     """Attach the CV file to the open message thread. Fails loudly if the file
