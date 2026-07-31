@@ -105,14 +105,26 @@ def test_a_pasted_description_is_not_refetched():
     assert summarizer.seen == raw
 
 
-def test_a_failed_fetch_falls_back_to_the_message():
-    """hh may throttle the datacenter IP — the lead must still be saved."""
+def test_a_failed_fetch_saves_the_lead_with_no_vacancy_text():
+    """hh may throttle the datacenter IP — the lead must still be saved.
+
+    But saved EMPTY. There is nothing to summarise but the URL itself, and what
+    came back from summarising a bare URL was the model's refusal ("Не удалось
+    извлечь содержание вакансии... Пришлите текст объявления"), which then became
+    the brief the cover letter was written from — rows 121 and 141 in the live
+    sheet. The sender reads the link again before it generates anything.
+    """
     raw = "Vacancy: https://hh.ru/vacancy/135171273?from=share_ios"
-    lead = ExtractLeadFromText(detect_contact, _RecordingSummarizer(""), _FakeRepo(),
+    repo = _FakeRepo()
+    summarizer = _RecordingSummarizer("Не удалось извлечь содержание вакансии")
+    lead = ExtractLeadFromText(detect_contact, summarizer, repo,
                                _Fetcher("")).execute(raw)
 
     assert lead.platform == "hh"
-    assert lead.vacancy_context               # falls back to the raw text
+    assert lead.target == "https://hh.ru/vacancy/135171273"
+    assert lead.vacancy_context == ""
+    assert repo.saved == [lead]                  # saved, not dropped
+    assert summarizer.seen is None               # never handed the bare URL
 
 
 def test_the_use_case_still_works_without_a_fetcher():

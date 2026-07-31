@@ -20,6 +20,16 @@ class FieldObs:
     name: str = ""
     required: bool = False
     options: list[str] = field(default_factory=list)   # for select/radio
+    # What the control already holds when scraped (a select reports the chosen
+    # option's TEXT, so it can be compared against `options`). Empty for a blank
+    # field. Some forms arrive prefilled — LinkedIn's Easy Apply comes with the
+    # account's email and phone country code already chosen — and a required
+    # field that is already correct must not read as one we failed to fill.
+    value: str = ""
+    # True for a typeahead: an input that looks like free text but only accepts a
+    # value chosen from its own suggestion list. LinkedIn's «Location (city)» is
+    # one — typed text is rejected with "Please enter a valid answer".
+    combobox: bool = False
     ref: str = ""                         # DOM handle set by the scraper (data-af index)
 
 

@@ -30,6 +30,22 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY_SECONDS = 1.0
 
 
+def _status_of(exc: APIError) -> int:
+    """The HTTP status behind an APIError — not necessarily its `code`.
+
+    gspread reads `code` out of the JSON body and falls back to -1 when the body
+    won't parse. Google's 5xx are served by the front end, *before* the API layer,
+    as an HTML error page — so exactly the failures worth retrying are the ones
+    that arrive with `code == -1`. Keying on `code` alone meant the retry below
+    never fired on an outage, only on the quota errors that do come back as JSON.
+
+    Falls back to `code` when there is no response to read (which is how the
+    tests' hand-built errors and any future gspread change behave).
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if isinstance(status, int) else exc.code
+
+
 def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
     """Run a Sheets write, retrying transient API errors with exponential backoff.
 
@@ -42,7 +58,7 @@ def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
         try:
             return op()
         except APIError as exc:
-            if exc.code not in _TRANSIENT_CODES or attempt == attempts - 1:
+            if _status_of(exc) not in _TRANSIENT_CODES or attempt == attempts - 1:
                 raise
             _sleep(_RETRY_BASE_DELAY_SECONDS * 2 ** attempt)
 
@@ -51,7 +67,7 @@ def _load_credentials(service_account_path: str) -> Credentials:
     return Credentials.from_service_account_file(service_account_path, scopes=_SCOPES)
 
 
-def record_to_lead(rec: dict, offset: int) -> Lead:
+def record_to_lead(rec: dict, offset: int, status: str = STATUS_NEW) -> Lead:
     """Map one sheet record to a Lead. `offset` is the 0-based data-row index."""
     platform = str(rec.get("Платформа", "")).strip().lower() or DEFAULT_PLATFORM
     return Lead(
@@ -61,7 +77,7 @@ def record_to_lead(rec: dict, offset: int) -> Lead:
         target=str(rec.get("Источник", "")).strip(),
         vacancy_context=str(rec.get("Вакансия", "")).strip(),
         raw_text=str(rec.get("Исходный текст", "")).strip(),
-        status=STATUS_NEW,
+        status=status,
     )
 
 
@@ -70,13 +86,17 @@ class SheetsRepo:
         client = gspread.authorize(_load_credentials(service_account_path))
         self._ws = client.open_by_key(sheet_id).worksheet(tab)
 
-    def fetch_new_leads(self) -> list[Lead]:
+    def fetch_by_status(self, status: str) -> list[Lead]:
+        """Every lead currently carrying `status`, in sheet order."""
         records = self._ws.get_all_records(expected_headers=COLUMNS)
         return [
-            record_to_lead(rec, offset)
+            record_to_lead(rec, offset, status)
             for offset, rec in enumerate(records)
-            if str(rec.get("Статус", "")).strip() == STATUS_NEW
+            if str(rec.get("Статус", "")).strip() == status
         ]
+
+    def fetch_new_leads(self) -> list[Lead]:
+        return self.fetch_by_status(STATUS_NEW)
 
     def mark_sent(self, lead: Lead, message: str, status: str) -> None:
         """Record a delivered outreach — message, status and timestamp at once.
@@ -118,6 +138,27 @@ class SheetsRepo:
             })
         _with_retry(lambda: self._ws.batch_update(
             updates, value_input_option=ValueInputOption.raw))
+
+    def update_vacancy(self, lead: Lead, vacancy_context: str) -> None:
+        """Replace a lead's «Вакансия» text, leaving every other column alone.
+
+        The narrow counterpart to `update_resolved`: where the lead goes does not
+        change, only what it says. A link-only message whose page would not load
+        at intake time is saved with this column empty rather than with the
+        summariser's refusal in it, and the laptop fills it in here — one cell, so
+        the atomicity `update_resolved` has to work for is free.
+
+        Статус is deliberately untouched: the lead has not been sent, it stays
+        `new` and goes on to be generated and delivered in this same run.
+
+        RAW, not USER_ENTERED: the text is scraped, so a leading `=` must be
+        stored as text, never evaluated as a formula.
+        """
+        _with_retry(lambda: self._ws.update(
+            [[vacancy_context]],
+            rowcol_to_a1(lead.row, COL_VACANCY),
+            value_input_option=ValueInputOption.raw,
+        ))
 
     def update_resolved(self, lead: Lead, platform: str, target: str,
                         vacancy_context: str, note: str = "") -> None:

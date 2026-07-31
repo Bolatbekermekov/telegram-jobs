@@ -10,6 +10,7 @@ Per-platform daily limits and anti-ban delays apply.
 """
 import random
 import time
+from dataclasses import replace
 
 from app import config
 from app.application.format_content import format_for_channel
@@ -26,11 +27,13 @@ from app.application.send_plan import (
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
+    needs_vacancy_refetch,
     skip_reason,
     unresolved_thread,
 )
 from app.domain.lead import (
     STATUS_FAILED,
+    STATUS_INVITED,
     STATUS_MANUAL,
     STATUS_SENT,
     STATUS_SKIPPED,
@@ -39,10 +42,18 @@ from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.sheets_repo import SheetsRepo
+from app.infrastructure.vacancy_fetcher import (
+    fetch_vacancy_text, is_fetchable_vacancy_url,
+)
 
 # Platforms the send loop can build a channel for. A platform missing here is a
 # per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
 _KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads"}
+
+# Longer than the intake bot's 8s. That budget exists because the bot answers a
+# Telegram webhook from a serverless function; here a human is watching a terminal
+# and the alternative to waiting is not sending at all.
+_REFETCH_TIMEOUT = 20.0
 
 
 def _prompt(msg: str) -> str:
@@ -54,6 +65,31 @@ def _prompt(msg: str) -> str:
 
 def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
+
+
+def _record_sent(repo, lead, body: str, platform: str) -> bool:
+    """Write a delivered send to the sheet; report whether the write landed.
+
+    The message is already in the recruiter's inbox by the time this runs, so a
+    failed write must not raise: a traceback here ends the run with the lead still
+    `new`, and the next run delivers the same message to the same person a second
+    time. That is exactly what a Sheets 502 did on lead #148. `mark_sent` already
+    retries transient failures; if it still fails, the only thing left that helps
+    is telling the human precisely which row to fix, unmissably.
+    """
+    try:
+        repo.mark_sent(lead, body, STATUS_SENT)
+        return True
+    except Exception as exc:  # noqa: BLE001 — already delivered; never raise here
+        print("\n" + "!" * 62)
+        print("⚠️  СООБЩЕНИЕ ОТПРАВЛЕНО, НО В ТАБЛИЦУ НЕ ЗАПИСАНО")
+        print(f"   Лид #{lead.lead_id} [{platform}] → {lead.target}")
+        print(f"   Причина: {type(exc).__name__}: {exc}"[:300])
+        print(f"   Проставь в строке {lead.row} руками: Статус='{STATUS_SENT}' "
+              "и Дату отправки.")
+        print("   Иначе следующий прогон отправит это сообщение повторно.")
+        print("!" * 62)
+        return False
 
 
 def _notify_done(platforms, added: int) -> None:
@@ -81,8 +117,122 @@ def _relevance_args() -> dict:
     )
 
 
+def _warn_if_apply_profile_blank() -> None:
+    """Say once, up front, that external application forms have nothing to fill.
+
+    Without this the only symptom is a note in the sheet — «не заполнены
+    обязательные поля ['First Name', 'Last Name', 'Email']» — which reads like the
+    ATS asked for something exotic, when in fact the profile behind it is empty
+    because the file was never created. EXTERNAL_APPLY_ENABLED defaults to true,
+    so this is the state a fresh checkout runs in.
+    """
+    if not getattr(config, "EXTERNAL_APPLY_ENABLED", False):
+        return
+    from app.infrastructure.apply_profile_loader import load_apply_profile
+    if not load_apply_profile(config.APPLY_PROFILE_PATH).is_blank():
+        return
+    print(f"\n⚠️  Автоотклик включён, но профиль пуст: {config.APPLY_PROFILE_PATH}")
+    print("   Формы на сайтах компаний заполнять нечем — такие лиды будут уходить")
+    print("   в 'manual' с пометкой про обязательные поля, каждый прогон заново.")
+    print("   Заполни: cp sender/apply_profile.example.yml sender/apply_profile.yml")
+    print("   Либо выключи автоотклик: EXTERNAL_APPLY_ENABLED=false в .env\n")
+
+
+def _followup_invited(repo, switcher, generator) -> None:
+    """Re-check everyone we invited without a cover letter, and finish the job.
+
+    A lead reaches `invited` only when LinkedIn's monthly personalized-invite
+    quota was spent: the connection request went out, our letter did not. Nothing
+    else can move it — the person has to accept first — so every run asks the
+    profile where the invite stands before touching new leads.
+
+    accepted -> they are a 1st-degree contact now, which is the one case LinkedIn
+    lets us message for free AND attach the CV to, so the outreach happens here in
+    full and the lead becomes `sent`.
+    pending  -> left as `invited`; the next run asks again.
+    gone     -> declined, withdrawn or expired. `manual`, not `new`: re-inviting is
+    a decision about a person who has already said no once, and that is the human's
+    to make, not a thing to loop on.
+    """
+    invited = repo.fetch_by_status(STATUS_INVITED)
+    if not invited:
+        return
+    print(f"\n🔁 Проверяю {len(invited)} приглашённых (ждём подтверждения)...")
+    for lead in invited:
+        if lead.platform != "linkedin":
+            continue
+        try:
+            channel = switcher.for_platform("linkedin")
+            state = channel.invite_state(lead.target)
+        except Exception as exc:  # noqa: BLE001 — one profile must not end the run
+            print(f"   #{lead.lead_id}: не смог проверить ({type(exc).__name__}) — "
+                  "оставляю 'invited'.")
+            continue
+        if state == "pending":
+            print(f"   #{lead.lead_id}: ещё не принял — жду.")
+            continue
+        if state == "gone":
+            repo.mark_status(lead, STATUS_MANUAL,
+                             note="LinkedIn: приглашение отклонено, отозвано или "
+                                  "истекло — решай вручную, слать ли заново")
+            print(f"   #{lead.lead_id}: приглашение больше не висит — 'manual'.")
+            continue
+
+        print(f"   #{lead.lead_id}: принял! Пишу письмо с CV...")
+        # The main loop re-reads an unusable vacancy before generating; this path
+        # never did, and it is the one that matters most. A lead sits in `invited`
+        # for days, so by the time the letter is written the stored text is the
+        # oldest we have — and leads 159 and 160 entered `invited` on 2026-07-29
+        # carrying a model refusal in that column. Their letters would have been
+        # composed from "Нет данных о вакансии в сообщении".
+        if (needs_vacancy_refetch(lead.vacancy_context)
+                and is_fetchable_vacancy_url(lead.target)):
+            print(f"   #{lead.lead_id}: вакансия в таблице непригодна, "
+                  "перечитываю ссылку...")
+            fetched = fetch_vacancy_text(lead.target, timeout=_REFETCH_TIMEOUT)
+            if not fetched:
+                # Still `invited`, so the next run re-checks the invite (it stays
+                # accepted) and fetches again. Better a letter one run late than a
+                # letter written from a refusal.
+                print(f"   #{lead.lead_id}: ссылка снова не читается — "
+                      "оставляю 'invited', повторю в следующем прогоне.")
+                continue
+            repo.update_vacancy(lead, fetched)
+            lead = replace(lead, vacancy_context=fetched)
+            print(f"   #{lead.lead_id}: прочитано {len(fetched)} симв., "
+                  "записал в таблицу.")
+
+        body, gen_err = generate_body(generator, lead)
+        if gen_err is not None:
+            print(f"   #{lead.lead_id}: не смог сгенерировать текст "
+                  f"({type(gen_err).__name__}) — оставляю 'invited'.")
+            continue
+        if has_placeholder(body):
+            print(f"   #{lead.lead_id}: в тексте остался [плейсхолдер] — "
+                  "оставляю 'invited', перегенерирую в следующий прогон.")
+            continue
+        subject = subject_for(lead.vacancy_context or lead.raw_text)
+        attachment = config.CV_PATH if config.ATTACH_CV else None
+        content = format_for_channel(channel, body, subject, attachment)
+        result = SendOutreach(channel).execute(lead, content)
+        if result.ok:
+            if _record_sent(repo, lead, content.body, "linkedin"):
+                print(f"   ✅ #{lead.lead_id}: письмо отправлено.")
+            continue
+        if result.manual:
+            # "InMail only" is LinkedIn telling us they are not a contact after
+            # all — so the invite is still pending, whatever the page looked like.
+            # Leave the lead where it is instead of burning it as `failed`.
+            print(f"   #{lead.lead_id}: писать нельзя ({result.error}) — "
+                  "значит ещё не в контактах, оставляю 'invited'.")
+            continue
+        repo.mark_status(lead, STATUS_FAILED, note=result.error)
+        print(f"   ❌ #{lead.lead_id}: {result.error}")
+
+
 def run() -> None:
     print("== telegram-jobs sender (multi-platform) ==")
+    _warn_if_apply_profile_blank()
     cv_text = load_cv_text(config.CV_PATH)
     profile_text = load_text_file(config.PROFILE_PATH)
 
@@ -93,9 +243,19 @@ def run() -> None:
         cv_text, profile_text, config.SIGNATURE_TEXT,
     )
 
+    switcher = ChannelSwitcher(lambda p: build_channel(p, config))
+    try:
+        # Before anything else: the invited leads are the ones already waiting on
+        # somebody, and a run that only ever looked at `new` would never finish
+        # them — including a run with no new leads at all.
+        _followup_invited(repo, switcher, generator)
+    except Exception as exc:  # noqa: BLE001 — never let the follow-up cost the run
+        print(f"⚠️  Проверка приглашённых не отработала ({type(exc).__name__}: {exc}).")
+
     leads = repo.fetch_new_leads()
     if not leads:
         print("Нет новых лидов (статус 'new'). Выход.")
+        switcher.close()
         return
 
     mode = "АВТО (без подтверждения)" if config.AUTO_SEND else "ручной"
@@ -110,7 +270,6 @@ def run() -> None:
     # channel open and switches only when the platform changes (Telethon and
     # Playwright can't be live at once). skip_reason() runs before any channel
     # opens, so skipped leads never churn channels.
-    switcher = ChannelSwitcher(lambda p: build_channel(p, config))
     try:
         for lead in leads:
             if quit_requested:
@@ -212,6 +371,35 @@ def run() -> None:
                     print(f"✋ Лид #{lead.lead_id}: {note}")
                     continue
 
+            if (needs_vacancy_refetch(lead.vacancy_context)
+                    and is_fetchable_vacancy_url(lead.target)):
+                # Intake reads the link the moment it arrives, from a serverless
+                # function on a datacenter IP with an ~8s budget. When that read
+                # comes back empty the column is left EMPTY on purpose — the
+                # summariser handed a bare URL answers "не удалось извлечь
+                # содержание вакансии", and storing that answer is how a recruiter
+                # ends up with a letter written from it. So the laptop reads the
+                # link again here: same page, no serverless clock, and usually
+                # minutes-to-days later, by which time a throttle has lifted. The
+                # LinkedIn post that failed on lead #121 fetched fine on retry.
+                #
+                # Before the channel opens and before generation, like every other
+                # guard above: nothing to pay OpenAI for on a lead with no vacancy.
+                print("   вакансия не сохранилась при приёме, перечитываю ссылку...")
+                fetched = fetch_vacancy_text(lead.target, timeout=_REFETCH_TIMEOUT)
+                if not fetched:
+                    # No status. `new` means the next run tries again, exactly as
+                    # an unrendered Threads thread does above — the failure is far
+                    # more often the site throttling us than the link being dead,
+                    # and a retry costs one GET. Generating from nothing would cost
+                    # a real recruiter a nonsense letter.
+                    print(f"⏭  Лид #{lead.lead_id}: ссылка снова не читается — "
+                          "оставляю 'new', повторю в следующем прогоне.")
+                    continue
+                repo.update_vacancy(lead, fetched)
+                lead = replace(lead, vacancy_context=fetched)
+                print(f"   прочитано {len(fetched)} симв., записал в таблицу.")
+
             try:
                 channel = switcher.for_platform(platform)
             except Exception as exc:  # noqa: BLE001
@@ -289,7 +477,9 @@ def run() -> None:
 
             result = sender.execute(lead, content)
             if result.ok:
-                repo.mark_sent(lead, content.body, STATUS_SENT)
+                if not _record_sent(repo, lead, content.body, platform):
+                    print("🛑 Останавливаю прогон, пока строка не поправлена.")
+                    break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"✅ Отправлено [{platform}] "
                       f"(всего за прогон: {sent_per_platform[platform]}).")
@@ -300,10 +490,22 @@ def run() -> None:
                 # A LinkedIn connection request carrying the cover letter went out.
                 # It's the whole outreach — no CV, no follow-up after they accept —
                 # so record it as a normal send (won't be retried).
-                repo.mark_sent(lead, content.body, STATUS_SENT)
+                if not _record_sent(repo, lead, content.body, platform):
+                    print("🛑 Останавливаю прогон, пока строка не поправлена.")
+                    break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"📨 Запрос на контакт с письмом отправлен [{platform}] "
                       f"(всего за прогон: {sent_per_platform[platform]}).")
+                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
+                print(f"⏳ Пауза {delay} c (анти-бан)...")
+                time.sleep(delay)
+            elif result.invited_plain:
+                # The request reached them, our letter did not. Not a send: park
+                # as `invited` so every later run checks whether they accepted,
+                # and messages them properly when they do.
+                repo.mark_status(lead, STATUS_INVITED, note=result.error)
+                print(f"🤝 Запрос на контакт БЕЗ письма [{platform}] — жду подтверждения "
+                      f"(лид #{lead.lead_id} в 'invited').")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)

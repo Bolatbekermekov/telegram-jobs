@@ -16,8 +16,9 @@ _KNOWN_T = {"telegram", "linkedin", "hh"}
 
 
 class _Lead:
-    def __init__(self, platform):
+    def __init__(self, platform, target="@somebody"):
         self.platform = platform
+        self.target = target
 
 
 def test_skip_unknown_platform():
@@ -27,6 +28,26 @@ def test_skip_unknown_platform():
 
 def test_no_skip_for_known_platform():
     assert skip_reason(_Lead("telegram"), _KNOWN_T) is None
+
+
+def test_a_blank_target_parks_the_lead_instead_of_reaching_a_channel():
+    """Lead #93: an empty «Источник» reached LinkedIn, which read "" as a profile
+    DM and ran page.goto(""). The lead landed in `failed` carrying a Playwright
+    protocol error — nothing a human could act on. `manual`, because no re-run
+    fills in a blank cell; only editing the sheet does."""
+    status, note = skip_reason(_Lead("linkedin", target=""), _KNOWN_T)
+    assert status == STATUS_MANUAL
+    assert "Источник" in note
+
+
+def test_a_whitespace_target_is_blank_too():
+    assert skip_reason(_Lead("telegram", target="   "), _KNOWN_T)[0] == STATUS_MANUAL
+
+
+def test_an_unknown_platform_still_wins_over_a_blank_target():
+    """The platform name is the more useful diagnosis when both are wrong."""
+    assert skip_reason(_Lead("myspace", target=""), _KNOWN_T) == (
+        STATUS_SKIPPED, "unknown platform: myspace")
 
 
 def test_platform_matching_is_exact():

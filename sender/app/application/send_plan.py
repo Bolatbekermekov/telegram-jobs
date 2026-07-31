@@ -24,6 +24,15 @@ def skip_reason(lead, known) -> tuple[str, str] | None:
     p = lead.platform
     if p not in known:
         return (STATUS_SKIPPED, f"unknown platform: {p}")
+    if not (lead.target or "").strip():
+        # No address at all. Every channel would fail on this, but LinkedIn failed
+        # the worst: `linkedin_action_for_url("")` reads an empty string as a
+        # profile DM, so the channel ran `page.goto("")` and the lead landed in
+        # `failed` carrying "Protocol error (Page.navigate): Cannot navigate to
+        # invalid URL" — a Playwright internal, not something a human can act on
+        # (lead #93). `manual`, not `skipped`: a blank «Источник» is fixed by hand
+        # in the sheet, and no number of re-runs will fill it in.
+        return (STATUS_MANUAL, "пустой «Источник» — впиши адрес в таблицу вручную")
     return None
 
 
@@ -245,3 +254,73 @@ def has_placeholder(body: str) -> bool:
     would charge a hand-edit in Sheets for what a re-roll fixes.
     """
     return bool(_PLACEHOLDER_RE.search(body or ""))
+
+
+# What the summariser answers when it is handed a bare URL: it has no web access,
+# so it politely asks for the text instead. Intake used to store that answer in
+# «Вакансия», and the cover letter was then written from it — a letter to a live
+# recruiter whose entire brief was "пришлите текст объявления". Intake no longer
+# does this (it leaves the column empty), but rows written before the fix carry
+# the sentence verbatim, so the refusal has to be recognised, not just emptiness.
+#
+# Anchored to the FIRST 40 characters, deliberately. A refusal opens with the
+# phrase — both stored ones start at index 0, and the politest prefix a model
+# reaches for ("К сожалению, ") is 13 — while a genuine vacancy that contains
+# "не удалось извлечь" is describing the job ("если из источника не удалось
+# извлечь структуру, инженер разбирается почему") and reaches it mid-sentence.
+# 120 was the first guess and it swallowed exactly that sentence at index 72.
+# Unlike the placeholder net above, the two costs here ARE comparable: a false
+# positive costs a needless fetch, a false negative costs the recruiter a
+# nonsense letter — so the window is set by where refusals actually start.
+_REFUSAL_HEAD_CHARS = 40
+_REFUSAL_RE = re.compile(
+    r"не\s+(?:удалось|удаётся|удается|могу|получилось|смог|смогла)\s+"
+    r"(?:извлеч|получ|прочит|открыт|найт)", re.IGNORECASE)
+
+# The same failure, worded differently. Matching one family of phrasings was a
+# guess made from two samples, and the run of 2026-07-29 produced two more that
+# open nowhere near "не удалось" — leads 159 and 160 went out as `invited`
+# carrying these as their brief:
+#
+#   "Похоже, ссылка ведёт на пост в LinkedIn, но содержимое вакансии из URL
+#    недоступно. Пришлите текст объявления ..., и я кратко суммирую в JSON."
+#   "Нет данных о вакансии в сообщении: предоставлена только ссылка без
+#    описания роли, формата работы, условий и зарплаты."
+#
+# A model refuses in a new sentence every time, so listing openings does not
+# converge. What every refusal DOES do, and a job advert never does, is talk
+# about the message instead of the job: it says there is no vacancy here, or
+# calls the link unreadable, or asks the reader to send the advert, or leaks the
+# output format it was told to produce. Those four are the net.
+#
+# Window is 300 rather than 40: the first family opens with its phrase, this one
+# reaches it mid-sentence ("недоступно" sits at index 78 above). The wider window
+# is affordable precisely because these markers are refusal-shaped — a real advert
+# does not contain "нет данных о вакансии" — where a bare "не удалось извлечь"
+# can plausibly appear in prose about the job, which is why THAT one stays at 40.
+_NO_VACANCY_HEAD_CHARS = 300
+_NO_VACANCY_RE = re.compile(
+    r"нет\s+(?:данных|информации|описания)\s+о?\s*ваканси|"
+    r"(?:содержим|содержани)\w*\s+вакансии[^.]{0,40}недоступ|"
+    r"(?:пришлите|предоставьте|отправьте|скиньте|укажите)\s+(?:полный\s+|сам\w*\s+)?"
+    r"(?:текст|описание|содержание)\s+(?:объявлени|ваканси|поста)|"
+    r"суммир\w*\s+в\s+JSON|"
+    r"no\s+(?:job|vacancy)\s+(?:data|information|details)|"
+    r"(?:please\s+)?(?:provide|paste|share)\s+the\s+(?:full\s+)?"
+    r"(?:job\s+)?(?:description|posting|advert)",
+    re.IGNORECASE)
+
+
+def needs_vacancy_refetch(vacancy_context: str) -> bool:
+    """True when the stored vacancy text is unusable and the link must be re-read.
+
+    Three cases, all of which would otherwise become the basis of a cover letter:
+    an empty column, and a stored model refusal in either of the two shapes above.
+    Says nothing about whether the link CAN be re-read — that is the fetcher's
+    business, not this predicate's.
+    """
+    text = (vacancy_context or "").strip()
+    if not text:
+        return True
+    return bool(_REFUSAL_RE.search(text[:_REFUSAL_HEAD_CHARS])
+                or _NO_VACANCY_RE.search(text[:_NO_VACANCY_HEAD_CHARS]))

@@ -3,8 +3,8 @@ from app.infrastructure.channels import linkedin as li
 
 
 class Loc:
-    def __init__(self, n, text=""):
-        self._n, self._text = n, text
+    def __init__(self, n, text="", href=None):
+        self._n, self._text, self._href = n, text, href
         self.first = self
 
     def count(self):
@@ -13,7 +13,13 @@ class Loc:
     def inner_text(self, timeout=None):
         return self._text
 
-    def click(self):
+    def get_attribute(self, name):
+        return self._href if name == "href" else None
+
+    def click(self, timeout=None):
+        pass
+
+    def evaluate(self, js, timeout=None):
         pass
 
 
@@ -30,9 +36,19 @@ class JobPage:
     def goto(self, url, wait_until=None):
         self.goto_urls.append(url)
 
+    # _settle() drives both of these on a real Page.
+    def wait_for_load_state(self, state=None, timeout=None):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
     def locator(self, sel):
-        if self._easy and "jobs-apply-button" in sel:
-            return Loc(1)            # Easy Apply button present
+        # Keyed on the accessible text, like the selector itself. The old fake
+        # keyed on `jobs-apply-button`, so it kept passing after LinkedIn dropped
+        # that class and every real Easy Apply job started falling through here.
+        if self._easy and "Простая подача заявки" in sel:
+            return Loc(1, href="https://www.linkedin.com/jobs/view/1/apply/")
         if "main" in sel:
             return Loc(1, "job description text")
         return Loc(0)

@@ -34,19 +34,135 @@ _SCRAPE_JS = r"""() => {
   };
   const isVisible = e => !e.disabled && e.getClientRects().length > 0
     && getComputedStyle(e).visibility !== 'hidden';
+  // A file input is a special case: nearly every ATS hides the real <input> and
+  // shows a styled button instead — LinkedIn's resume upload does, and it has no
+  // visible control at all. Filtering it out by visibility meant the CV was never
+  // attached and the required-field check saw nothing missing, so the flow walked
+  // into "A resume is required" and clicked the same screen until it gave up
+  // (measured live 2026-07-29). Playwright sets files on a hidden input fine, so
+  // visibility must not decide whether we can see it. `type=hidden` is still
+  // excluded above — that is a different thing from a visually hidden file input.
+  const usable = e => e.type === 'file' ? !e.disabled : isVisible(e);
   const controls = [...document.querySelectorAll('input,select,textarea')]
-    .filter(e => !['hidden','submit','button','reset','image'].includes(e.type) && isVisible(e));
-  const fields = controls.map((e, i) => {
+    .filter(e => !['hidden','submit','button','reset','image'].includes(e.type) && usable(e));
+  // Radios only mean anything as a group: one question, several buttons. Emitted
+  // one at a time they carry no options, so nothing could answer them and a
+  // required group came back as "Please make a selection" (measured live on
+  // 2026-07-29, job 4434515311). One entry per `name`, options = the buttons'
+  // labels, and the question taken from the surrounding fieldset/group.
+  const radioGroup = e => [...document.querySelectorAll('input[type=radio]')]
+    .filter(r => r.name === e.name);
+  // The question a radio group asks, and the text of each button — read from the
+  // block that wraps the whole group when the markup gives us nothing else.
+  // Ashby ties no <label> to its radios: every button in every group shares one
+  // id, carries value="on", and the group's only name is a UUID pair. Read
+  // literally that produced a question called
+  // "fbb7b4c4-…_b1925c5d-…" with three blank options, so «Gender» and «Marital
+  // Status» were invisible to every rule and the form came back "Missing entry
+  // for required field" (lead 123, 2026-07-29). The wrapper's innerText is
+  // "Gender\nMale\nFemale\nPrefer not to say" — question first, options after.
+  const groupBlock = e => {
+    const g = radioGroup(e);
+    let node = e.parentElement;
+    for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
+      if (!g.every(r => node.contains(r))) continue;
+      const lines = (node.innerText || '').split('\n')
+        .map(x => x.trim()).filter(Boolean);
+      if (lines.length > g.length) return lines;   // a caption beyond the options
+    }
+    return null;
+  };
+  const groupLabel = e => {
+    const fs = e.closest('fieldset');
+    const lg = fs && fs.querySelector('legend');
+    if (lg) return norm(lg.textContent);
+    const grp = e.closest('[role=group],[role=radiogroup]');
+    if (grp && grp.getAttribute('aria-label')) return norm(grp.getAttribute('aria-label'));
+    const lines = groupBlock(e);
+    if (lines) return norm(lines[0]);
+    return norm(e.name);
+  };
+  const groupOptions = e => {
+    const g = radioGroup(e);
+    const own = g.map(r => labelFor(r));
+    if (own.some(Boolean)) return own;
+    const lines = groupBlock(e);
+    if (lines && lines.length >= g.length + 1) {
+      return lines.slice(lines.length - g.length).map(norm);
+    }
+    return own;
+  };
+  // A consent box's own label is the ANSWER, not the question. LinkedIn renders
+  // «Enhesa has my consent to collect, store, and process my data …*» as a
+  // paragraph and labels the box itself "Yes" — measured live 2026-07-30 on job
+  // 4425082337 (lead 169), where `label[for]` was exactly "Yes" and the sentence
+  // sat in the block wrapping the pair. Read literally, no rule in map_field could
+  // recognise it, the box stayed unticked, and «Проверить» answered "Select
+  // checkbox to proceed" until the walk gave up. This is the same problem
+  // groupBlock() already solves for radios: when the control's own markup carries
+  // no question, read the block that wraps it.
+  //
+  // Only a bare answer word sends us looking. A box that already says what it is
+  // («Настройка оповещения», the job-alert toggle on the same screen) keeps its
+  // own label and stays none of our business.
+  const ANSWER_ONLY = /^(yes|no|y|n|да|нет|ja|nein|oui|non|i agree|agree|accept)$/i;
+  const checkboxLabel = e => {
+    const own = labelFor(e);
+    if (own && !ANSWER_ONLY.test(own)) return own;
+    let node = e.parentElement;
+    for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
+      const t = norm(node.innerText);
+      if (t.length > own.length) return t;     // the tightest block that says more
+    }
+    return own;
+  };
+  const seenRadio = new Set();
+  const fields = [];
+  controls.forEach((e, i) => {
     e.setAttribute('data-af', String(i));
-    return {
+    if (e.type === 'radio' && e.name) {
+      if (seenRadio.has(e.name)) return;
+      seenRadio.add(e.name);
+      const g = radioGroup(e);
+      const picked = g.find(r => r.checked);
+      fields.push({
+        tag: 'input', type: 'radio', label: groupLabel(e), name: e.name,
+        required: g.some(r => r.required || r.getAttribute('aria-required')==='true'),
+        options: groupOptions(e),
+        value: picked ? labelFor(picked) : '',
+        ref: String(i),
+      });
+      return;
+    }
+    fields.push({
       tag: e.tagName.toLowerCase(),
       type: (e.type||'').toLowerCase(),
-      label: labelFor(e),
+      label: e.type === 'checkbox' ? checkboxLabel(e) : labelFor(e),
       name: e.name||'',
       required: e.required || e.getAttribute('aria-required')==='true',
       options: e.tagName==='SELECT' ? [...e.options].map(o=>norm(o.textContent)) : [],
+      // What the field ALREADY holds. LinkedIn's Easy Apply arrives with the
+      // account's email and phone country code selected, and without reading
+      // that back a prefilled required field looks empty and unfillable.
+      // A select reports its chosen option's text, not the option's value
+      // attribute, so it can be compared with `options` directly.
+      //
+      // A checkbox reports its STATE for the same reason. `e.value` is the HTML
+      // value attribute, which is "on" by default whether or not the box is
+      // ticked — and `value` is what `_satisfied()` reads, so every checkbox on
+      // every page came back already-answered and `unmapped_required()` had
+      // nothing to report about an untouched one (lead 169, 2026-07-30).
+      value: e.tagName==='SELECT'
+             ? (e.selectedIndex >= 0 ? norm(e.options[e.selectedIndex].textContent) : '')
+             : (e.type === 'checkbox' ? (e.checked ? 'on' : '') : (e.value || '')),
+      // A typeahead accepts only a value picked from its own suggestions.
+      // LinkedIn's «Location (city)» is one, and typing "Astana" into it is
+      // answered with "Please enter a valid answer" — the field looks like a
+      // plain text box and behaves like a dropdown.
+      combobox: e.getAttribute('role') === 'combobox'
+                || ['list','both'].includes(e.getAttribute('aria-autocomplete')),
       ref: String(i),
-    };
+    });
   });
   const txt = norm(document.body ? document.body.innerText : '');
   return {
@@ -70,7 +186,8 @@ def observation_to_raw(obs: PageObservation) -> dict:
     return {
         "url": obs.url,
         "fields": [{"tag": f.tag, "type": f.type, "label": f.label, "name": f.name,
-                    "required": f.required, "options": f.options, "ref": f.ref}
+                    "required": f.required, "options": f.options, "value": f.value,
+                    "combobox": f.combobox, "ref": f.ref}
                    for f in obs.fields],
         "file_inputs": obs.file_inputs, "iframes": obs.iframes,
         "mailto": obs.mailto_links, "apply_buttons": obs.apply_buttons,
@@ -83,6 +200,8 @@ def _build_observation(raw: dict) -> PageObservation:
     fields = [FieldObs(tag=f.get("tag", ""), type=f.get("type", ""),
                        label=f.get("label", ""), name=f.get("name", ""),
                        required=bool(f.get("required")), options=f.get("options") or [],
+                       value=f.get("value", "") or "",
+                       combobox=bool(f.get("combobox")),
                        ref=f.get("ref", "")) for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),
@@ -96,32 +215,222 @@ def scrape_form(page) -> PageObservation:
     return _build_observation(page.evaluate(_SCRAPE_JS))
 
 
-def fill_and_submit(page, plan, dry_run: bool) -> None:
-    for a in plan.actions:
+SEL_SUGGESTION = "[role=option], [role=listbox] li"
+# How long an ATS needs to finish re-rendering around a file input after upload.
+_FILE_SETTLE_MS = 2000
+
+# What counts as "tick it" for a lone checkbox. One box often stands in for a
+# yes/no question («Are you willing to relocate?»), and map_field answers those
+# through _yes_no, which returns the STRING "No". Ticking on "any non-empty value"
+# then records the opposite of what was decided. Only an affirmative ticks.
+_AFFIRMATIVE = frozenset({"true", "yes", "on", "1", "y", "да", "checked"})
+
+
+def _is_affirmative(value: str) -> bool:
+    return (value or "").strip().lower() in _AFFIRMATIVE
+
+
+def _fill_typeahead(page, box, value: str) -> None:
+    """Answer a typeahead by picking from its own list, not by typing at it.
+
+    `.fill()` writes the value straight into the DOM without keystrokes, so the
+    suggestion list never opens and the control keeps no chosen item — LinkedIn
+    answers that with "Please enter a valid answer" and refuses the step (lead
+    126, measured live 2026-07-29: «Location (city)» is `role=combobox`,
+    `aria-autocomplete=list`, and typing "Astana" offered eight suggestions).
+    Typing character by character is what opens the list.
+
+    If nothing is offered, the typed text stays: some comboboxes do accept free
+    text, and where they don't the form says so and the caller reports that.
+    """
+    box.click(timeout=8000)
+    box.fill("", timeout=8000)
+    box.type(value, delay=120)
+    try:
+        page.wait_for_timeout(1500)
+    except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
+        pass
+    options = page.locator(SEL_SUGGESTION)
+    if options.count() > 0:
+        options.first.click(timeout=4000)
+
+
+def _relocate(page, field):
+    """Find a control again after the page re-rendered and dropped our data-af tag.
+
+    `data-af` is an attribute we stamp on during the scrape, so a React re-render
+    replaces the node and takes the tag with it. Measured on Ashby (2026-07-29):
+    setting the first file input re-renders the form, and the REQUIRED «Resume»
+    input two nodes later comes back with `af=None`. Re-scraping re-stamps every
+    control, so the field can be matched again by what it is rather than by a tag
+    it no longer carries.
+    """
+    try:
+        fresh = scrape_form(page)
+    except Exception:  # noqa: BLE001
+        return None
+    for f in fresh.fields:
+        same = (f.tag == field.tag and f.type == field.type
+                and f.label == field.label and f.name == field.name)
+        if same and f.ref:
+            return page.locator(f'[data-af="{f.ref}"]')
+    return None
+
+
+_NUMBER_RE = re.compile(r"\d[\d\s.,]*")
+
+
+def numeric_only(value: str) -> str:
+    """The number inside a free-text answer, ready for <input type=number>.
+
+    A model asked "minimum salary in £ per month" answers "£5000", and Playwright
+    refuses that outright: "Cannot type text into input[type=number]". On a
+    REQUIRED field that refusal parked the whole application (lead 123). Thousands
+    separators go; a genuine decimal tail (1-2 digits) survives.
+    """
+    m = _NUMBER_RE.search(value or "")
+    if not m:
+        return ""
+    raw = m.group(0).strip()
+    decimal = re.search(r"[.,](\d{1,2})$", raw)
+    whole = re.sub(r"\D", "", raw[:decimal.start()] if decimal else raw)
+    if not whole:
+        return ""
+    return f"{whole}.{decimal.group(1)}" if decimal else whole
+
+
+def _pause(page, ms: int) -> None:
+    try:
+        page.wait_for_timeout(ms)
+    except Exception:  # noqa: BLE001 — fake pages have no clock
+        pass
+
+
+def _attached_count(loc) -> int:
+    """How many files the input actually holds, or -1 when it can't be read."""
+    try:
+        return int(loc.first.evaluate("el => (el.files && el.files.length) || 0"))
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def fill_fields(page, plan, where: str = "внешняя форма") -> None:
+    """Type every planned value into the page. Submits nothing.
+
+    Split out of `fill_and_submit` so LinkedIn's multi-step Easy Apply can reuse
+    it per step: that flow fills, advances, and fills again before anything is
+    submitted, but the per-widget rules — bounded timeouts, required-field bail,
+    optional-field skip — must stay identical across both callers. `where` only
+    names the form in the error a human reads.
+    """
+    # Uploads first, everything else after. Each file upload makes the ATS rebuild
+    # the form — Ashby's `setFormValueToFile` answers with a NEW form render id —
+    # and every value written to the previous render is discarded with it. Filling
+    # in DOM order sent 21 setFormValue calls, most of them to a form that no
+    # longer existed, and the Submit that followed fired no request at all
+    # (measured on lead 123, 2026-07-29).
+    ordered = ([a for a in plan.actions if a.is_file]
+               + [a for a in plan.actions if not a.is_file])
+    for a in ordered:
         if not a.field.ref:
             continue
         loc = page.locator(f'[data-af="{a.field.ref}"]')
         if loc.count() == 0:
-            continue
+            # Gone from under us — an earlier fill re-rendered the form. Re-scrape
+            # and match it again. Skipping silently is what sent an Ashby
+            # application with NO resume: the required «Resume» input lost its tag
+            # when the file input above it was set, this line dropped it, and
+            # `unmapped_required()` had already passed because it reads the PLAN,
+            # not the page.
+            loc = _relocate(page, a.field)
+            if loc is None or loc.count() == 0:
+                if a.field.required:
+                    raise ManualApplyRequired(
+                        f"{where}: обязательное поле "
+                        f"«{a.field.label or a.field.name}» исчезло со страницы "
+                        "после перерисовки формы, нужен ручной отклик")
+                continue
         # Bound every fill so a stray/invisible control can never hang 30s or crash
         # the whole fill. If a REQUIRED field can't be filled, bail to a manual apply
         # (never submit a partial form); an optional one is just skipped.
         try:
             if a.is_file and a.value:
                 loc.first.set_input_files(a.value, timeout=8000)
+                # Let the upload land before touching anything else. An ATS
+                # re-renders the form around a file input, and without this pause
+                # the NEXT field is looked up mid-swap.
+                _pause(page, _FILE_SETTLE_MS)
+                if a.field.required:
+                    # Verify on a FRESHLY located element, never on the handle we
+                    # just used: measured on Ashby (2026-07-29) the file lands on
+                    # the node React is about to discard, so the old handle happily
+                    # reports 1 file while the live input holds none — and the
+                    # application goes out without the resume it requires.
+                    live = _relocate(page, a.field) or loc
+                    if _attached_count(live) == 0:
+                        live.first.set_input_files(a.value, timeout=8000)
+                        _pause(page, _FILE_SETTLE_MS)
+                        live = _relocate(page, a.field) or live
+                    if _attached_count(live) == 0:
+                        raise ManualApplyRequired(
+                            f"{where}: резюме не прикрепилось к обязательному полю "
+                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.tag == "select" and a.choice_index is not None:
                 loc.first.select_option(index=a.choice_index, timeout=8000)
+            elif a.field.type == "radio" and a.choice_index is not None:
+                # The plan holds one action per GROUP, addressed by the first
+                # button's ref; the answer is which button of that group to press.
+                # Located by name rather than by ref so the index means the same
+                # thing it meant when the group was scraped — falling back to the
+                # ref when the name doesn't survive as a selector.
+                group = page.locator(f'input[type=radio][name="{a.field.name}"]')
+                target = (group.nth(a.choice_index)
+                          if group.count() > a.choice_index else loc.first)
+                # force=True: the real radio is hidden behind a styled label on
+                # LinkedIn (and on most ATS themes), and Playwright will not act
+                # on an invisible control without it. Nothing is guessed here —
+                # the element was found by name and index, only its visibility
+                # is being overridden.
+                target.check(force=True, timeout=8000)
             elif a.field.type in ("checkbox", "radio"):
-                if a.value:
-                    loc.first.check(timeout=8000)
+                if _is_affirmative(a.value):
+                    # force=True for the same reason as the radio group above: the
+                    # real box is hidden behind a styled label. Without it `check`
+                    # times out, and on an OPTIONAL field that exception is
+                    # swallowed — which is how «I consent» stayed unticked while
+                    # the form answered "Select checkbox to proceed" and the step
+                    # never advanced (lead 126, measured live 2026-07-29). LinkedIn
+                    # marks that box `required=false` in the DOM and demands it
+                    # anyway, so nothing upstream flagged it either.
+                    loc.first.check(force=True, timeout=8000)
+            elif a.field.combobox and a.value:
+                _fill_typeahead(page, loc.first, a.value)
             elif a.value:
-                loc.first.fill(a.value, timeout=8000)
+                text = a.value
+                if a.field.type == "number":
+                    text = numeric_only(text)
+                    if not text and a.field.required:
+                        raise ManualApplyRequired(
+                            f"{where}: в числовое поле "
+                            f"«{a.field.label or a.field.name}» нечего вписать "
+                            f"(ответ был {a.value[:40]!r}), нужен ручной отклик")
+                loc.first.fill(text, timeout=8000)
+        except ManualApplyRequired:
+            # A diagnosis we made deliberately (the resume never attached, a
+            # required control vanished). Let it out intact — the generic handler
+            # below would overwrite it with "не смог заполнить поле", which points
+            # the human at the wrong thing.
+            raise
         except Exception:  # noqa: BLE001 — hidden/odd widget must not hang or crash the fill
             if a.field.required:
                 raise ManualApplyRequired(
-                    f"внешняя форма: не смог заполнить обязательное поле "
+                    f"{where}: не смог заполнить обязательное поле "
                     f"«{a.field.label or a.field.name}», нужен ручной отклик")
             continue
+
+
+def fill_and_submit(page, plan, dry_run: bool) -> None:
+    fill_fields(page, plan)
     if dry_run:
         return
     submit = page.locator(SEL_SUBMIT)
@@ -131,6 +440,16 @@ def fill_and_submit(page, plan, dry_run: bool) -> None:
     try:
         btn.scroll_into_view_if_needed(timeout=2000)
     except Exception:  # noqa: BLE001 — best-effort; some fakes/pages have no scroll
+        pass
+    # Native el.click() first. A synthetic Playwright click on Ashby's «Submit
+    # Application» does NOTHING — measured live 2026-07-29: no navigation, no
+    # error, no change for 30 seconds, button still enabled. The same call as
+    # el.click() submitted immediately. A native click also walks past the overlay
+    # problem the fallback below was written for, since it needs no hit point.
+    try:
+        btn.evaluate("el => el.click()", timeout=8000)
+        return
+    except Exception:  # noqa: BLE001 — stale handle / no JS: fall back to a real click
         pass
     try:
         # Cap the click: on some ATS (e.g. Angular/PrimeNG) a <p-dialog> overlay
@@ -297,25 +616,134 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
                 f"ответ ИИ содержит личные данные {leaked} "
                 f"(поле «{a.field.label or a.field.name}») — проверь вручную: {obs.url}")
 
+    submit_before = _submit_count(page)
     fill_and_submit(page, plan, dry_run)
     if dry_run:
         raise ManualApplyRequired(
             f"DRY_RUN: заполнено, НЕ отправлено — проверь вручную: {obs.url}")
-    _verify_submitted(page, obs.url)
+    _verify_submitted(page, obs.url, submit_before)
 
 
-def _verify_submitted(page, url: str) -> None:
+# What an ATS says once it has the application. Kept to phrases that only appear
+# after a submit — "apply" and "application" alone are all over an unsubmitted
+# form, and a false positive here marks an unsent lead `sent` forever.
+_SUBMITTED_RE = re.compile(
+    r"thank you for (?:applying|your application)|thanks for applying|"
+    r"application (?:submitted|received|complete)|"
+    r"we(?:'ve| have) received your application|your application (?:was|has been) sent|"
+    r"заявка (?:отправлена|принята|получена)|спасибо за (?:отклик|заявку)",
+    re.IGNORECASE)
+# An Ashby submit uploads the CV and then re-renders; six seconds was not enough
+# to see the outcome, and "no signal yet" was being reported as "no confirmation".
+# The ATS refusing us as a bot. Ashby answers a submitted application with
+# "Your application submission was flagged as possible spam" and keeps the form;
+# the page also carries a reCAPTCHA token field. This is bot detection, not a
+# fixable form problem — say so plainly and hand the lead to the human.
+_BOT_BLOCKED_RE = re.compile(
+    r"flagged as (?:possible )?spam|we could ?n[o']t submit your application|"
+    r"suspected (?:bot|automation)|verify (?:you are|you're) (?:a )?human|"
+    r"похоже на спам|подтвердите, что вы не робот",
+    re.IGNORECASE)
+_VERIFY_ATTEMPTS = 10
+_VERIFY_INTERVAL_MS = 1500
+
+
+def _page_text(page) -> str:
+    """Head AND tail of the page text.
+
+    A verdict banner lands at the BOTTOM of a long application page — Ashby's
+    "flagged as possible spam" sits after the whole job description — so reading
+    only the first few thousand characters saw none of it, and a refusal we had
+    already taught the code to recognise still surfaced as "no confirmation".
+    """
     try:
-        page.wait_for_timeout(2000)
-    except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
-        pass
-    try:
-        still_on_form = page.locator(SEL_SUBMIT).count() > 0
+        text = page.evaluate(
+            "() => { const t = document.body.innerText || '';"
+            " return t.length <= 8000 ? t : t.slice(0, 4000) + '\\n' + t.slice(-4000); }")
     except Exception:  # noqa: BLE001
-        still_on_form = False
-    if still_on_form:
+        return ""
+    return text if isinstance(text, str) else ""
+
+
+def _submit_count(page) -> int:
+    try:
+        return page.locator(SEL_SUBMIT).count()
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
+    """Confirm the application landed, and say so honestly when we can't tell.
+
+    The old check was "is a submit button still on the page after 2 seconds",
+    which is wrong twice over. SEL_SUBMIT matches `button:has-text('Apply')`, and
+    a confirmation page keeps buttons like that; and two seconds is short for an
+    SPA. Every Ashby application came back "отправка не подтверждена" — leads 119,
+    127, 128, 129 — while the click had in fact gone through, so the note told the
+    human to apply again by hand.
+
+    So: look for a POSITIVE signal — the page says it received the application,
+    or navigated, or the form we filled is gone — and poll for it instead of
+    glancing once. If none appears, the outcome is genuinely unknown, and the
+    message has to say that rather than "not submitted": a second application to
+    the same company is the cost of getting this wrong.
+    """
+    before = url
+    for attempt in range(_VERIFY_ATTEMPTS):
+        try:
+            page.wait_for_timeout(_VERIFY_INTERVAL_MS)
+        except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
+            pass
+        if _SUBMITTED_RE.search(_page_text(page)):
+            return
+        try:
+            if (page.url or before) != before:
+                return                       # navigated away from the form
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if not scrape_form(page).fields:
+                return                       # the form itself is gone
+        except Exception:  # noqa: BLE001
+            pass
+        # The exact button we pressed is gone. Weaker than a thank-you page, but
+        # unambiguous when there WAS one and now there is none — and unlike the old
+        # check this compares against a count taken before the click, so a page
+        # whose only match was a stray «Apply» link can't fake it.
+        if submit_before > 0 and _submit_count(page) == 0:
+            return
+        if attempt == _VERIFY_ATTEMPTS - 1:
+            break
+    said = _visible_error(page)
+    if _BOT_BLOCKED_RE.search(said) or _BOT_BLOCKED_RE.search(_page_text(page)):
         raise ManualApplyRequired(
-            f"отправка не подтверждена (форма всё ещё открыта): {url}")
+            "ATS отклонил отправку как автоматическую (антибот/captcha) — "
+            f"эту заявку можно подать только вручную: {url}")
+    if said:
+        raise ManualApplyRequired(f"форма не приняла: {said} — {url}")
+    raise ManualApplyRequired(
+        "кнопка отправки нажата, но подтверждения не видно — ВОЗМОЖНО, ЗАЯВКА "
+        f"УЖЕ УШЛА, проверь почту прежде чем откликаться повторно: {url}")
+
+
+def _visible_error(page) -> str:
+    """Text of a validation message on the page, or "" — the honest failure case."""
+    try:
+        # `[class*=error i]`, not `.error`: every modern ATS ships hashed class
+        # names (`_errorBanner_1e3gg_32`), which an exact class selector misses.
+        errs = page.locator("[role=alert], [aria-invalid='true'], "
+                            "[class*=error i], [class*=Error]")
+        n = min(errs.count(), 5)
+    except Exception:  # noqa: BLE001
+        return ""
+    for i in range(n):
+        try:
+            said = (errs.nth(i).inner_text(timeout=1500) or "").strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if said:
+            return said[:120]
+    return ""
 
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,

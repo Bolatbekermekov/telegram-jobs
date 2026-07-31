@@ -240,10 +240,16 @@ async def telegram_webhook(
             # up a total failure as a partial success.
             extra = ("\n\nℹ️ У Threads без браузера читается только первый пост — "
                      "полный тред и контакт для отклика дочитаю при отправке с ноута.")
+        # An empty column means the link would not load in the seconds this
+        # function had. Say that, rather than printing "Вакансия: " and letting it
+        # read as a summary that came out blank — the lead is saved and the laptop
+        # reads the link again before it sends anything.
+        vacancy = lead.vacancy_context or (
+            "не прочиталась сейчас — дочитаю при отправке с ноута")
         _reply(
             chat_id,
             f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}\n"
-            f"Вакансия: {lead.vacancy_context}{extra}",
+            f"Вакансия: {vacancy}{extra}",
         )
     except ValueError:
         _reply(

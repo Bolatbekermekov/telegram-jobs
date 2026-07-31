@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from app.domain.channel import (
     InvitePendingError,
+    InviteWithoutNoteError,
     ManualApplyRequired,
     OutreachChannel,
     OutreachContent,
@@ -18,6 +19,7 @@ class SendResult:
     rate_limited: bool = False
     invited: bool = False        # connection request + cover letter sent (no CV); a normal send
     manual: bool = False         # apply couldn't be automated (CAPTCHA/login/unknown form)
+    invited_plain: bool = False  # connect request sent WITHOUT the letter (quota spent)
 
 
 class SendOutreach:
@@ -32,6 +34,8 @@ class SendOutreach:
             return SendResult(ok=False, error=str(exc), rate_limited=True)
         except InvitePendingError as exc:
             return SendResult(ok=False, error=str(exc), invited=True)
+        except InviteWithoutNoteError as exc:
+            return SendResult(ok=False, error=str(exc), invited_plain=True)
         except ManualApplyRequired as exc:
             return SendResult(ok=False, error=str(exc), manual=True)
         except Exception as exc:  # noqa: BLE001

@@ -43,3 +43,6 @@ sender/.hh_chat_debug/
 
 # VS Code (личные настройки, не в публичный репо)
 .vscode/
+
+# subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/

@@ -37,20 +37,47 @@ def _api_error(code):
     return sr.APIError(_FakeResponse(code))
 
 
-class _FakeWorksheet:
-    """Records writes; fails the first `fail_times` calls with `code`."""
+class _HtmlResponse:
+    """How Google actually answers a 5xx: an HTML page, not JSON.
 
-    def __init__(self, fail_times=0, code=429):
+    The failure is served by the front end, before the Sheets API layer, so there
+    is no `{"error": {...}}` to parse. gspread catches the parse error and falls
+    back to `code = -1` (gspread/exceptions.py), which is why keying the retry on
+    `exc.code` alone never retried the most common outage there is.
+    """
+
+    def __init__(self, status_code=502):
+        self.status_code = status_code
+        self.text = ("<!DOCTYPE html><title>Error {} (Server Error)!!1</title>"
+                     .format(status_code))
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
+def _api_error_html(status_code=502):
+    return sr.APIError(_HtmlResponse(status_code))
+
+
+class _FakeWorksheet:
+    """Records writes; fails the first `fail_times` calls with `code`.
+
+    `error` overrides the raised exception, for the HTML-bodied 5xx that carries
+    no parseable code.
+    """
+
+    def __init__(self, fail_times=0, code=429, error=None):
         self.updates = []
         self.batches = []
         self.calls = 0
         self._fail_times = fail_times
         self._code = code
+        self._error = error
 
     def _maybe_fail(self):
         self.calls += 1
         if self.calls <= self._fail_times:
-            raise _api_error(self._code)
+            raise self._error() if self._error else _api_error(self._code)
 
     def update(self, values, range_name=None, **kw):
         self._maybe_fail()
@@ -136,6 +163,48 @@ def test_mark_sent_raises_after_the_last_attempt(monkeypatch):
     assert ws.updates == []
 
 
+def test_gspread_reports_an_html_5xx_as_code_minus_one():
+    """Pins the mechanism the retry has to survive, not our own code."""
+    assert _api_error_html(502).code == -1
+
+
+def test_mark_sent_retries_an_html_502_then_succeeds(monkeypatch):
+    """A 502 arrives as HTML, so `exc.code` is -1 — retry on the HTTP status.
+
+    This is the write that had already delivered a Telegram message when it blew
+    up: no retry meant the run died with the lead still `new`, and the next run
+    messaged the same person a second time.
+    """
+    monkeypatch.setattr(sr.time, "sleep", lambda _s: None)
+    ws = _FakeWorksheet(fail_times=2, error=lambda: _api_error_html(502))
+
+    _repo(ws).mark_sent(_Lead(), "body", "sent")
+
+    assert ws.calls == 3
+    assert len(ws.updates) == 1
+
+
+def test_mark_sent_does_not_retry_an_html_400(monkeypatch):
+    """A bad range is our bug — an unparseable body must not turn it into a retry."""
+    monkeypatch.setattr(sr.time, "sleep", lambda _s: None)
+    ws = _FakeWorksheet(fail_times=99, error=lambda: _api_error_html(400))
+
+    with pytest.raises(sr.APIError):
+        _repo(ws).mark_sent(_Lead(), "body", "sent")
+
+    assert ws.calls == 1
+
+
+def test_mark_status_retries_an_html_502_then_succeeds(monkeypatch):
+    monkeypatch.setattr(sr.time, "sleep", lambda _s: None)
+    ws = _FakeWorksheet(fail_times=2, error=lambda: _api_error_html(503))
+
+    _repo(ws).mark_status(_Lead(), "manual", note="n")
+
+    assert ws.calls == 3
+    assert len(ws.batches) == 1
+
+
 def test_mark_sent_does_not_retry_a_permission_error():
     """403 means the sheet isn't shared with the service account — retrying hides it."""
     ws = _FakeWorksheet(fail_times=99, code=403)
@@ -144,6 +213,30 @@ def test_mark_sent_does_not_retry_a_permission_error():
         _repo(ws).mark_sent(_Lead(), "body", "sent")
 
     assert ws.calls == 1
+
+
+# --- update_vacancy ---------------------------------------------------------
+
+def test_update_vacancy_writes_only_the_vacancy_cell():
+    ws = _FakeWorksheet()
+    _repo(ws).update_vacancy(_Lead(), "Backend Engineer, Алматы, гибрид")
+
+    (values, cells, kw), = ws.updates
+    assert cells == "F7"
+    assert values == [["Backend Engineer, Алматы, гибрид"]]
+    assert kw["value_input_option"] == ValueInputOption.raw
+
+
+def test_update_vacancy_never_touches_status():
+    """The lead stays `new` — it is generated and delivered later in the same run."""
+    ws = _FakeWorksheet()
+    _repo(ws).update_vacancy(_Lead(), "текст вакансии")
+
+    (_, cells, _), = ws.updates
+    grid = a1_range_to_grid_range(cells)
+    status_index = COL_STATUS - 1
+    assert not (grid["startColumnIndex"] <= status_index < grid["endColumnIndex"]), (
+        f"{cells} covers the Статус column")
 
 
 # --- mark_status ------------------------------------------------------------

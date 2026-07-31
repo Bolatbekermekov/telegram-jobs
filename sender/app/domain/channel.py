@@ -18,6 +18,13 @@ class InvitePendingError(ChannelError):
     no CV chase after they accept. The caller records it as a normal send."""
 
 
+class InviteWithoutNoteError(ChannelError):
+    """Not a failure: a connection request went out with NO note, because the
+    monthly personalized-invite quota is spent. The cover letter was not delivered,
+    so this is not a send — the lead waits as `invited` until the person accepts,
+    and a later run messages them properly."""
+
+
 class ManualApplyRequired(ChannelError):
     """Not a hard failure: the application can't be completed automatically (CAPTCHA,
     login/registration wall, or an unrecognised form). The lead is flagged for a

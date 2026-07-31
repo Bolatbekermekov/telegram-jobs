@@ -1,0 +1,41 @@
+# Данные для автозаполнения форм отклика на сайтах компаний.
+#
+#   cp sender/apply_profile.example.yml sender/apply_profile.yml
+#
+# Настоящий файл (apply_profile.yml) в .gitignore — в репозиторий не попадёт.
+# Пока его нет, автоотклик работает с пустым профилем: любая открывшаяся форма
+# уходит в 'manual' с пометкой «не заполнены обязательные поля». Если автоотклик
+# не нужен вовсе — EXTERNAL_APPLY_ENABLED=false в .env, и этот файл не понадобится.
+#
+# Незаполненное поле = пустая строка. Обязательный минимум, чтобы формы вообще
+# начали заполняться: full_name (или first_name + last_name) и email.
+
+full_name: "Иван Иванов"
+first_name: "Ivan"          # латиницей — большинство ATS не принимает кириллицу
+last_name: "Ivanov"
+email: "ivan@example.com"
+phone: "+7 777 000 00 00"
+
+city: "Алматы"
+country: "Казахстан"
+
+linkedin: "https://www.linkedin.com/in/ivanov"
+github: "https://github.com/ivanov"
+portfolio: ""
+
+# Как отвечать на «Are you authorized to work in ...?»
+work_authorization: "Гражданин Казахстана, разрешение на работу в РК не требуется"
+needs_visa_sponsorship: false
+open_to_relocation: true
+
+desired_salary: ""          # пусто — вопрос уйдёт модели
+notice_period: "2 недели"
+
+# Готовые ответы на повторяющиеся вопросы форм.
+# Ключ — кусок текста вопроса в нижнем регистре; сравнение по вхождению подстроки.
+# Пустое значение означает «пусть отвечает модель».
+custom_answers:
+  "how did you hear about us": "LinkedIn"
+  "telegram handle": "@ivanov"
+  "years of experience": "5"
+  "why do you want to work": ""

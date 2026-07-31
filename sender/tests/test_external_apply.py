@@ -27,10 +27,12 @@ class FakeLocator:
         if self.sel == ea.SEL_SUBMIT and self.page.submit_intercepted:
             raise TimeoutError("Locator.click: Timeout — p-dialog intercepts pointer events")
         self.page.clicks.append(self.sel)
-        # A real submit advances the form, so its button disappears. submit_sticks
-        # simulates client-side validation keeping the form (and button) in place.
+        # A real submit replaces the form with a confirmation, so both its button
+        # and its fields go away — the fields are what _verify_submitted reads.
+        # submit_sticks simulates client-side validation keeping the form in place.
         if self.sel == ea.SEL_SUBMIT and not self.page.submit_sticks:
             self.page.present.discard(ea.SEL_SUBMIT)
+            self.page._obs = PageObservation(url=self.page._obs.url)
 
     def fill(self, v, **kwargs):
         self.page.filled[self.sel] = v
@@ -80,7 +82,7 @@ def test_submit_not_confirmed_when_form_persists_raises_manual():
     # The submit button is STILL present after clicking (form did not advance ->
     # likely client-side validation failure). We must not report blind success.
     page = FakePage(_obs_form(), present=[ea.SEL_SUBMIT], submit_sticks=True)
-    with pytest.raises(ManualApplyRequired, match="не подтверждена"):
+    with pytest.raises(ManualApplyRequired, match="ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА"):
         ea.external_apply(page, "https://boards.greenhouse.io/acme/jobs/1", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
     assert ea.SEL_SUBMIT in page.clicks
 

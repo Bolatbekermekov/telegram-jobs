@@ -27,9 +27,20 @@ def parse_ai_answers(raw: str) -> dict:
         raise ValueError(f"model did not return valid JSON: {exc}") from exc
     out = {}
     for a in data.get("answers", []):
+        if not isinstance(a, dict):
+            continue
         qid = a.get("id")
-        if qid:
-            out[qid] = a
+        # Key by STRING, always. The prompt asks for "id":"<id>" but models answer
+        # with a bare number as often as not, and question ids are strings — so a
+        # numeric id silently matched nothing and the answer was dropped on the
+        # floor. Every free-text question in every external form came back
+        # unanswered because of this (measured 2026-07-29: the model answered the
+        # essay, `{1: {...}}`, and the lookup for "1" missed).
+        #
+        # `is not None`, not truthiness: question ids start at "0", and an integer
+        # 0 is falsy — the FIRST question's answer was thrown away twice over.
+        if qid is not None:
+            out[str(qid)] = a
     return out
 
 
@@ -43,7 +54,11 @@ def fill_plan(questions, answers_by_id) -> list:
     plan = []
     for q in questions:
         qid = q["id"]
-        answer = answers_by_id.get(qid, {})
+        # str() on both sides — see parse_ai_answers for why the model's ids can't
+        # be trusted to keep their type.
+        answer = answers_by_id.get(str(qid)) or answers_by_id.get(qid) or {}
+        if not isinstance(answer, dict):
+            answer = {}
         if q.get("type") == "text":
             plan.append(("text", qid, str(answer.get("text", "")).strip()))
             continue
