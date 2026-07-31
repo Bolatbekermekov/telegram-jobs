@@ -15,7 +15,7 @@ from dataclasses import replace
 from app import config
 from app.application.format_content import format_for_channel
 from app.application.generate_message import (
-    GenerateMessage, generate_body, generate_for, subject_for,
+    GenerateMessage, generate_for, subject_for,
 )
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
@@ -458,7 +458,13 @@ def run() -> None:
 
             if not config.AUTO_SEND:
                 _show(content.body)
-                if "[" in content.body:
+                if content.note:
+                    # Для не-контакта в LinkedIn уходит именно записка, а не
+                    # письмо. Утверждать глазами надо тот текст, который
+                    # действительно отправится.
+                    print("\n--- записка к запросу на контакт ---")
+                    _show(content.note)
+                if "[" in content.body or "[" in content.note:
                     # No editor in this loop (only s/k/q), so the advice has to be
                     # something the human can actually do: quit and re-run, because
                     # generate_body runs fresh every run and the next roll is free.
@@ -492,10 +498,14 @@ def run() -> None:
                 print(f"⏳ Пауза {delay} c (анти-бан)...")
                 time.sleep(delay)
             elif result.invited:
-                # A LinkedIn connection request carrying the cover letter went out.
-                # It's the whole outreach — no CV, no follow-up after they accept —
-                # so record it as a normal send (won't be retried).
-                if not _record_sent(repo, lead, content.body, platform):
+                # Запрос на контакт уходит с ЗАПИСКОЙ, а не с письмом целиком (см.
+                # _invite_note в linkedin.py) — и это весь охват на этого лида:
+                # письмо следом не идёт, даже если контакт примут (InvitePendingError
+                # в domain/channel.py). Пишем как обычную отправку (лид не
+                # повторится), но в таблицу кладём то, что реально дошло: запись
+                # content.body утверждала бы, что рекрутёр получил письмо, которого
+                # никто не получал.
+                if not _record_sent(repo, lead, content.note or content.body, platform):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1

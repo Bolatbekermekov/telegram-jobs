@@ -92,25 +92,36 @@ def _parse_letter_and_note(raw: str) -> tuple[str, str]:
     """Ответ модели -> (письмо, записка). Записка пустая, если её не разобрать.
 
     Асимметрия намеренная: без записки вызывающий сократит письмо и всё равно
-    отправит приглашение, а без письма лид умирает. Поэтому любой неразобранный
-    ответ целиком считается письмом, а не ошибкой. Во всех отказных ветках отдаём
-    `text`, а не `raw`: `text` уже без ``` ограждения, а эти маркеры в письме,
-    которое прочитает живой рекрутёр, не нужны.
+    отправит приглашение, а без письма лид умирает. Поэтому ответ, который даже
+    не пытался быть JSON, целиком считается письмом — модель просто написала
+    прозой вместо формата, и письмо от этого не хуже.
+
+    А вот ответ, который пытался быть JSON и не разобрался, письмом считать
+    нельзя: получается `{"letter": "Здравствуйте.` в качестве текста живому
+    человеку. Такой ответ это сбой генерации, и он поднимается наверх — там
+    он уже обрабатывается как обвал OpenAI: лид остаётся неотправленным и
+    повторится в следующем прогоне.
+
+    Во всех отказных ветках отдаём `text`, а не `raw`: маркеры ограждения
+    иначе попадут в письмо, которое прочитает человек.
     """
     text = (raw or "").strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
         text = re.sub(r"\s*```$", "", text).strip()
+    looks_like_json = text.startswith("{") or text.startswith("[")
     try:
         data = json.loads(text)
     except Exception:  # noqa: BLE001 — чужой текст, любой разбор может не удаться
+        if looks_like_json:
+            raise ValueError("модель вернула неразобранный JSON вместо письма")
         return text, ""
     if not isinstance(data, dict):
-        return text, ""
+        raise ValueError("модель вернула не объект JSON вместо письма")
     letter = str(data.get("letter") or "").strip()
     note = str(data.get("note") or "").strip()
     if not letter:
-        return text, ""
+        raise ValueError("в ответе модели нет поля letter")
     return letter, note
 
 
@@ -157,6 +168,7 @@ class OpenAIMessageGenerator:
                 {"role": "system", "content": _SYSTEM + _note_rules(note_limit)},
                 {"role": "user", "content": user},
             ],
+            response_format={"type": "json_object"},
             max_completion_tokens=self._max_output_tokens,
         )
         letter, note = _parse_letter_and_note(resp.choices[0].message.content or "")

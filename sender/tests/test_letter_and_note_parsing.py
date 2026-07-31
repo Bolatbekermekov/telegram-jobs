@@ -5,6 +5,8 @@
 чужой текст, и разбор обязан выдерживать всё, что она может прислать. Потерять
 записку не страшно — вызывающий сократит письмо. Потерять письмо нельзя.
 """
+import pytest
+
 from app.infrastructure.openai_client import _parse_letter_and_note
 
 
@@ -31,12 +33,17 @@ def test_an_empty_note_field_is_no_note():
 
 
 def test_a_json_array_is_not_a_result():
-    assert _parse_letter_and_note('["a", "b"]') == ('["a", "b"]', "")
+    """Массив это тоже валидный JSON, но не объект с letter/note — ответ, который
+    пытался быть JSON и не дал письма, поднимается как сбой генерации."""
+    with pytest.raises(ValueError):
+        _parse_letter_and_note('["a", "b"]')
 
 
-def test_json_without_a_letter_falls_back_to_the_raw_text():
-    raw = '{"note": "только записка"}'
-    assert _parse_letter_and_note(raw) == (raw, "")
+def test_a_json_object_without_a_letter_is_a_generation_failure():
+    """Объект распарсился, но без letter отправлять нечего — это не письмо
+    без обёртки, а поломанная генерация, и её нельзя тихо спутать с прозой."""
+    with pytest.raises(ValueError):
+        _parse_letter_and_note('{"note": "только записка"}')
 
 
 def test_fenced_prose_loses_the_fence_not_just_the_json():
@@ -44,3 +51,16 @@ def test_fenced_prose_loses_the_fence_not_just_the_json():
     маркеры ограждения в него попасть не должны: их прочитает живой человек."""
     raw = "```\nЗдравствуйте. Пишу по вакансии.\n```"
     assert _parse_letter_and_note(raw) == ("Здравствуйте. Пишу по вакансии.", "")
+
+
+def test_a_broken_json_object_is_a_generation_failure_not_a_letter():
+    """Живая поломка: `_SYSTEM` требует абзацы, а перевод строки внутри строки
+    JSON ломает разбор. Отдать такой обрубок за письмо значит показать
+    рекрутёру `{"letter": "Здравствуйте.` — лучше не отправить вовсе."""
+    with pytest.raises(ValueError):
+        _parse_letter_and_note('{"letter": "Здравствуйте.\nСейчас работаю в')
+
+
+def test_a_truncated_json_object_is_a_generation_failure():
+    with pytest.raises(ValueError):
+        _parse_letter_and_note('{"letter": "Здравствуйте, пишу по вакансии", "not')
