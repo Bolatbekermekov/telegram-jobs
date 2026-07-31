@@ -31,3 +31,18 @@ def test_subject_kept_only_when_needed():
     ch = _Ch(needs_subject=True)
     c = format_for_channel(ch, body="b", subject="Hi there", attachment_path=None)
     assert c.subject == "Hi there"
+
+
+def test_the_note_is_carried_through_untouched():
+    """Записка живёт по своим правилам: её пишут сразу под лимит площадки, и
+    `body_limit` (предел ПИСЬМА) к ней отношения не имеет."""
+    ch = _Ch(body_limit=10)
+    c = format_for_channel(ch, body="hello world foo", subject=None,
+                           attachment_path=None, note="Короткая записка целиком.")
+    assert c.note == "Короткая записка целиком."
+    assert c.body == "hello"
+
+
+def test_the_note_defaults_to_empty():
+    c = format_for_channel(_Ch(), body="b", subject=None, attachment_path=None)
+    assert c.note == ""

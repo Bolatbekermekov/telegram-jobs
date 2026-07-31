@@ -13,10 +13,12 @@ def _truncate(body: str, limit: int) -> str:
 
 
 def format_for_channel(channel, body: str, subject: str | None,
-                       attachment_path: str | None) -> OutreachContent:
+                       attachment_path: str | None, note: str = "") -> OutreachContent:
     out_body = body
     if channel.body_limit is not None:
         out_body = _truncate(body, channel.body_limit)
     out_subject = subject if channel.needs_subject else None
+    # `note` не режется здесь: её предел принадлежит каналу, а не письму, и канал
+    # применяет его сам (см. LinkedInChannel.note_limit).
     return OutreachContent(body=out_body, subject=out_subject,
-                           attachment_path=attachment_path)
+                           attachment_path=attachment_path, note=note)

@@ -42,12 +42,17 @@ class OutreachContent:
     body: str
     subject: str | None = None        # used by channels with needs_subject (email)
     attachment_path: str | None = None
+    # Короткий самостоятельный текст для записки к запросу на контакт в LinkedIn.
+    # У записки жёсткий предел площадки (LinkedInChannel.note_limit), которого у
+    # письма нет, поэтому её пишут отдельно, а не отрезают от письма. Для всех
+    # остальных каналов поле пустое, и они его не читают.
+    note: str = ""
 
 
 @runtime_checkable
 class OutreachChannel(Protocol):
     name: str                  # one of: telegram | linkedin | hh | email | wellfound
-    body_limit: int | None     # max chars for body (LinkedIn note = 300); None = unlimited
+    body_limit: int | None     # предел ДЛИНЫ ПИСЬМА; None = без предела
     needs_subject: bool        # True => a subject must be generated (email)
 
     def start(self) -> None: ...
