@@ -1,5 +1,6 @@
 """OpenAI-backed message generator for outreach."""
 import json
+import re
 
 from openai import OpenAI
 
@@ -68,6 +69,49 @@ def _strip_dashes(text: str) -> str:
     return text.replace("  ", " ").strip()
 
 
+def _note_rules(limit: int) -> str:
+    """Добавка к системному промпту, превращающая одну генерацию в письмо + записку.
+
+    Живёт отдельной строкой, а не внутри `_SYSTEM`: `generate()` обслуживает
+    Telegram, hh, Threads и email, и правка промпта ради LinkedIn не должна иметь
+    возможности до них дотянуться.
+    """
+    return (
+        " Кроме письма напиши КОРОТКУЮ записку для запроса на контакт в LinkedIn. "
+        f"Записка: не длиннее {limit} символов, законченный текст из 1-2 предложений "
+        "(приветствие, чем зацепила именно эта вакансия, короткая просьба принять "
+        "контакт). Это НЕ начало письма и НЕ его сокращение, а самостоятельное "
+        "сообщение, которое читают отдельно. Без подписи, без ссылок, без "
+        "плейсхолдеров и квадратных скобок. "
+        'Верни СТРОГО один JSON-объект и ничего кроме него: '
+        '{"letter": "<полное письмо>", "note": "<записка>"}'
+    )
+
+
+def _parse_letter_and_note(raw: str) -> tuple[str, str]:
+    """Ответ модели -> (письмо, записка). Записка пустая, если её не разобрать.
+
+    Асимметрия намеренная: без записки вызывающий сократит письмо и всё равно
+    отправит приглашение, а без письма лид умирает. Поэтому любой неразобранный
+    ответ целиком считается письмом, а не ошибкой.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        data = json.loads(text)
+    except Exception:  # noqa: BLE001 — чужой текст, любой разбор может не удаться
+        return (raw or "").strip(), ""
+    if not isinstance(data, dict):
+        return (raw or "").strip(), ""
+    letter = str(data.get("letter") or "").strip()
+    note = str(data.get("note") or "").strip()
+    if not letter:
+        return (raw or "").strip(), ""
+    return letter, note
+
+
 class OpenAIMessageGenerator:
     def __init__(self, api_key: str, model: str, max_output_tokens: int = 2000):
         self._client = OpenAI(api_key=api_key)
@@ -90,6 +134,31 @@ class OpenAIMessageGenerator:
             max_completion_tokens=self._max_output_tokens,
         )
         return _strip_dashes((resp.choices[0].message.content or "").strip())
+
+    def generate_with_note(self, cv_text: str, profile_text: str,
+                           vacancy_context: str, note_limit: int) -> tuple[str, str]:
+        """(письмо, записка) за ОДИН запрос.
+
+        `generate()` намеренно не тронут: по нему ходят все остальные каналы, и
+        изменение промпта ради LinkedIn не должно иметь к ним доступа. Пустая
+        записка это не ошибка — вызывающий сократит письмо (см. _invite_note).
+        """
+        user = (
+            f"=== PROFILE (правила позиционирования) ===\n{profile_text}\n\n"
+            f"=== CV ===\n{cv_text}\n\n"
+            f"=== ВАКАНСИЯ ===\n{vacancy_context}\n\n"
+            "Напиши сообщение для HR и записку по правилам выше. Верни JSON."
+        )
+        resp = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": _SYSTEM + _note_rules(note_limit)},
+                {"role": "user", "content": user},
+            ],
+            max_completion_tokens=self._max_output_tokens,
+        )
+        letter, note = _parse_letter_and_note(resp.choices[0].message.content or "")
+        return _strip_dashes(letter), _strip_dashes(note)
 
     def answer_questions(self, cv_text: str, profile_text: str, vacancy_context: str,
                          questions: list) -> dict:
