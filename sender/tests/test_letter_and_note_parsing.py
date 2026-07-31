@@ -37,3 +37,10 @@ def test_a_json_array_is_not_a_result():
 def test_json_without_a_letter_falls_back_to_the_raw_text():
     raw = '{"note": "только записка"}'
     assert _parse_letter_and_note(raw) == (raw, "")
+
+
+def test_fenced_prose_loses_the_fence_not_just_the_json():
+    """Модель завернула ответ в ``` и не выдала JSON. Письмо всё равно годное, но
+    маркеры ограждения в него попасть не должны: их прочитает живой человек."""
+    raw = "```\nЗдравствуйте. Пишу по вакансии.\n```"
+    assert _parse_letter_and_note(raw) == ("Здравствуйте. Пишу по вакансии.", "")

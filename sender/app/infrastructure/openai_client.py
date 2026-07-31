@@ -93,7 +93,9 @@ def _parse_letter_and_note(raw: str) -> tuple[str, str]:
 
     Асимметрия намеренная: без записки вызывающий сократит письмо и всё равно
     отправит приглашение, а без письма лид умирает. Поэтому любой неразобранный
-    ответ целиком считается письмом, а не ошибкой.
+    ответ целиком считается письмом, а не ошибкой. Во всех отказных ветках отдаём
+    `text`, а не `raw`: `text` уже без ``` ограждения, а эти маркеры в письме,
+    которое прочитает живой рекрутёр, не нужны.
     """
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -102,13 +104,13 @@ def _parse_letter_and_note(raw: str) -> tuple[str, str]:
     try:
         data = json.loads(text)
     except Exception:  # noqa: BLE001 — чужой текст, любой разбор может не удаться
-        return (raw or "").strip(), ""
+        return text, ""
     if not isinstance(data, dict):
-        return (raw or "").strip(), ""
+        return text, ""
     letter = str(data.get("letter") or "").strip()
     note = str(data.get("note") or "").strip()
     if not letter:
-        return (raw or "").strip(), ""
+        return text, ""
     return letter, note
 
 
