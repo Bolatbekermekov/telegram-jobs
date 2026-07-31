@@ -507,6 +507,18 @@ def connect_with_note(page, note: str) -> None:
     _fill_invite_note(page, note)
 
 
+def _invite_note(content: OutreachContent) -> str:
+    """Текст, который поедет в запросе на контакт.
+
+    `content.note` написан именно под этот слот и в предел уже укладывается.
+    Откат нужен только для генерации, которая записку не вернула вовсе: берём
+    письмо, сокращённое по границе предложения. Резать письмо по пробелу нельзя —
+    записка выходит оборванной на полумысли, а это первое, что читает человек.
+    """
+    note = (content.note or "").strip()
+    return _trim_to_sentence(note or content.body, _NOTE_LIMIT)
+
+
 def message_or_connect(page, profile_url: str, content: OutreachContent,
                        allow_note: bool = True) -> None:
     """Reach out to a profile. Prefer a connection request with a note whenever a
@@ -526,7 +538,7 @@ def message_or_connect(page, profile_url: str, content: OutreachContent,
                 f"LinkedIn: запрос на контакт отправлен БЕЗ письма (лимит "
                 f"персональных приглашений исчерпан): {profile_url}")
         try:
-            _fill_invite_note(page, content.body)
+            _fill_invite_note(page, _invite_note(content))
         except _NoteQuotaSpent:
             # The note field never appeared — a Premium upsell took its place. The
             # modal is now in the upsell state, so close it and open a fresh one
@@ -806,7 +818,15 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
 
 class LinkedInChannel:
     name = "linkedin"
-    body_limit = 300          # safe for connection notes; messages allow more
+    # Письмо принявшему контакту предела не имеет: LinkedIn пропускает тысячи
+    # символов, а модель пишет 100-160 слов. Здесь стояло 300 — размер записки к
+    # приглашению — и три четверти каждого письма уходили в мусор вместе с
+    # подписью (лиды 156/160/161/172/177/179).
+    body_limit = None
+    # Жёсткий предел записки к приглашению, замерен живьём 2026-07-09. Объявлен
+    # здесь, чтобы генератор писал под ту же цифру, по которой канал потом
+    # подстраховывается: два разных числа разъезжаются молча.
+    note_limit = _NOTE_LIMIT
     needs_subject = False
 
     def __init__(self, storage_state_path: str, headless: bool = False,
