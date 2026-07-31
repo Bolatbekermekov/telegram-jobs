@@ -207,7 +207,9 @@ def _followup_invited(repo, switcher, generator) -> None:
             print(f"   #{lead.lead_id}: не смог сгенерировать текст "
                   f"({type(gen_err).__name__}) — оставляю 'invited'.")
             continue
-        if has_placeholder(body):
+        # Записка проверяется наравне с письмом: на этом пути нет ни гейта
+        # AUTO_SEND, ни подтверждения человеком, так что эта проверка последняя.
+        if has_placeholder(body) or has_placeholder(note):
             print(f"   #{lead.lead_id}: в тексте остался [плейсхолдер] — "
                   "оставляю 'invited', перегенерирую в следующий прогон.")
             continue

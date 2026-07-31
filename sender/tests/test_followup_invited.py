@@ -288,3 +288,23 @@ def test_the_accepted_contact_gets_the_whole_letter_and_the_note_rides_along():
     (_target, content), = channel.sent
     assert content.body == "Полное письмо принявшему контакту."
     assert content.note == "Короткая записка."
+
+
+class _PlaceholderNoteGen:
+    def execute(self, lead):
+        return "Письмо."
+
+    def execute_with_note(self, lead, note_limit):
+        return "Чистое письмо без шаблонов.", "Здравствуйте, [Имя]!"
+
+
+def test_a_placeholder_in_the_note_holds_the_lead_back():
+    """На этом пути нет ни AUTO_SEND, ни подтверждения человеком, поэтому шаблон
+    в записке обязан останавливать отправку так же, как шаблон в письме."""
+    lead = _lead()
+    repo = _Repo([lead])
+    channel = _NoteChannel(state="accepted")
+    _followup_invited(repo, _Switcher(channel), _PlaceholderNoteGen())
+
+    assert channel.sent == []
+    assert repo.sent == []
