@@ -4,6 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.domain.cv_files import find_any_cv
+
 # Load the shared .env at the project root (telegram-jobs/.env).
 # __file__ = telegram-jobs/sender/app/config.py -> parents[2] = telegram-jobs
 _ROOT = Path(__file__).resolve().parents[2]
@@ -39,13 +41,13 @@ def _resolve_cv_path() -> str:
     override = os.environ.get("CV_PATH", "").strip()
     if override and Path(override).is_file():
         return override
+    # Ищем и в подпапках ролей тоже. Иначе, как только CV переедят в
+    # sender/cv/<роль>/, верхний уровень опустеет и эта функция бросит
+    # FileNotFoundError прямо на импорте конфига, уронив всё приложение.
     if CV_DIR.is_dir():
-        files = sorted(
-            p for p in CV_DIR.iterdir()
-            if p.is_file() and p.suffix.lower() in (".pdf", ".txt")
-        )
-        if files:
-            return str(files[0])
+        found = find_any_cv(CV_DIR)
+        if found is not None:
+            return str(found)
     raise FileNotFoundError(
         f"No CV found. Put your CV (PDF or txt) into {CV_DIR} "
         "or set CV_PATH in .env to its full path."
