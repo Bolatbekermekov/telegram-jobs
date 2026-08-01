@@ -64,3 +64,13 @@ def test_classify_does_not_call_the_model_on_empty_text():
 
     assert classify_role(_Counting(), "   ") == DEFAULT_ROLE
     assert _Counting.calls == 0
+
+
+def test_classify_never_throws_on_a_non_string():
+    """Контракт безусловный: исключение отсюда уносит весь прогон рассылки."""
+    class _Ok:
+        def classify(self, vacancy_context):
+            return "ai"
+
+    for junk in (12345, ["Python"], {"title": "Backend"}, object()):
+        assert classify_role(_Ok(), junk) == DEFAULT_ROLE
