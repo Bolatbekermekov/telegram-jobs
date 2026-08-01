@@ -6,6 +6,7 @@ it needed to be, so the split is worth pinning down.
 """
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.openai_relevance import OpenAIRelevanceScorer
+from app.infrastructure.openai_role import OpenAIRoleClassifier
 
 
 class _FakeCompletions:
@@ -49,6 +50,14 @@ def _scorer(content='{"score": 80, "reason": "ok"}', **kw):
     return s
 
 
+def _classifier(content='{"role": "backend-go"}', **kw):
+    c = OpenAIRoleClassifier.__new__(OpenAIRoleClassifier)
+    c._client = _FakeClient(content)
+    c._model = kw.get("model", "cheap-model")
+    c._max_output_tokens = kw.get("max_output_tokens", 2000)
+    return c
+
+
 # --- model routing ----------------------------------------------------------
 
 def test_scoring_uses_the_model_it_was_given():
@@ -75,6 +84,23 @@ def test_scoring_and_writing_can_use_different_models():
 
     assert s._client.chat.completions.calls[0]["model"] == "cheap"
     assert gen._client.chat.completions.calls[0]["model"] == "good"
+
+
+def test_role_classification_uses_the_model_it_was_given():
+    """Классификация идёт на КАЖДЫЙ лид, поэтому модель обязана быть дешёвой."""
+    c = _classifier(model="gpt-5.4-nano")
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["model"] == "gpt-5.4-nano"
+
+
+def test_role_classification_caps_the_reply_length():
+    c = _classifier(max_output_tokens=800)
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["max_completion_tokens"] == 800
 
 
 # --- output cap -------------------------------------------------------------
@@ -118,6 +144,15 @@ def test_hh_answers_still_request_json():
     assert kw["response_format"] == {"type": "json_object"}
 
 
+def test_role_classification_still_requests_json():
+    """Разбор ответа ищет JSON: без response_format парсер молча съедет на fullstack."""
+    c = _classifier()
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["response_format"] == {"type": "json_object"}
+
+
 # --- defaults ---------------------------------------------------------------
 
 def test_generator_is_capped_even_when_the_caller_omits_the_kwarg():
@@ -129,3 +164,8 @@ def test_generator_is_capped_even_when_the_caller_omits_the_kwarg():
 def test_scorer_is_capped_even_when_the_caller_omits_the_kwarg():
     s = OpenAIRelevanceScorer("key-unused", "some-model")
     assert s._max_output_tokens > 0
+
+
+def test_role_classifier_is_capped_even_when_the_caller_omits_the_kwarg():
+    c = OpenAIRoleClassifier("key-unused", "some-model")
+    assert c._max_output_tokens > 0

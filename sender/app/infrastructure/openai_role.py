@@ -1,4 +1,8 @@
-"""Определение роли вакансии дешёвой моделью. Зеркало openai_relevance.py."""
+"""Определение роли вакансии дешёвой моделью. Строение как у openai_relevance.py.
+
+Отличие одно и намеренное: здесь передаётся response_format=json_object, потому
+что разбор ответа ищет JSON. Сосед его не передаёт и полагается на разбор прозой.
+"""
 from openai import OpenAI
 
 from app.application.classify_role import build_role_prompt, parse_role_response
