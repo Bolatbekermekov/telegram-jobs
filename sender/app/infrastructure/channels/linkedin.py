@@ -828,6 +828,11 @@ class LinkedInChannel:
     # подстраховывается: два разных числа разъезжаются молча.
     note_limit = _NOTE_LIMIT
     needs_subject = False
+    # Строки подписи, которые не уходят В LinkedIn: письмо читают в самом
+    # LinkedIn, открыв профиль отправителя, и ссылка на этот же профиль в конце
+    # выглядит невычитанным шаблоном. Telegram и почта остаются: это способы
+    # связи, которых у рекрутёра ещё нет.
+    signature_drop = ("linkedin",)
 
     def __init__(self, storage_state_path: str, headless: bool = False,
                  external_apply_deps=None):
