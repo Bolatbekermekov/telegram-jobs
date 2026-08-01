@@ -1027,7 +1027,10 @@ git commit -m "feat: CV передаётся в вызов генерации, �
 
 **Files:**
 - Modify: `sender/app/interface/cli.py:141` (сигнатура `_followup_invited`), `:204,216-217` (путь принятых приглашений), `:236-248` (`run`), `:253` (вызов), `:420-445` (основной цикл)
+- Modify: `sender/tests/test_followup_invited.py` — см. предупреждение ниже
 - Test: `sender/tests/test_cli_role_wiring.py`
+
+**Предупреждение, найденное ревью Task 6.** `sender/tests/test_followup_invited.py` содержит дак-тайпинговые стенды `_Generator`, `_NoteGen`, `_PlaceholderNoteGen`, чьи `execute`/`execute_with_note` объявлены **без** параметра `cv_text`. Эта задача меняет сигнатуру `_followup_invited` и начинает передавать непустой `variant.text` — стенды либо упадут с `TypeError`, либо, что хуже, тихо провалятся в ветку «генерация не удалась» (`generate_for` глотает любое исключение по политике инцидента row-82) и тесты станут проверять не то, что обещают их имена. Стендам надо дописать `cv_text: str = ""` в обе сигнатуры. Проверь, что после правки они по-прежнему проверяют заявленное поведение, а не откат.
 
 **Interfaces:**
 - Consumes: `classify_role` (Task 4), `CvLibrary`/`CvVariant` (Task 3), `OpenAIRoleClassifier` (Task 5), `generate_for(..., cv_text)` (Task 6)
