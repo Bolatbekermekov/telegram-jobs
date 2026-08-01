@@ -88,14 +88,17 @@ class _Classifier:
 
 
 class _CvLibrary:
-    """Подмена настоящего CvLibrary: одно и то же CV на любую роль. text
-    непустой, как у настоящего CvVariant, — иначе generate_for не передаст
-    cv_text дальше, и ловушка с недостающим параметром у стендов ниже вообще
-    не проявится."""
+    """Подмена настоящего CvLibrary: всегда один и тот же CvVariant с
+    pdf_path="/cv/qa.pdf" — заведомо не то, что вернёт настоящий
+    config.CV_PATH в этом окружении. Так тест на вложение ниже отличает
+    новое `attachment = variant.pdf_path` от старого `attachment =
+    config.CV_PATH`, а не совпадает с обоими по конструкции. text непустой,
+    как у настоящего CvVariant, — иначе generate_for не передаст cv_text
+    дальше, и ловушка с недостающим параметром у стендов ниже вообще не
+    проявится."""
 
     def for_role(self, role):
-        return CvVariant(role="fullstack", text="ТЕКСТ CV",
-                         pdf_path=config.CV_PATH)
+        return CvVariant(role="qa", text="ТЕКСТ QA CV", pdf_path="/cv/qa.pdf")
 
 
 def _run(repo, channel, generator=None, classifier=None, cv_library=None):
@@ -123,14 +126,20 @@ def test_an_accepted_invite_gets_the_letter_and_becomes_sent():
 
 
 def test_an_accepted_invite_carries_the_cv(monkeypatch):
-    """The one case LinkedIn lets us attach a file: a 1st-degree contact."""
+    """The one case LinkedIn lets us attach a file: a 1st-degree contact.
+
+    Монки-патч CV_PATH намеренно убран: `_CvLibrary.for_role` отдаёт
+    pdf_path, заведомо отличный от config.CV_PATH, поэтому тест различает
+    нынешнее `attachment = variant.pdf_path` и старое `attachment =
+    config.CV_PATH` — а не проходит в обоих случаях из-за одного и того же
+    подменённого значения.
+    """
     monkeypatch.setattr(config, "ATTACH_CV", True, raising=False)
-    monkeypatch.setattr(config, "CV_PATH", "/cv/me.pdf", raising=False)
     repo, channel = _Repo([_lead()]), _Channel(state="accepted")
     _run(repo, channel)
 
     (_target, content), = channel.sent
-    assert content.attachment_path == "/cv/me.pdf"
+    assert content.attachment_path == "/cv/qa.pdf"
 
 
 def test_a_vanished_invite_is_parked_for_a_human():
@@ -290,25 +299,32 @@ class _NoteChannel(_Channel):
 
 
 class _NoteGen:
+    def __init__(self):
+        self.seen_cv = None
+
     def execute(self, lead, cv_text: str = ""):
         return "Письмо."
 
     def execute_with_note(self, lead, note_limit, cv_text: str = ""):
+        self.seen_cv = cv_text
         return "Полное письмо принявшему контакту.", "Короткая записка."
 
 
 def test_the_accepted_contact_gets_the_whole_letter_and_the_note_rides_along():
     """Человек принял заявку, значит письмо идёт прямым сообщением и резать его
     нечем. Записка едет своим полем на случай, если канал пойдёт путём
-    приглашения."""
+    приглашения. seen_cv проверяет, что письмо реально написано из CV нужной
+    роли (variant.text), а не только что что-то отправилось."""
     lead = _lead()
     repo = _Repo([lead])
     channel = _NoteChannel(state="accepted")
-    _followup_invited(repo, _Switcher(channel), _NoteGen(), _Classifier(), _CvLibrary())
+    generator = _NoteGen()
+    _followup_invited(repo, _Switcher(channel), generator, _Classifier(), _CvLibrary())
 
     (_target, content), = channel.sent
     assert content.body == "Полное письмо принявшему контакту."
     assert content.note == "Короткая записка."
+    assert generator.seen_cv == "ТЕКСТ QA CV"
 
 
 class _PlaceholderNoteGen:
