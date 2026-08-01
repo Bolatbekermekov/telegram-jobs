@@ -33,7 +33,7 @@
 | `sender/app/domain/cv_files.py` | **создать.** Чистый поиск файла CV на диске по папке роли |
 | `sender/app/application/cv_library.py` | **создать.** Роль → `CvVariant(role, text, pdf_path)`, кэш текста, цепочка откатов |
 | `sender/app/application/classify_role.py` | **создать.** Промпт, разбор ответа, обёртка, проглатывающая сбои |
-| `sender/app/infrastructure/openai_role.py` | **создать.** Вызов модели, зеркало `openai_relevance.py` |
+| `sender/app/infrastructure/openai_role.py` | **создать.** Вызов модели, строение как у `openai_relevance.py`, но с `response_format` |
 | `sender/app/config.py` | **править.** `_resolve_cv_path()` должен находить CV в подпапке |
 | `sender/app/application/generate_message.py` | **править.** `cv_text` необязательным параметром вызова |
 | `sender/app/interface/cli.py` | **править.** Проводка обоих путей отправки + печать роли |
@@ -714,7 +714,9 @@ git commit -m "feat: классификация роли вакансии с о�
 - Consumes: `build_role_prompt`, `parse_role_response` (Task 4)
 - Produces: `OpenAIRoleClassifier(api_key: str, model: str, max_output_tokens: int = 2000)` с методом `classify(vacancy_context: str) -> str`
 
-Отдельного юнит-теста нет намеренно: это тонкая обёртка над сетью, и `openai_relevance.py` рядом устроен так же — тестируются чистые `build_*` и `parse_*`, а не сам вызов. Проверка живая, на шаге 3.
+- Test: `sender/tests/test_model_routing.py` (существующий файл, дополняется)
+
+**Поправка к первой редакции плана.** Здесь стояло «отдельного юнит-теста нет намеренно, потому что `openai_relevance.py` рядом устроен так же». Это было **фактически неверно** и проверено при исполнении: `test_model_routing.py:45,54,82` тестирует `OpenAIRelevanceScorer` через `_FakeClient`, а `:109` существует ровно затем, чтобы поймать потерю `response_format` при рефакторинге. Тест нужен, и он идёт в тот же файл, где живёт вся оснастка.
 
 - [ ] **Step 1: Написать модуль**
 
@@ -753,12 +755,65 @@ class OpenAIRoleClassifier:
         return parse_role_response(resp.choices[0].message.content or "")
 ```
 
-- [ ] **Step 2: Прогнать весь набор тестов**
+- [ ] **Step 2: Дописать тесты в `sender/tests/test_model_routing.py`**
+
+Файл уже содержит `_FakeClient`/`_FakeCompletions` — новый файл не заводить. Фабрика рядом с `_scorer`, по её форме:
+
+```python
+def _classifier(content='{"role": "backend-go"}', **kw):
+    c = OpenAIRoleClassifier.__new__(OpenAIRoleClassifier)
+    c._client = _FakeClient(content)
+    c._model = kw.get("model", "cheap-model")
+    c._max_output_tokens = kw.get("max_output_tokens", 2000)
+    return c
+```
+
+В секцию `# --- model routing ---`:
+
+```python
+def test_role_classification_uses_the_model_it_was_given():
+    """Классификация идёт на КАЖДЫЙ лид, поэтому модель обязана быть дешёвой."""
+    c = _classifier(model="gpt-5.4-nano")
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["model"] == "gpt-5.4-nano"
+```
+
+В секцию `# --- output cap ---`:
+
+```python
+def test_role_classification_caps_the_reply_length():
+    c = _classifier(max_output_tokens=800)
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["max_completion_tokens"] == 800
+
+
+def test_role_classification_still_requests_json():
+    """Разбор ответа ищет JSON: без response_format парсер молча съедет на fullstack."""
+    c = _classifier()
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["response_format"] == {"type": "json_object"}
+```
+
+В секцию `# --- defaults ---`:
+
+```python
+def test_role_classifier_is_capped_even_when_the_caller_omits_the_kwarg():
+    c = OpenAIRoleClassifier("key-unused", "some-model")
+    assert c._max_output_tokens > 0
+```
+
+- [ ] **Step 3: Прогнать весь набор тестов**
 
 Run: `./sender/.venv/bin/python -m pytest sender/tests -q -m "not live"`
-Expected: PASS, не меньше 777
+Expected: PASS, не меньше 781
 
-- [ ] **Step 3: Живая проверка на настоящих вакансиях**
+- [ ] **Step 4: Живая проверка на настоящих вакансиях**
 
 Run:
 
@@ -787,10 +842,10 @@ PY
 
 Expected: `AI -> ai`, `Go -> backend-go`, `QA -> qa`, `RN -> mobile`, `Front -> frontend`, `Node -> backend-node`. Если хоть одна не совпала — не идти дальше, а поправить описания в `ROLE_DESCRIPTIONS` или системный промпт и прогнать снова.
 
-- [ ] **Step 4: Коммит**
+- [ ] **Step 5: Коммит**
 
 ```bash
-git add sender/app/infrastructure/openai_role.py
+git add sender/app/infrastructure/openai_role.py sender/tests/test_model_routing.py
 git commit -m "feat: OpenAIRoleClassifier на дешёвой модели"
 ```
 
