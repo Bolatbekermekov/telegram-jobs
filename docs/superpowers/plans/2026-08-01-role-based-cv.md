@@ -498,24 +498,40 @@ class CvLibrary:
         return self._by_role[role]
 
     def _build(self, role: str) -> CvVariant:
-        path = find_role_cv(self._cv_dir, role)
-        resolved = role
-        if path is None:
-            path = find_role_cv(self._cv_dir, DEFAULT_ROLE)
-            resolved = DEFAULT_ROLE
-        if path is None:
-            path = Path(self._fallback_pdf)
-            resolved = DEFAULT_ROLE
-        return CvVariant(role=resolved, text=self._text_for(str(path)),
-                         pdf_path=str(path))
+        for candidate, resolved in self._candidates(role):
+            text = self._text_for(str(candidate))
+            if text:
+                return CvVariant(role=resolved, text=text, pdf_path=str(candidate))
+        # Ни одна ступень не дала пригодного текста: отдаём последнюю попытку
+        # как есть. Письмо напишется из запасного CV в генераторе, но лид
+        # уедет, а это главное.
+        return CvVariant(role=DEFAULT_ROLE, text="", pdf_path=self._fallback_pdf)
+
+    def _candidates(self, role: str):
+        """Ступени отката по порядку, пропуская несуществующие: папка роли,
+        папка fullstack, файл, который уходит сегодня."""
+        role_path = find_role_cv(self._cv_dir, role)
+        if role_path is not None:
+            yield role_path, role
+        fullstack_path = find_role_cv(self._cv_dir, DEFAULT_ROLE)
+        if fullstack_path is not None:
+            yield fullstack_path, DEFAULT_ROLE
+        fallback_path = Path(self._fallback_pdf)
+        if fallback_path.is_file():
+            yield fallback_path, DEFAULT_ROLE
 
     def _text_for(self, path: str) -> str:
         # Кэш по ПУТИ, а не по роли: разбор PDF дорогой, а несколько ролей,
         # откатившихся на один и тот же файл, читать его повторно не должны.
         if path not in self._text_by_path:
-            self._text_by_path[path] = self._load_text(path)
+            try:
+                self._text_by_path[path] = self._load_text(path)
+            except Exception:  # noqa: BLE001 — битый файл это не повод ронять прогон
+                self._text_by_path[path] = ""
         return self._text_by_path[path]
 ```
+
+**Поправка, внесённая по итогам ревью Task 7.** Первая редакция брала первую найденную ступень безусловно и не ловила ошибку чтения. Из-за этого нечитаемый или пустой PDF роли (скан без текстового слоя) давал `text=""` и валидный `pdf_path`: письмо писалось из запасного CV, а вложением уезжало ролевое — тот самый разъезд письма и вложения, ради запрета которого всё делается, только в другую сторону. А брошенное `load_cv_text` исключение роняло прогон трейсбеком на N-м лиде, тогда как раньше падало один раз на старте. Теперь непригодный текст означает «у этой роли нет пригодного CV» и уводит на следующую ступень.
 
 - [ ] **Step 4: Убедиться, что тесты проходят**
 
