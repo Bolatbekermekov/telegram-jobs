@@ -521,6 +521,34 @@ def test_send_routes_post_url_to_author_message(monkeypatch):
     assert called == {"msg": "https://www.linkedin.com/in/ilyas-mustafin-44b575144/"}
 
 
+def test_send_attaches_the_role_cv_to_easy_apply_not_the_legacy_constant(monkeypatch):
+    """The cover letter (content.body) is already written from the role-selected
+    CV; the uploaded file must be that SAME CV, not registry.py's global
+    cv_path constant, or the letter and the attachment describe two people."""
+    captured = {}
+    monkeypatch.setattr(
+        "app.infrastructure.channels.linkedin.easy_apply_via_page",
+        lambda page, url, content, **kw: captured.setdefault("cv_path", kw.get("cv_path")))
+    ch = LinkedInChannel("state.json", external_apply_deps={"cv_path": "/legacy/cv.pdf"})
+    ch._page = object()
+    ch.send("https://www.linkedin.com/jobs/view/9",
+            OutreachContent(body="hi", attachment_path="/role/qa.pdf"))
+    assert captured["cv_path"] == "/role/qa.pdf"
+
+
+def test_send_falls_back_to_the_legacy_cv_path_when_content_has_no_attachment(monkeypatch):
+    """No role CV was resolved (content.attachment_path is None) -> the old
+    global constant remains the safety net, same as before this fix."""
+    captured = {}
+    monkeypatch.setattr(
+        "app.infrastructure.channels.linkedin.easy_apply_via_page",
+        lambda page, url, content, **kw: captured.setdefault("cv_path", kw.get("cv_path")))
+    ch = LinkedInChannel("state.json", external_apply_deps={"cv_path": "/legacy/cv.pdf"})
+    ch._page = object()
+    ch.send("https://www.linkedin.com/jobs/view/9", OutreachContent(body="hi"))
+    assert captured["cv_path"] == "/legacy/cv.pdf"
+
+
 def test_the_walk_stops_when_a_click_leaves_the_job_page():
     """«Далее» is also the caption on the similar-jobs rail. When the flow is not
     open, the walk paged through search results — leads 118/119/123/129 all ended

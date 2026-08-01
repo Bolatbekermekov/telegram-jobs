@@ -105,3 +105,57 @@ def test_a_role_whose_file_cannot_be_read_falls_back_to_fullstack(tmp_path):
     assert variant.role == "fullstack"
     assert variant.pdf_path == str(fs_pdf)
     assert variant.text == f"ТЕКСТ:{fs_pdf}"
+
+
+def test_an_unreadable_cv_prints_a_warning_naming_the_path(tmp_path, capsys):
+    """Молчаливый откат на fullstack не даёт оператору отличить 'модель так
+    решила' от 'резюме под роль сломано' — предупреждение обязано назвать
+    путь, который не прочитался."""
+    broken_pdf = _touch(tmp_path / "qa" / "Bolatbek_QA.pdf")
+    _touch(tmp_path / "fullstack" / "fs.pdf")
+
+    def load_text(path):
+        if path == str(broken_pdf):
+            raise ValueError("битый PDF")
+        return f"ТЕКСТ:{path}"
+
+    CvLibrary(tmp_path, "/нет.pdf", load_text=load_text).for_role("qa")
+
+    out = capsys.readouterr().out
+    assert "CV не читается" in out
+    assert str(broken_pdf) in out
+
+
+def test_an_empty_cv_prints_a_warning_naming_the_path(tmp_path, capsys):
+    empty_pdf = _touch(tmp_path / "qa" / "Bolatbek_QA.pdf")
+    _touch(tmp_path / "fullstack" / "fs.pdf")
+
+    def load_text(path):
+        return "" if path == str(empty_pdf) else f"ТЕКСТ:{path}"
+
+    CvLibrary(tmp_path, "/нет.pdf", load_text=load_text).for_role("qa")
+
+    out = capsys.readouterr().out
+    assert "CV пустой" in out
+    assert str(empty_pdf) in out
+
+
+def test_the_warning_prints_once_per_path_not_once_per_role_request(tmp_path, capsys):
+    """Кэш по пути (test_two_roles_falling_back_to_the_same_file_read_it_once)
+    должен точно так же гасить повторные предупреждения: 'ai' и 'mobile' оба
+    без своей папки откатываются на один и тот же битый fullstack-файл, и
+    жалоба на него не должна повторяться на каждую роль."""
+    broken_pdf = _touch(tmp_path / "fullstack" / "fs.pdf")
+    legacy = _touch(tmp_path.parent / "legacy.pdf")
+
+    def load_text(path):
+        if path == str(broken_pdf):
+            raise ValueError("битый PDF")
+        return f"ТЕКСТ:{path}"
+
+    lib = CvLibrary(tmp_path, str(legacy), load_text=load_text)
+    lib.for_role("ai")
+    lib.for_role("mobile")
+
+    out = capsys.readouterr().out
+    assert out.count("CV не читается") == 1

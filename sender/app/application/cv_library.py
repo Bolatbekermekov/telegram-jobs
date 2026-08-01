@@ -67,9 +67,16 @@ class CvLibrary:
     def _text_for(self, path: str) -> str:
         # Кэш по ПУТИ, а не по роли: разбор PDF дорогой, а несколько ролей,
         # откатившихся на один и тот же файл, читать его повторно не должны.
+        # Предупреждение печатается ровно здесь, под тем же условием, что и
+        # запись в кэш, — то есть один раз на путь, а не на каждый запрос роли.
         if path not in self._text_by_path:
             try:
-                self._text_by_path[path] = self._load_text(path)
+                text = self._load_text(path)
             except Exception:  # noqa: BLE001 — битый файл это не повод ронять прогон
-                self._text_by_path[path] = ""
+                text = ""
+                print(f"⚠️  CV не читается: {path} — беру следующую ступень отката")
+            else:
+                if not text:
+                    print(f"⚠️  CV пустой: {path} — беру следующую ступень отката")
+            self._text_by_path[path] = text
         return self._text_by_path[path]

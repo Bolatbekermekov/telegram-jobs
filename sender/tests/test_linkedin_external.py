@@ -122,3 +122,37 @@ def test_external_apply_no_company_url_raises_manual():
     except ManualApplyRequired as exc:
         assert "Easy Apply" in str(exc)
     assert called["fn"] is False
+
+
+def test_external_apply_passes_the_role_cv_not_the_legacy_constant():
+    """The letter (content.body) is already written from the role-selected CV;
+    the attachment handed to the external-apply fn must be the SAME file, not
+    registry.py's global cv_path constant."""
+    calls = {}
+
+    def fake_external(page, job_url, content, **kw):
+        calls["cv_path"] = kw.get("cv_path")
+
+    page = JobPage(company_url="https://boards.greenhouse.io/acme/jobs/1")
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": True, "fn": fake_external,
+                                                  "cv_path": "/legacy/cv.pdf"})
+    ch._page = page
+    ch._external_apply("https://www.linkedin.com/jobs/view/123",
+                       OutreachContent(body="hi", attachment_path="/role/qa.pdf"))
+    assert calls["cv_path"] == "/role/qa.pdf"
+
+
+def test_external_apply_falls_back_to_the_legacy_cv_path_without_an_attachment():
+    calls = {}
+
+    def fake_external(page, job_url, content, **kw):
+        calls["cv_path"] = kw.get("cv_path")
+
+    page = JobPage(company_url="https://boards.greenhouse.io/acme/jobs/1")
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": True, "fn": fake_external,
+                                                  "cv_path": "/legacy/cv.pdf"})
+    ch._page = page
+    ch._external_apply("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
+    assert calls["cv_path"] == "/legacy/cv.pdf"

@@ -41,7 +41,7 @@ def _resolve_cv_path() -> str:
     override = os.environ.get("CV_PATH", "").strip()
     if override and Path(override).is_file():
         return override
-    # Ищем и в подпапках ролей тоже. Иначе, как только CV переедят в
+    # Ищем и в подпапках ролей тоже. Иначе, как только CV переедут в
     # sender/cv/<роль>/, верхний уровень опустеет и эта функция бросит
     # FileNotFoundError прямо на импорте конфига, уронив всё приложение.
     if CV_DIR.is_dir():
