@@ -4,6 +4,8 @@ import re
 
 from openai import OpenAI
 
+from app.domain.message_language import detect_language, language_rule
+
 _QUESTIONS_SYSTEM = (
     "Ты отвечаешь на обязательные вопросы работодателя в отклике на hh.ru ОТ ЛИЦА "
     "кандидата. Опирайся ТОЛЬКО на факты из CV и PROFILE, ничего не выдумывай. "
@@ -83,6 +85,8 @@ def _note_rules(limit: int) -> str:
         "контакт). Это НЕ начало письма и НЕ его сокращение, а самостоятельное "
         "сообщение, которое читают отдельно. Без подписи, без ссылок, без "
         "плейсхолдеров и квадратных скобок. "
+        "Записка на ТОМ ЖЕ языке, что и письмо (то есть на языке вакансии): "
+        "английская вакансия значит и письмо, и записка на английском. "
         'Верни СТРОГО один JSON-объект и ничего кроме него: '
         '{"letter": "<полное письмо>", "note": "<записка>"}'
     )
@@ -141,7 +145,12 @@ class OpenAIMessageGenerator:
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                # Язык называем прямо, а не оставляем правилу «язык сообщения =
+                # язык вакансии» внутри _SYSTEM: живьём оно проигрывало русскому
+                # языку самого промпта, и английские вакансии получали русские
+                # письма (лиды 6, 13, 17).
+                {"role": "system",
+                 "content": _SYSTEM + language_rule(detect_language(vacancy_context))},
                 {"role": "user", "content": user},
             ],
             max_completion_tokens=self._max_output_tokens,
@@ -165,7 +174,9 @@ class OpenAIMessageGenerator:
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": _SYSTEM + _note_rules(note_limit)},
+                {"role": "system",
+                 "content": _SYSTEM + _note_rules(note_limit)
+                 + language_rule(detect_language(vacancy_context))},
                 {"role": "user", "content": user},
             ],
             response_format={"type": "json_object"},
