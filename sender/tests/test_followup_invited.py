@@ -8,6 +8,8 @@ aria-label offers to withdraw the invitation.
 """
 import pytest
 
+from app import config
+from app.application.cv_library import CvVariant
 from app.domain.lead import (
     STATUS_FAILED, STATUS_INVITED, STATUS_MANUAL, STATUS_SENT, Lead,
 )
@@ -73,12 +75,32 @@ class _Generator:
     def __init__(self, body="Здравствуйте! Интересна ваша вакансия."):
         self._body = body
 
-    def execute(self, lead):
+    def execute(self, lead, cv_text: str = ""):
         return self._body
 
 
-def _run(repo, channel, generator=None):
-    _followup_invited(repo, _Switcher(channel), generator or _Generator())
+class _Classifier:
+    """Роль тут не важна — этот файл проверяет цикл _followup_invited, а не
+    классификатор; всегда отдаёт fullstack."""
+
+    def classify(self, vacancy_context):
+        return "fullstack"
+
+
+class _CvLibrary:
+    """Подмена настоящего CvLibrary: одно и то же CV на любую роль. text
+    непустой, как у настоящего CvVariant, — иначе generate_for не передаст
+    cv_text дальше, и ловушка с недостающим параметром у стендов ниже вообще
+    не проявится."""
+
+    def for_role(self, role):
+        return CvVariant(role="fullstack", text="ТЕКСТ CV",
+                         pdf_path=config.CV_PATH)
+
+
+def _run(repo, channel, generator=None, classifier=None, cv_library=None):
+    _followup_invited(repo, _Switcher(channel), generator or _Generator(),
+                      classifier or _Classifier(), cv_library or _CvLibrary())
 
 
 def test_a_pending_invite_is_left_alone():
@@ -102,7 +124,6 @@ def test_an_accepted_invite_gets_the_letter_and_becomes_sent():
 
 def test_an_accepted_invite_carries_the_cv(monkeypatch):
     """The one case LinkedIn lets us attach a file: a 1st-degree contact."""
-    from app import config
     monkeypatch.setattr(config, "ATTACH_CV", True, raising=False)
     monkeypatch.setattr(config, "CV_PATH", "/cv/me.pdf", raising=False)
     repo, channel = _Repo([_lead()]), _Channel(state="accepted")
@@ -172,7 +193,7 @@ def test_no_invited_rows_means_no_channel_is_opened():
         def for_platform(self, platform):
             raise AssertionError("must not start a channel for nothing")
 
-    _followup_invited(_Repo([]), _Boom(), _Generator())
+    _followup_invited(_Repo([]), _Boom(), _Generator(), _Classifier(), _CvLibrary())
 
 
 # --- the bug this loop shipped with -----------------------------------------
@@ -269,10 +290,10 @@ class _NoteChannel(_Channel):
 
 
 class _NoteGen:
-    def execute(self, lead):
+    def execute(self, lead, cv_text: str = ""):
         return "Письмо."
 
-    def execute_with_note(self, lead, note_limit):
+    def execute_with_note(self, lead, note_limit, cv_text: str = ""):
         return "Полное письмо принявшему контакту.", "Короткая записка."
 
 
@@ -283,7 +304,7 @@ def test_the_accepted_contact_gets_the_whole_letter_and_the_note_rides_along():
     lead = _lead()
     repo = _Repo([lead])
     channel = _NoteChannel(state="accepted")
-    _followup_invited(repo, _Switcher(channel), _NoteGen())
+    _followup_invited(repo, _Switcher(channel), _NoteGen(), _Classifier(), _CvLibrary())
 
     (_target, content), = channel.sent
     assert content.body == "Полное письмо принявшему контакту."
@@ -291,10 +312,10 @@ def test_the_accepted_contact_gets_the_whole_letter_and_the_note_rides_along():
 
 
 class _PlaceholderNoteGen:
-    def execute(self, lead):
+    def execute(self, lead, cv_text: str = ""):
         return "Письмо."
 
-    def execute_with_note(self, lead, note_limit):
+    def execute_with_note(self, lead, note_limit, cv_text: str = ""):
         return "Чистое письмо без шаблонов.", "Здравствуйте, [Имя]!"
 
 
@@ -304,7 +325,7 @@ def test_a_placeholder_in_the_note_holds_the_lead_back():
     lead = _lead()
     repo = _Repo([lead])
     channel = _NoteChannel(state="accepted")
-    _followup_invited(repo, _Switcher(channel), _PlaceholderNoteGen())
+    _followup_invited(repo, _Switcher(channel), _PlaceholderNoteGen(), _Classifier(), _CvLibrary())
 
     assert channel.sent == []
     assert repo.sent == []

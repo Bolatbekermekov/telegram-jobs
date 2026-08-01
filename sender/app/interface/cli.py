@@ -11,8 +11,11 @@ Per-platform daily limits and anti-ban delays apply.
 import random
 import time
 from dataclasses import replace
+from pathlib import Path
 
 from app import config
+from app.application.classify_role import classify_role
+from app.application.cv_library import CvLibrary
 from app.application.format_content import format_for_channel
 from app.application.generate_message import (
     GenerateMessage, generate_for, subject_for,
@@ -41,6 +44,7 @@ from app.domain.lead import (
 from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
+from app.infrastructure.openai_role import OpenAIRoleClassifier
 from app.infrastructure.sheets_repo import SheetsRepo
 from app.infrastructure.vacancy_fetcher import (
     fetch_vacancy_text, is_fetchable_vacancy_url,
@@ -138,7 +142,7 @@ def _warn_if_apply_profile_blank() -> None:
     print("   Либо выключи автоотклик: EXTERNAL_APPLY_ENABLED=false в .env\n")
 
 
-def _followup_invited(repo, switcher, generator) -> None:
+def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None:
     """Re-check everyone we invited without a cover letter, and finish the job.
 
     A lead reaches `invited` only when LinkedIn's monthly personalized-invite
@@ -202,7 +206,11 @@ def _followup_invited(repo, switcher, generator) -> None:
             print(f"   #{lead.lead_id}: прочитано {len(fetched)} симв., "
                   "записал в таблицу.")
 
-        body, note, gen_err = generate_for(generator, lead, channel)
+        variant = cv_library.for_role(
+            classify_role(classifier, lead.vacancy_context or lead.raw_text))
+        print(f"   #{lead.lead_id}: роль {variant.role}, "
+              f"CV {Path(variant.pdf_path).name}")
+        body, note, gen_err = generate_for(generator, lead, channel, variant.text)
         if gen_err is not None:
             print(f"   #{lead.lead_id}: не смог сгенерировать текст "
                   f"({type(gen_err).__name__}) — оставляю 'invited'.")
@@ -214,7 +222,7 @@ def _followup_invited(repo, switcher, generator) -> None:
                   "оставляю 'invited', перегенерирую в следующий прогон.")
             continue
         subject = subject_for(lead.vacancy_context or lead.raw_text)
-        attachment = config.CV_PATH if config.ATTACH_CV else None
+        attachment = variant.pdf_path if config.ATTACH_CV else None
         content = format_for_channel(channel, body, subject, attachment, note)
         result = SendOutreach(channel).execute(lead, content)
         if result.ok:
@@ -244,13 +252,16 @@ def run() -> None:
                                max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS),
         cv_text, profile_text, config.SIGNATURE_TEXT,
     )
+    role_classifier = OpenAIRoleClassifier(config.OPENAI_API_KEY,
+                                           config.OPENAI_MODEL_CHEAP)
+    cv_library = CvLibrary(config.CV_DIR, config.CV_PATH)
 
     switcher = ChannelSwitcher(lambda p: build_channel(p, config))
     try:
         # Before anything else: the invited leads are the ones already waiting on
         # somebody, and a run that only ever looked at `new` would never finish
         # them — including a run with no new leads at all.
-        _followup_invited(repo, switcher, generator)
+        _followup_invited(repo, switcher, generator, role_classifier, cv_library)
     except Exception as exc:  # noqa: BLE001 — never let the follow-up cost the run
         print(f"⚠️  Проверка приглашённых не отработала ({type(exc).__name__}: {exc}).")
 
@@ -423,10 +434,13 @@ def run() -> None:
             print("\n" + "=" * 60)
             print(f"Лид #{lead.lead_id}  [{platform}]  →  {lead.target}")
             print(f"Вакансия: {lead.vacancy_context or lead.raw_text}")
+            role = classify_role(role_classifier, lead.vacancy_context or lead.raw_text)
+            variant = cv_library.for_role(role)
+            print(f"Роль: {variant.role}  →  {Path(variant.pdf_path).name}")
             print("-" * 60)
 
             print("Генерирую сообщение...")
-            body, note, gen_err = generate_for(generator, lead, channel)
+            body, note, gen_err = generate_for(generator, lead, channel, variant.text)
             if gen_err is not None:
                 # Generation hit OpenAI/network — don't crash the run (row 82).
                 # Leave the lead `new` and move on; bail after 3 in a row, since
@@ -441,7 +455,7 @@ def run() -> None:
                 continue
             gen_failures = 0
             subject = subject_for(lead.vacancy_context or lead.raw_text)
-            attachment = config.CV_PATH if config.ATTACH_CV else None
+            attachment = variant.pdf_path if config.ATTACH_CV else None
             content = format_for_channel(channel, body, subject, attachment, note)
 
             # Записка это тоже текст, который прочитает живой человек, и шаблон в
