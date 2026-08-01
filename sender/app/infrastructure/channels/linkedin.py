@@ -889,7 +889,7 @@ class LinkedInChannel:
                 easy_apply_via_page(
                     self._page, target, content,
                     profile=self._ext.get("profile"),
-                    cv_path=self._ext.get("cv_path", ""),
+                    cv_path=content.attachment_path or self._ext.get("cv_path", ""),
                     answerer=self._ext.get("answerer"),
                     dry_run=self._ext.get("dry_run", False))
             except _ExternalApplyNeeded:
@@ -945,7 +945,8 @@ class LinkedInChannel:
         page.goto(company_url, wait_until="domcontentloaded")
         fn = self._ext["fn"]
         fn(page, job_url, content,
-           profile=self._ext.get("profile"), cv_path=self._ext.get("cv_path", ""),
+           profile=self._ext.get("profile"),
+           cv_path=content.attachment_path or self._ext.get("cv_path", ""),
            answerer=self._ext.get("answerer"), dry_run=self._ext.get("dry_run", False),
            email_channel=self._ext.get("email_channel"),
            subject_maker=self._ext.get("subject_maker"), vacancy_context=desc)

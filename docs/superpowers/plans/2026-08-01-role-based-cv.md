@@ -33,7 +33,7 @@
 | `sender/app/domain/cv_files.py` | **создать.** Чистый поиск файла CV на диске по папке роли |
 | `sender/app/application/cv_library.py` | **создать.** Роль → `CvVariant(role, text, pdf_path)`, кэш текста, цепочка откатов |
 | `sender/app/application/classify_role.py` | **создать.** Промпт, разбор ответа, обёртка, проглатывающая сбои |
-| `sender/app/infrastructure/openai_role.py` | **создать.** Вызов модели, зеркало `openai_relevance.py` |
+| `sender/app/infrastructure/openai_role.py` | **создать.** Вызов модели, строение как у `openai_relevance.py`, но с `response_format` |
 | `sender/app/config.py` | **править.** `_resolve_cv_path()` должен находить CV в подпапке |
 | `sender/app/application/generate_message.py` | **править.** `cv_text` необязательным параметром вызова |
 | `sender/app/interface/cli.py` | **править.** Проводка обоих путей отправки + печать роли |
@@ -498,24 +498,40 @@ class CvLibrary:
         return self._by_role[role]
 
     def _build(self, role: str) -> CvVariant:
-        path = find_role_cv(self._cv_dir, role)
-        resolved = role
-        if path is None:
-            path = find_role_cv(self._cv_dir, DEFAULT_ROLE)
-            resolved = DEFAULT_ROLE
-        if path is None:
-            path = Path(self._fallback_pdf)
-            resolved = DEFAULT_ROLE
-        return CvVariant(role=resolved, text=self._text_for(str(path)),
-                         pdf_path=str(path))
+        for candidate, resolved in self._candidates(role):
+            text = self._text_for(str(candidate))
+            if text:
+                return CvVariant(role=resolved, text=text, pdf_path=str(candidate))
+        # Ни одна ступень не дала пригодного текста: отдаём последнюю попытку
+        # как есть. Письмо напишется из запасного CV в генераторе, но лид
+        # уедет, а это главное.
+        return CvVariant(role=DEFAULT_ROLE, text="", pdf_path=self._fallback_pdf)
+
+    def _candidates(self, role: str):
+        """Ступени отката по порядку, пропуская несуществующие: папка роли,
+        папка fullstack, файл, который уходит сегодня."""
+        role_path = find_role_cv(self._cv_dir, role)
+        if role_path is not None:
+            yield role_path, role
+        fullstack_path = find_role_cv(self._cv_dir, DEFAULT_ROLE)
+        if fullstack_path is not None:
+            yield fullstack_path, DEFAULT_ROLE
+        fallback_path = Path(self._fallback_pdf)
+        if fallback_path.is_file():
+            yield fallback_path, DEFAULT_ROLE
 
     def _text_for(self, path: str) -> str:
         # Кэш по ПУТИ, а не по роли: разбор PDF дорогой, а несколько ролей,
         # откатившихся на один и тот же файл, читать его повторно не должны.
         if path not in self._text_by_path:
-            self._text_by_path[path] = self._load_text(path)
+            try:
+                self._text_by_path[path] = self._load_text(path)
+            except Exception:  # noqa: BLE001 — битый файл это не повод ронять прогон
+                self._text_by_path[path] = ""
         return self._text_by_path[path]
 ```
+
+**Поправка, внесённая по итогам ревью Task 7.** Первая редакция брала первую найденную ступень безусловно и не ловила ошибку чтения. Из-за этого нечитаемый или пустой PDF роли (скан без текстового слоя) давал `text=""` и валидный `pdf_path`: письмо писалось из запасного CV, а вложением уезжало ролевое — тот самый разъезд письма и вложения, ради запрета которого всё делается, только в другую сторону. А брошенное `load_cv_text` исключение роняло прогон трейсбеком на N-м лиде, тогда как раньше падало один раз на старте. Теперь непригодный текст означает «у этой роли нет пригодного CV» и уводит на следующую ступень.
 
 - [ ] **Step 4: Убедиться, что тесты проходят**
 
@@ -678,9 +694,14 @@ def classify_role(classifier, vacancy_context: str) -> str:
     OpenAI не должен уносить весь прогон. Лид получит запасное CV, то есть
     ровно то, которое уходит сегодня.
     """
-    if not (vacancy_context or "").strip():
-        return DEFAULT_ROLE
     try:
+        # Проверка ВНУТРИ try, как в `generate_body`: снаружи она сама
+        # становится веткой, которая бросает — на нестроковом входе `.strip()`
+        # даёт AttributeError мимо всех except, и прогон падает целиком.
+        # Тип проверяется отдельно от пустоты, а не приведением str(): str(12345)
+        # даёт непустую "12345", и нестроковый объект уехал бы в классификатор.
+        if not isinstance(vacancy_context, str) or not vacancy_context.strip():
+            return DEFAULT_ROLE
         return normalize_role(classifier.classify(vacancy_context))
     except Exception:  # noqa: BLE001 — сбой классификации это не потеря лида
         return DEFAULT_ROLE
@@ -709,7 +730,9 @@ git commit -m "feat: классификация роли вакансии с о�
 - Consumes: `build_role_prompt`, `parse_role_response` (Task 4)
 - Produces: `OpenAIRoleClassifier(api_key: str, model: str, max_output_tokens: int = 2000)` с методом `classify(vacancy_context: str) -> str`
 
-Отдельного юнит-теста нет намеренно: это тонкая обёртка над сетью, и `openai_relevance.py` рядом устроен так же — тестируются чистые `build_*` и `parse_*`, а не сам вызов. Проверка живая, на шаге 3.
+- Test: `sender/tests/test_model_routing.py` (существующий файл, дополняется)
+
+**Поправка к первой редакции плана.** Здесь стояло «отдельного юнит-теста нет намеренно, потому что `openai_relevance.py` рядом устроен так же». Это было **фактически неверно** и проверено при исполнении: `test_model_routing.py:45,54,82` тестирует `OpenAIRelevanceScorer` через `_FakeClient`, а `:109` существует ровно затем, чтобы поймать потерю `response_format` при рефакторинге. Тест нужен, и он идёт в тот же файл, где живёт вся оснастка.
 
 - [ ] **Step 1: Написать модуль**
 
@@ -748,12 +771,65 @@ class OpenAIRoleClassifier:
         return parse_role_response(resp.choices[0].message.content or "")
 ```
 
-- [ ] **Step 2: Прогнать весь набор тестов**
+- [ ] **Step 2: Дописать тесты в `sender/tests/test_model_routing.py`**
+
+Файл уже содержит `_FakeClient`/`_FakeCompletions` — новый файл не заводить. Фабрика рядом с `_scorer`, по её форме:
+
+```python
+def _classifier(content='{"role": "backend-go"}', **kw):
+    c = OpenAIRoleClassifier.__new__(OpenAIRoleClassifier)
+    c._client = _FakeClient(content)
+    c._model = kw.get("model", "cheap-model")
+    c._max_output_tokens = kw.get("max_output_tokens", 2000)
+    return c
+```
+
+В секцию `# --- model routing ---`:
+
+```python
+def test_role_classification_uses_the_model_it_was_given():
+    """Классификация идёт на КАЖДЫЙ лид, поэтому модель обязана быть дешёвой."""
+    c = _classifier(model="gpt-5.4-nano")
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["model"] == "gpt-5.4-nano"
+```
+
+В секцию `# --- output cap ---`:
+
+```python
+def test_role_classification_caps_the_reply_length():
+    c = _classifier(max_output_tokens=800)
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["max_completion_tokens"] == 800
+
+
+def test_role_classification_still_requests_json():
+    """Разбор ответа ищет JSON: без response_format парсер молча съедет на fullstack."""
+    c = _classifier()
+    c.classify("Backend Engineer. Go, Gin, PostgreSQL.")
+
+    (kw,) = c._client.chat.completions.calls
+    assert kw["response_format"] == {"type": "json_object"}
+```
+
+В секцию `# --- defaults ---`:
+
+```python
+def test_role_classifier_is_capped_even_when_the_caller_omits_the_kwarg():
+    c = OpenAIRoleClassifier("key-unused", "some-model")
+    assert c._max_output_tokens > 0
+```
+
+- [ ] **Step 3: Прогнать весь набор тестов**
 
 Run: `./sender/.venv/bin/python -m pytest sender/tests -q -m "not live"`
-Expected: PASS, не меньше 777
+Expected: PASS, не меньше 781
 
-- [ ] **Step 3: Живая проверка на настоящих вакансиях**
+- [ ] **Step 4: Живая проверка на настоящих вакансиях**
 
 Run:
 
@@ -782,10 +858,10 @@ PY
 
 Expected: `AI -> ai`, `Go -> backend-go`, `QA -> qa`, `RN -> mobile`, `Front -> frontend`, `Node -> backend-node`. Если хоть одна не совпала — не идти дальше, а поправить описания в `ROLE_DESCRIPTIONS` или системный промпт и прогнать снова.
 
-- [ ] **Step 4: Коммит**
+- [ ] **Step 5: Коммит**
 
 ```bash
-git add sender/app/infrastructure/openai_role.py
+git add sender/app/infrastructure/openai_role.py sender/tests/test_model_routing.py
 git commit -m "feat: OpenAIRoleClassifier на дешёвой модели"
 ```
 
@@ -967,7 +1043,10 @@ git commit -m "feat: CV передаётся в вызов генерации, �
 
 **Files:**
 - Modify: `sender/app/interface/cli.py:141` (сигнатура `_followup_invited`), `:204,216-217` (путь принятых приглашений), `:236-248` (`run`), `:253` (вызов), `:420-445` (основной цикл)
+- Modify: `sender/tests/test_followup_invited.py` — см. предупреждение ниже
 - Test: `sender/tests/test_cli_role_wiring.py`
+
+**Предупреждение, найденное ревью Task 6.** `sender/tests/test_followup_invited.py` содержит дак-тайпинговые стенды `_Generator`, `_NoteGen`, `_PlaceholderNoteGen`, чьи `execute`/`execute_with_note` объявлены **без** параметра `cv_text`. Эта задача меняет сигнатуру `_followup_invited` и начинает передавать непустой `variant.text` — стенды либо упадут с `TypeError`, либо, что хуже, тихо провалятся в ветку «генерация не удалась» (`generate_for` глотает любое исключение по политике инцидента row-82) и тесты станут проверять не то, что обещают их имена. Стендам надо дописать `cv_text: str = ""` в обе сигнатуры. Проверь, что после правки они по-прежнему проверяют заявленное поведение, а не откат.
 
 **Interfaces:**
 - Consumes: `classify_role` (Task 4), `CvLibrary`/`CvVariant` (Task 3), `OpenAIRoleClassifier` (Task 5), `generate_for(..., cv_text)` (Task 6)
