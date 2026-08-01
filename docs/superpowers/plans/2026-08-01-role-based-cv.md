@@ -678,9 +678,14 @@ def classify_role(classifier, vacancy_context: str) -> str:
     OpenAI не должен уносить весь прогон. Лид получит запасное CV, то есть
     ровно то, которое уходит сегодня.
     """
-    if not (vacancy_context or "").strip():
-        return DEFAULT_ROLE
     try:
+        # Проверка ВНУТРИ try, как в `generate_body`: снаружи она сама
+        # становится веткой, которая бросает — на нестроковом входе `.strip()`
+        # даёт AttributeError мимо всех except, и прогон падает целиком.
+        # Тип проверяется отдельно от пустоты, а не приведением str(): str(12345)
+        # даёт непустую "12345", и нестроковый объект уехал бы в классификатор.
+        if not isinstance(vacancy_context, str) or not vacancy_context.strip():
+            return DEFAULT_ROLE
         return normalize_role(classifier.classify(vacancy_context))
     except Exception:  # noqa: BLE001 — сбой классификации это не потеря лида
         return DEFAULT_ROLE
