@@ -11,6 +11,7 @@ Per-platform daily limits and anti-ban delays apply.
 import random
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from app import config
@@ -33,6 +34,11 @@ from app.application.send_plan import (
     needs_vacancy_refetch,
     skip_reason,
     unresolved_thread,
+)
+from app.domain.outreach_history import (
+    SentRecord,
+    duplicate_reason,
+    normalize_address,
 )
 from app.domain.lead import (
     STATUS_FAILED,
@@ -71,7 +77,7 @@ def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
 
 
-def _record_sent(repo, lead, body: str, platform: str) -> bool:
+def _record_sent(repo, lead, body: str, platform: str, history=None) -> bool:
     """Write a delivered send to the sheet; report whether the write landed.
 
     The message is already in the recruiter's inbox by the time this runs, so a
@@ -80,7 +86,18 @@ def _record_sent(repo, lead, body: str, platform: str) -> bool:
     time. That is exactly what a Sheets 502 did on lead #148. `mark_sent` already
     retries transient failures; if it still fails, the only thing left that helps
     is telling the human precisely which row to fix, unmissably.
+
+    `history` пополняется ПЕРЕД записью в лист и независимо от её исхода: письмо
+    уже у человека, и для защиты от повтора важно именно это, а не то, приняла ли
+    таблица строку. Так тот же инцидент #148 внутри прогона больше не приводит
+    ко второй отправке — а без этого списка два лида на один адрес в одном
+    прогоне уходят оба, потому что история читается один раз до цикла.
     """
+    if history is not None:
+        history.append(SentRecord(platform=platform,
+                                  address=normalize_address(lead.target),
+                                  vacancy=lead.vacancy_context or lead.raw_text,
+                                  sent_at=datetime.now(), lead_id=lead.lead_id))
     try:
         repo.mark_sent(lead, body, STATUS_SENT)
         return True
@@ -265,6 +282,12 @@ def run() -> None:
     except Exception as exc:  # noqa: BLE001 — never let the follow-up cost the run
         print(f"⚠️  Проверка приглашённых не отработала ({type(exc).__name__}: {exc}).")
 
+    # Кого мы уже трогали. Один запрос, до первой отправки: без этого списка
+    # каждая строка со статусом `new` выглядит как первый контакт, и один и тот
+    # же рекрутёр получает второе письмо (замер листа: 10 повторов на 113
+    # уникальных получателей). Пополняется по ходу прогона в `_record_sent`.
+    sent_history = repo.fetch_sent_history()
+
     leads = repo.fetch_new_leads()
     if not leads:
         print("Нет новых лидов (статус 'new'). Выход.")
@@ -413,6 +436,21 @@ def run() -> None:
                 lead = replace(lead, vacancy_context=fetched)
                 print(f"   прочитано {len(fetched)} симв., записал в таблицу.")
 
+            # Писали ли мы уже этому человеку. Стоит ЗДЕСЬ, а не рядом со
+            # skip_reason, по двум причинам: у лида из Threads адрес и площадка
+            # становятся окончательными только после разрешения контакта выше, а
+            # текст вакансии — только после перечитывания ссылки. Сравнивать
+            # раньше значит сверять не тот адрес и не тот текст.
+            # Всё ещё до открытия канала: поднимать браузер ради лида, которому
+            # мы не пишем, незачем.
+            dup = duplicate_reason(lead, sent_history, datetime.now(),
+                                   config.DUPLICATE_WINDOW_DAYS)
+            if dup is not None:
+                status, note = dup
+                repo.mark_status(lead, status, note=note)
+                print(f"⏭  Лид #{lead.lead_id} [{platform}]: {note} — пропуск.")
+                continue
+
             try:
                 channel = switcher.for_platform(platform)
             except Exception as exc:  # noqa: BLE001
@@ -502,7 +540,7 @@ def run() -> None:
 
             result = sender.execute(lead, content)
             if result.ok:
-                if not _record_sent(repo, lead, content.body, platform):
+                if not _record_sent(repo, lead, content.body, platform, sent_history):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
@@ -519,7 +557,7 @@ def run() -> None:
                 # повторится), но в таблицу кладём то, что реально дошло: запись
                 # content.body утверждала бы, что рекрутёр получил письмо, которого
                 # никто не получал.
-                if not _record_sent(repo, lead, content.note or content.body, platform):
+                if not _record_sent(repo, lead, content.note or content.body, platform, sent_history):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1

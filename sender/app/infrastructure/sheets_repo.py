@@ -16,9 +16,12 @@ from app.domain.lead import (
     COL_VACANCY,
     COLUMNS,
     DEFAULT_PLATFORM,
+    STATUS_INVITED,
     STATUS_NEW,
+    STATUS_SENT,
     Lead,
 )
+from app.domain.outreach_history import SentRecord, normalize_address
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -67,6 +70,43 @@ def _load_credentials(service_account_path: str) -> Credentials:
     return Credentials.from_service_account_file(service_account_path, scopes=_SCOPES)
 
 
+# Что считается состоявшейся отправкой. `invited` входит намеренно: запрос на
+# контакт в LinkedIn человеку уже ушёл, и второе обращение, пока он висит без
+# ответа, выглядит навязчивым ровно так же, как повторное письмо.
+_COMPLETED = frozenset({STATUS_SENT, STATUS_INVITED})
+
+# Единственный формат, которым пишет `mark_sent`. Замер листа 2026-08-03: 117
+# строк из 117 с датой соответствуют ему (одна — без ведущего нуля в часе,
+# strptime это принимает). Всё остальное неразборчиво и не должно ронять прогон.
+_SENT_AT_FORMAT = "%Y-%m-%d %H:%M"
+
+
+def _parse_sent_at(raw) -> _dt.datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return _dt.datetime.strptime(text, _SENT_AT_FORMAT)
+    except ValueError:
+        # Дату не разобрать — но отправка была. Терять запись нельзя: без неё
+        # адрес снова считается нетронутым. `duplicate_reason` трактует
+        # неизвестную дату как «писали недавно», то есть в пользу молчания.
+        return None
+
+
+def record_to_sent(rec: dict) -> SentRecord | None:
+    """Строка листа -> запись в истории отправок, или None, если письма не было."""
+    if str(rec.get("Статус", "")).strip() not in _COMPLETED:
+        return None
+    return SentRecord(
+        platform=str(rec.get("Платформа", "")).strip().lower() or DEFAULT_PLATFORM,
+        address=normalize_address(rec.get("Источник")),
+        vacancy=str(rec.get("Вакансия", "")).strip(),
+        sent_at=_parse_sent_at(rec.get("Дата отправки")),
+        lead_id=str(rec.get("id", "")),
+    )
+
+
 def record_to_lead(rec: dict, offset: int, status: str = STATUS_NEW) -> Lead:
     """Map one sheet record to a Lead. `offset` is the 0-based data-row index."""
     platform = str(rec.get("Платформа", "")).strip().lower() or DEFAULT_PLATFORM
@@ -97,6 +137,15 @@ class SheetsRepo:
 
     def fetch_new_leads(self) -> list[Lead]:
         return self.fetch_by_status(STATUS_NEW)
+
+    def fetch_sent_history(self) -> list[SentRecord]:
+        """Всё, что уже ушло людям, — чтобы не написать кому-то дважды.
+
+        Один запрос на прогон: лист читается целиком и так, а история нужна
+        до первой отправки.
+        """
+        records = self._ws.get_all_records(expected_headers=COLUMNS)
+        return [r for r in (record_to_sent(rec) for rec in records) if r is not None]
 
     def mark_sent(self, lead: Lead, message: str, status: str) -> None:
         """Record a delivered outreach — message, status and timestamp at once.

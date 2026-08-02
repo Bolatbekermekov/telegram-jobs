@@ -74,6 +74,13 @@ AUTO_SEND = os.environ.get("AUTO_SEND", "false").lower() == "true"
 MIN_DELAY_SECONDS = int(os.environ.get("MIN_DELAY_SECONDS", "40"))
 MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
 
+# Сколько дней не писать повторно тому же адресу, если вакансия ДРУГАЯ. Та же
+# вакансия не отправляется повторно никогда, независимо от этого числа, —
+# см. app/domain/outreach_history.py. Замер листа 2026-08-03: единственный
+# законный повтор от одного рекрутёра случился через день, настоящие дубли —
+# через 2, 9, 9 и 10 дней. Отсюда и раздельные правила.
+DUPLICATE_WINDOW_DAYS = int(os.environ.get("DUPLICATE_WINDOW_DAYS", "5"))
+
 # Telethon session file lives next to the project root.
 SESSION_PATH = str(_ROOT / "sender" / "userbot")
 PROFILE_PATH = str(Path(__file__).resolve().parents[1] / "profile.md")
