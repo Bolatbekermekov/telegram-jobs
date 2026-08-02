@@ -7,6 +7,48 @@ from urllib.parse import urlencode
 
 from app.domain.candidate import Candidate, KIND_JOB
 
+# Поля страницы, которые решают, ПРИМЕТ ли Wellfound заявку. Лежат отдельно от
+# описания вакансии, поэтому `describe()` их раньше терял: замер живой страницы
+# 2026-08-02 показал, что элемент с классом `description` (3224 символа) не
+# содержит ни «Hires remotely in», ни «Visa Sponsorship». Скорер видел только
+# «Remote only», ставил 82/100 и не знал про список из девяти разрешённых стран
+# — несовпадение вскрывалось лишь на отклике, после вызова скорера, генерации
+# письма и поднятого браузера. Так ушли в мусор 3 из 5 лидов Wellfound.
+_ELIGIBILITY_FIELDS = (
+    "Hires remotely in",
+    "Remote Work Policy",
+    "Preferred Timezones",
+    "Visa Sponsorship",
+    "Relocation",
+    "Company Location",
+)
+
+# Где заканчивается значение поля: следующее известное поле или соседняя секция.
+_ELIGIBILITY_STOP = _ELIGIBILITY_FIELDS + ("Skills", "Reposted", "Posted", "Apply")
+
+
+def eligibility_block(page_text: str) -> str:
+    """Условия найма со страницы вакансии, одной короткой выжимкой.
+
+    Идёт в промпт скорера рядом с описанием, поэтому здесь только то, что
+    влияет на допуск: страны, визу, релокацию, формат и таймзону. Секция Skills
+    и служебные строки отбрасываются — в промпте они стоят денег и ничего не
+    решают.
+    """
+    lines = [s.strip() for s in (page_text or "").splitlines() if s.strip()]
+    out = []
+    for i, line in enumerate(lines):
+        if line not in _ELIGIBILITY_FIELDS:
+            continue
+        values = []
+        for nxt in lines[i + 1:]:
+            if nxt in _ELIGIBILITY_STOP:
+                break
+            values.append(nxt.rstrip(" -"))
+        if values:
+            out.append(f"{line}: {', '.join(values)}")
+    return "\n".join(out)
+
 
 def build_jobs_url(keyword: str) -> str:
     qs = urlencode({"q": keyword, "remote": "true"})
@@ -138,15 +180,25 @@ class WellfoundSearcher:
             self._page.wait_for_selector("[class*='description']", timeout=12000)
         except Exception:  # noqa: BLE001
             self._page.wait_for_timeout(4000)
+        # Условия найма берутся со ВСЕЙ страницы, а не из блока описания: они
+        # лежат вне него (проверено живьём 2026-08-02). Без них скорер не видит
+        # список стран и пропускает вакансии, заявку на которые площадка всё
+        # равно не примет.
+        try:
+            eligibility = eligibility_block(self._page.inner_text("body", timeout=2500))
+        except Exception:  # noqa: BLE001 — условия это бонус, не повод падать
+            eligibility = ""
+
         for sel in ["[class*='description']", "[data-test='JobDescription']",
                     "div.styles_description__"]:
             try:
                 text = self._page.locator(sel).first.inner_text(timeout=2500)
                 if len(text.strip()) > 100:
-                    return text.strip()[:6000]
+                    body = text.strip()[:6000]
+                    return f"{body}\n\n=== УСЛОВИЯ НАЙМА ===\n{eligibility}" if eligibility else body
             except Exception:  # noqa: BLE001
                 continue
-        return ""
+        return eligibility
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         from app.domain.search_request import per_keyword_limit
