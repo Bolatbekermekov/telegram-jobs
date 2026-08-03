@@ -51,8 +51,30 @@ def parse_remoteok_jobs(payload: list) -> list[dict]:
             "url": item.get("url", ""),
             "salary_min": item.get("salary_min", 0),
             "salary_max": item.get("salary_max", 0),
+            # Разместил ли вакансию сам работодатель. Решает, можно ли вообще
+            # откликнуться — см. can_apply().
+            "original": bool(item.get("original")),
         })
     return jobs
+
+
+def can_apply(job: dict) -> bool:
+    """Открыт ли отклик на эту вакансию бесплатному аккаунту.
+
+    Замер живой ленты 2026-08-03: из 100 вакансий поле `original: true` было
+    ровно у двух — и ровно они открылись по кнопке Apply (одна на форму Ashby,
+    вторая на почту работодателя). Остальные 98 упёрлись в экран подписки
+    RemoteOK Premium ($14.95/мес, 12 месяцев), и бесплатного выхода с него нет:
+    на экране только две кнопки оплаты, а замеченный в его же ссылке параметр
+    skip_premium=1 просто возвращает на страницу вакансии.
+
+    Возрастом это не объясняется — за экраном и однодневные вакансии, и
+    четырёхдневные, а вся лента и есть четыре дня. И это не квота на отклики:
+    повторный заход на те же три вакансии дал тот же результат бит в бит.
+    `original` — это вакансии, размещённые работодателем напрямую; остальное
+    RemoteOK собрал с чужих сайтов и продаёт доступ к ссылке.
+    """
+    return bool(job.get("original"))
 
 
 def job_matches(job: dict, keywords: list[str]) -> bool:
@@ -108,6 +130,10 @@ class RemoteOKSearcher:
         jobs = parse_remoteok_jobs(payload)
         found: list[Candidate] = []
         for job in jobs:
+            # Отбор ДО скоринга: вакансия, на которую нельзя подать заявку, не
+            # должна ни стоить вызова модели, ни попадать в очередь человеку.
+            if not can_apply(job):
+                continue
             if not job_matches(job, keywords_list):
                 continue
             self._desc[normalize_url(job["url"])] = strip_html(job["description"])

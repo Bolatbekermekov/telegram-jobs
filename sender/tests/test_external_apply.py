@@ -172,6 +172,26 @@ def test_email_route_sends_via_email_channel():
     assert mail.sent == [("hr@ddrive.tech", "Application: Junior Dev", "C:/cv.pdf")]
 
 
+def test_dry_run_does_not_send_the_application_email():
+    """APPLY_DRY_RUN значит «заполнить, но не подавать» — а письмо и ЕСТЬ подача.
+
+    Дыра тихая: Route.EMAIL возвращался ДО проверки dry_run, так что пробный
+    прогон уходил настоящему работодателю. На RemoteOK это половина доступных
+    вакансий: из двух, на которые вообще можно откликнуться, одна ведёт на
+    mailto (замер 2026-08-03), — то есть первый же «безопасный» прогон отправил
+    бы заявку по-настоящему.
+    """
+    page = FakePage(_obs_mailto())
+    mail = RecordingEmail()
+    with pytest.raises(ManualApplyRequired, match="DRY_RUN"):
+        ea.external_apply(page, "https://boards.greenhouse.io/acme/jobs/1",
+                          OutreachContent(body="cover letter"), PROF, "C:/cv.pdf",
+                          email_channel=mail, dry_run=True,
+                          subject_maker=lambda ctx: "Application: Junior Dev",
+                          vacancy_context="JOB")
+    assert mail.sent == []
+
+
 def test_email_route_without_channel_raises_manual():
     page = FakePage(_obs_mailto())
     with pytest.raises(ManualApplyRequired, match="email"):

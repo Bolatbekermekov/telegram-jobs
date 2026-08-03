@@ -568,7 +568,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
 
     if route is Route.EMAIL:
         _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
-                         vacancy_context)
+                         vacancy_context, dry_run)
         return
     if route is Route.IFRAME_ATS:
         _enter_ats_iframe(page, obs)
@@ -747,7 +747,7 @@ def _visible_error(page) -> str:
 
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
-                     vacancy_context) -> None:
+                     vacancy_context, dry_run: bool = False) -> None:
     if email_channel is None:
         raise ManualApplyRequired(
             f"внешний отклик по email, но email-канал не настроен (SMTP): {obs.url}")
@@ -755,6 +755,12 @@ def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
     if not addr:
         raise ManualApplyRequired(f"внешний отклик по email: не разобрал адрес: {obs.url}")
     subject = (subject_maker(vacancy_context) if subject_maker else "Application").strip()
+    if dry_run:
+        # Письмо и ЕСТЬ подача заявки, поэтому dry_run обязан её остановить —
+        # ровно как он останавливает нажатие Submit у формы. Адрес и тема уже
+        # разобраны, так что пробный прогон по-прежнему показывает, что не так.
+        raise ManualApplyRequired(
+            f"DRY_RUN: письмо на {addr} подготовлено, НЕ отправлено: {obs.url}")
     email_channel.send(addr, OutreachContent(
         subject=subject or "Application", body=content.body, attachment_path=cv_path))
 

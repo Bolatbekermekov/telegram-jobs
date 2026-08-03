@@ -12,6 +12,7 @@ PAYLOAD = [
         "description": "<p>We use <b>Go</b> and Postgres.</p>",
         "url": "https://remoteok.com/remote-jobs/1",
         "salary_min": 50000, "salary_max": 80000,
+        "original": True,
     },
     {
         "id": "2", "position": "Senior Sales Manager", "company": "SellCo",
@@ -19,8 +20,18 @@ PAYLOAD = [
         "description": "<p>Cold calls.</p>",
         "url": "https://remoteok.com/remote-jobs/2",
         "salary_min": 0, "salary_max": 0,
+        "original": True,
     },
 ]
+
+# Вакансия, которую RemoteOK собрал с чужого сайта: поля `original` нет.
+SCRAPED = {
+    "id": "3", "position": "Backend Engineer", "company": "ScrapedCo",
+    "location": "Worldwide", "tags": ["backend"],
+    "description": "<p>Go, Kubernetes.</p>",
+    "url": "https://remoteok.com/remote-jobs/3",
+    "salary_min": 0, "salary_max": 0,
+}
 
 
 def test_parse_skips_disclaimer():
@@ -90,6 +101,38 @@ def test_search_survives_payload_error():
 
     s._payload = boom
     assert s.search(["backend"], "Worldwide", limit=5) == []
+
+
+# --- откликнуться можно не на всё -------------------------------------------
+#
+# Замер живой ленты 2026-08-03: из 100 вакансий только 2 имели `original: true`,
+# и ровно они открылись по кнопке Apply (одна на форму Ashby, вторая на почту
+# работодателя). Остальные 98 упёрлись в экран подписки RemoteOK Premium
+# ($14.95/мес), и бесплатного выхода с него нет — на нём только две кнопки
+# оплаты, а параметр skip_premium=1 возвращает на страницу вакансии.
+#
+# Поэтому отбор идёт здесь, в поиске, а не на отправке. Это урок Wellfound:
+# там условия найма не доезжали до скорера, и 3 лида из 5 ушли в мусор уже
+# ПОСЛЕ вызова модели, генерации письма и поднятого браузера.
+
+def test_parse_keeps_the_original_flag():
+    jobs = parse_remoteok_jobs(PAYLOAD + [SCRAPED])
+    assert [j["original"] for j in jobs] == [True, True, False]
+
+
+def test_search_skips_a_scraped_job_even_when_the_title_fits():
+    """«Backend Engineer» подходит по роли идеально — и всё равно не наш:
+    отклик на неё закрыт платной подпиской."""
+    s = RemoteOKSearcher()
+    s._payload = lambda: [SCRAPED]
+    assert s.search(["backend"], "Worldwide", limit=10) == []
+
+
+def test_search_keeps_a_job_posted_by_the_employer_itself():
+    s = RemoteOKSearcher()
+    s._payload = lambda: [SCRAPED, PAYLOAD[1], PAYLOAD[2]]
+    found = s.search(["backend"], "Worldwide", limit=10)
+    assert [c.url for c in found] == ["https://remoteok.com/remote-jobs/1"]
 
 
 def test_start_stop_are_noops():

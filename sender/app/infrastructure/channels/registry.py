@@ -2,6 +2,7 @@
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
+from app.infrastructure.channels.remoteok import RemoteOKChannel
 from app.infrastructure.channels.telegram import TelegramChannel
 from app.infrastructure.channels.threads import ThreadsChannel
 from app.infrastructure.channels.wellfound import WellfoundChannel
@@ -68,6 +69,13 @@ def build_channel(platform: str, config):
         # (past Cloudflare + logged in), not a launched browser off storage_state.
         return WellfoundChannel(config.WELLFOUND_CDP_URL,
                                 dry_run=getattr(config, "APPLY_DRY_RUN", False))
+    if platform == "remoteok":
+        # Свой браузер с сохранённой сессией, а не CDP как у Wellfound: у
+        # RemoteOK нет Cloudflare, и сессия работает в headless (проверено
+        # живьём). Отклик целиком внешний — своей формы у площадки нет.
+        return RemoteOKChannel(config.REMOTEOK_STATE_PATH,
+                               headless=config.BROWSER_HEADLESS,
+                               external_apply_deps=_external_apply_deps(config))
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.
         return ThreadsChannel(config.THREADS_STATE_PATH, config.BROWSER_HEADLESS)
