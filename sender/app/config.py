@@ -81,6 +81,12 @@ MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
 # через 2, 9, 9 и 10 дней. Отсюда и раздельные правила.
 DUPLICATE_WINDOW_DAYS = int(os.environ.get("DUPLICATE_WINDOW_DAYS", "5"))
 
+# Сколько ждать ответа на запрос контакта в LinkedIn, прежде чем закрыть лид как
+# `skipped`. Такое приглашение не двигается ничем, кроме чужого решения, поэтому
+# без срока каждый прогон открывает его профиль заново — на 2026-08-03 самое
+# старое (#79) проверялось так 17 дней подряд.
+INVITE_MAX_WAIT_DAYS = int(os.environ.get("INVITE_MAX_WAIT_DAYS", "7"))
+
 # Telethon session file lives next to the project root.
 SESSION_PATH = str(_ROOT / "sender" / "userbot")
 PROFILE_PATH = str(Path(__file__).resolve().parents[1] / "profile.md")

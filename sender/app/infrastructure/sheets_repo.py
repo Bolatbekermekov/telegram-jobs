@@ -7,6 +7,7 @@ from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError
 from gspread.utils import ValueInputOption, rowcol_to_a1
 
+from app.domain.invite_age import EXPIRED_NOTE_PREFIX
 from app.domain.lead import (
     COL_DATE_SENT,
     COL_MESSAGE,
@@ -19,6 +20,7 @@ from app.domain.lead import (
     STATUS_INVITED,
     STATUS_NEW,
     STATUS_SENT,
+    STATUS_SKIPPED,
     Lead,
 )
 from app.domain.outreach_history import SentRecord, normalize_address
@@ -94,9 +96,25 @@ def _parse_sent_at(raw) -> _dt.datetime | None:
         return None
 
 
+def _was_contacted(rec: dict) -> bool:
+    """Дошло ли до человека хоть что-то — по статусу или по заметке.
+
+    Закрытое по сроку приглашение уходит в `skipped`, но запрос на контакт
+    человек УЖЕ получил. Без этой ветки такая строка выпадает из истории вместе
+    со статусом, и защита от дублей снова считает адрес нетронутым — ровно в тот
+    момент, когда мы решили больше его не трогать. Прочие `skipped` (rate-limit,
+    сам дубль) сюда не попадают: у них другая заметка.
+    """
+    status = str(rec.get("Статус", "")).strip()
+    if status in _COMPLETED:
+        return True
+    return (status == STATUS_SKIPPED
+            and str(rec.get("Заметка", "")).strip().startswith(EXPIRED_NOTE_PREFIX))
+
+
 def record_to_sent(rec: dict) -> SentRecord | None:
     """Строка листа -> запись в истории отправок, или None, если письма не было."""
-    if str(rec.get("Статус", "")).strip() not in _COMPLETED:
+    if not _was_contacted(rec):
         return None
     return SentRecord(
         platform=str(rec.get("Платформа", "")).strip().lower() or DEFAULT_PLATFORM,
@@ -118,6 +136,7 @@ def record_to_lead(rec: dict, offset: int, status: str = STATUS_NEW) -> Lead:
         vacancy_context=str(rec.get("Вакансия", "")).strip(),
         raw_text=str(rec.get("Исходный текст", "")).strip(),
         status=status,
+        sent_at=_parse_sent_at(rec.get("Дата отправки")),
     )
 
 
@@ -169,13 +188,43 @@ class SheetsRepo:
             value_input_option=ValueInputOption.raw,
         ))
 
+    def mark_invited(self, lead: Lead, note: str = "") -> None:
+        """Запрос на контакт ушёл без письма — статус, дата и заметка разом.
+
+        Дата здесь не формальность: пока её не было, цикл `invited` не мог
+        узнать, сколько приглашение висит, и проверял его вечно (лид #79 —
+        17 дней подряд). Формат тот же, что у `mark_sent`, потому что читает
+        обе записи один и тот же `_parse_sent_at`.
+
+        Статус / Дата отправки / Заметка стоят подряд, поэтому это один ранговый
+        write — он либо ложится целиком, либо не ложится вовсе. «Сообщение»
+        диапазон не задевает намеренно: письма не было, и записывать туда текст
+        значило бы утверждать, что человек его получил.
+        """
+        now = _dt.datetime.now().strftime(_SENT_AT_FORMAT)
+        cells = (f"{rowcol_to_a1(lead.row, COL_STATUS)}"
+                 f":{rowcol_to_a1(lead.row, COL_NOTE)}")
+        _with_retry(lambda: self._ws.update(
+            [[STATUS_INVITED, now, note]],
+            cells,
+            value_input_option=ValueInputOption.raw,
+        ))
+
     def mark_status(self, lead: Lead, status: str, note: str = "") -> None:
         """Set a lead's status, and its note when there is one, in one API call.
 
         Статус and Заметка are not adjacent (Дата отправки sits between them),
         so this batches two ranges rather than writing one span — writing the
         span would blank the send timestamp.
+
+        `invited` через этот метод не ставится: он не пишет дату, а приглашение
+        без даты цикл `invited` закрывает на следующем же прогоне. Пусть
+        неправильный путь падает здесь, а не тихо убивает лид сутки спустя.
         """
+        if status == STATUS_INVITED:
+            raise ValueError(
+                "invited ставится через mark_invited: без «Даты отправки» "
+                "приглашение будет закрыто на следующем прогоне")
         updates = [{
             "range": rowcol_to_a1(lead.row, COL_STATUS),
             "values": [[status]],

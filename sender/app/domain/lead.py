@@ -1,5 +1,6 @@
 """Domain entities for the sender. No external dependencies."""
 from dataclasses import dataclass
+from datetime import datetime
 
 # Fixed column order of the Google Sheet (must match the intake bot).
 COLUMNS = [
@@ -49,3 +50,8 @@ class Lead:
     vacancy_context: str
     raw_text: str
     status: str
+    # Когда мы обращались к этому человеку, если обращались и если дата
+    # разобралась. Нужна циклу `invited`: он решает по ней, не пора ли перестать
+    # ждать ответа на запрос контакта (app/domain/invite_age.py). У лида со
+    # статусом `new` она всегда None.
+    sent_at: datetime | None = None

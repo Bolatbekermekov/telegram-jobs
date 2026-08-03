@@ -35,6 +35,7 @@ from app.application.send_plan import (
     skip_reason,
     unresolved_thread,
 )
+from app.domain.invite_age import expired_note, invite_expired
 from app.domain.outreach_history import (
     SentRecord,
     duplicate_reason,
@@ -170,7 +171,11 @@ def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None
     accepted -> they are a 1st-degree contact now, which is the one case LinkedIn
     lets us message for free AND attach the CV to, so the outreach happens here in
     full and the lead becomes `sent`.
-    pending  -> left as `invited`; the next run asks again.
+    pending  -> left as `invited`, но не вечно: приглашение старше
+    INVITE_MAX_WAIT_DAYS закрывается как `skipped`. Ответа на него нет и взяться
+    ему неоткуда, а каждый прогон тратил на него открытие профиля — лид #79
+    проверялся так 17 дней подряд. Возраст берётся из «Даты отправки»; если её
+    не записали, приглашение тоже закрывается (см. domain/invite_age.py).
     gone     -> declined, withdrawn or expired. `manual`, not `new`: re-inviting is
     a decision about a person who has already said no once, and that is the human's
     to make, not a thing to loop on.
@@ -190,6 +195,16 @@ def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None
                   "оставляю 'invited'.")
             continue
         if state == "pending":
+            # Возраст проверяется ПОСЛЕ ответа профиля: человек мог принять
+            # приглашение и на тридцатый день, и тогда письмо важнее срока.
+            # И строго ДО генерации — просроченному приглашению письмо не
+            # нужно, а стоит оно вызова модели.
+            now, window = datetime.now(), config.INVITE_MAX_WAIT_DAYS
+            if invite_expired(lead.sent_at, now, window):
+                note = expired_note(lead.sent_at, now, window)
+                repo.mark_status(lead, STATUS_SKIPPED, note=note)
+                print(f"   #{lead.lead_id}: {note}")
+                continue
             print(f"   #{lead.lead_id}: ещё не принял — жду.")
             continue
         if state == "gone":
@@ -569,8 +584,10 @@ def run() -> None:
             elif result.invited_plain:
                 # The request reached them, our letter did not. Not a send: park
                 # as `invited` so every later run checks whether they accepted,
-                # and messages them properly when they do.
-                repo.mark_status(lead, STATUS_INVITED, note=result.error)
+                # and messages them properly when they do. mark_invited, а не
+                # mark_status: вместе со статусом кладётся дата, иначе ждать
+                # ответа будет нечем и _followup_invited закроет лид сразу.
+                repo.mark_invited(lead, note=result.error)
                 print(f"🤝 Запрос на контакт БЕЗ письма [{platform}] — жду подтверждения "
                       f"(лид #{lead.lead_id} в 'invited').")
                 delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)

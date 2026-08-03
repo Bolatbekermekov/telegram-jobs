@@ -11,6 +11,7 @@ from gspread.utils import ValueInputOption, a1_range_to_grid_range, rowcol_to_a1
 from app.domain.lead import (
     COL_DATE_SENT,
     COL_MESSAGE,
+    COL_NOTE,
     COL_PLATFORM,
     COL_STATUS,
     COL_TARGET,
@@ -260,6 +261,18 @@ def test_mark_status_without_a_note_touches_only_the_status_cell():
     assert [d["range"] for d in data] == ["H7"]
 
 
+def test_mark_status_refuses_to_park_a_lead_as_invited():
+    """`invited` без даты теперь означает «закрыть на следующем прогоне», так что
+    поставить его write-ом, который дату не пишет, — значит тихо убить лид.
+    Единственный правильный путь — mark_invited; пусть это будет невозможно
+    сделать неправильно, а не просто описано в комментарии."""
+    from app.domain.lead import STATUS_INVITED
+    ws = _FakeWorksheet()
+    with pytest.raises(ValueError):
+        _repo(ws).mark_status(_Lead(), STATUS_INVITED, note="лимит приглашений")
+    assert ws.calls == 0
+
+
 def test_mark_status_never_blanks_the_sent_date():
     """Статус and Заметка straddle Дата отправки — one span would wipe it."""
     ws = _FakeWorksheet()
@@ -267,6 +280,52 @@ def test_mark_status_never_blanks_the_sent_date():
 
     (data, _), = ws.batches
     assert rowcol_to_a1(_Lead.row, COL_DATE_SENT) not in {d["range"] for d in data}
+
+
+# --- mark_invited -----------------------------------------------------------
+#
+# Запрос на контакт — тоже обращение к человеку, и его дата решает, когда
+# перестать ждать ответа. `mark_status` её не пишет, поэтому все 7 строк
+# `invited` в листе на 2026-08-03 остались без даты, а срок давности стало не
+# от чего считать.
+
+def test_status_date_and_note_are_adjacent():
+    """mark_invited пишет их одним диапазоном; перестановка COLUMNS его порвёт."""
+    assert (COL_DATE_SENT, COL_NOTE) == (COL_STATUS + 1, COL_STATUS + 2)
+
+
+def test_mark_invited_writes_status_date_and_note_in_a_single_call():
+    ws = _FakeWorksheet()
+    _repo(ws).mark_invited(_Lead(), note="лимит персональных приглашений")
+
+    assert ws.calls == 1
+    (values, cells, kw), = ws.updates
+    assert cells == "H7:J7"
+    assert values[0][0] == "invited"
+    assert values[0][2] == "лимит персональных приглашений"
+    assert kw["value_input_option"] == ValueInputOption.raw
+
+
+def test_mark_invited_stamps_a_date_the_sender_can_read_back():
+    """Дата обязана быть в том же формате, что пишет mark_sent, — иначе
+    `_parse_sent_at` её не разберёт и приглашение будет считаться безвозрастным.
+    """
+    ws = _FakeWorksheet()
+    _repo(ws).mark_invited(_Lead(), note="n")
+
+    (values, _, _), = ws.updates
+    assert sr._parse_sent_at(values[0][1]) is not None
+
+
+def test_mark_invited_never_touches_the_message_column():
+    """Письма не было — колонка «Сообщение» должна остаться пустой, иначе лист
+    утверждает, что рекрутёр получил текст, которого никто не получал."""
+    ws = _FakeWorksheet()
+    _repo(ws).mark_invited(_Lead(), note="n")
+
+    (_, cells, _), = ws.updates
+    grid = a1_range_to_grid_range(cells)
+    assert not (grid["startColumnIndex"] <= COL_MESSAGE - 1 < grid["endColumnIndex"])
 
 
 # --- the retry helper itself ------------------------------------------------

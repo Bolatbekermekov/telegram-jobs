@@ -6,20 +6,28 @@ Nothing moves it until they accept, so every run re-checks. States measured live
 2026-07-29 on a real pending invite: the action bar shows «На рассмотрении» whose
 aria-label offers to withdraw the invitation.
 """
+from datetime import datetime, timedelta
+
 import pytest
 
 from app import config
 from app.application.cv_library import CvVariant
 from app.domain.lead import (
-    STATUS_FAILED, STATUS_INVITED, STATUS_MANUAL, STATUS_SENT, Lead,
+    STATUS_FAILED, STATUS_INVITED, STATUS_MANUAL, STATUS_SENT, STATUS_SKIPPED, Lead,
 )
 from app.interface.cli import _followup_invited
 
+# Свежее приглашение: срок отсчитывается от реального `datetime.now()`, поэтому
+# в стендах ниже дата задаётся относительно него, а не абсолютной константой.
+FRESH = datetime.now() - timedelta(days=1)
+STALE = datetime.now() - timedelta(days=30)
 
-def _lead(lead_id="79", platform="linkedin", target="https://linkedin.com/in/x"):
+
+def _lead(lead_id="79", platform="linkedin", target="https://linkedin.com/in/x",
+          sent_at=FRESH):
     return Lead(row=80, lead_id=lead_id, platform=platform, target=target,
                 vacancy_context="Backend Engineer, Алматы", raw_text="",
-                status=STATUS_INVITED)
+                status=STATUS_INVITED, sent_at=sent_at)
 
 
 class _Repo:
@@ -106,13 +114,75 @@ def _run(repo, channel, generator=None, classifier=None, cv_library=None):
                       classifier or _Classifier(), cv_library or _CvLibrary())
 
 
-def test_a_pending_invite_is_left_alone():
+def test_a_fresh_pending_invite_is_left_alone():
     repo, channel = _Repo([_lead()]), _Channel(state="pending")
     _run(repo, channel)
 
     assert repo.statuses == []          # still `invited`
     assert repo.sent == []
     assert channel.sent == []
+
+
+# --- срок давности ----------------------------------------------------------
+#
+# Приглашение без ответа не двигается ничем, кроме чужого решения, поэтому без
+# срока цикл проверяет его вечно: лид #79 открывался каждый прогон с 17 июля.
+
+def test_an_invite_that_hung_past_the_window_is_closed():
+    repo, channel = _Repo([_lead(sent_at=STALE)]), _Channel(state="pending")
+    _run(repo, channel)
+
+    (lead_id, status, note), = repo.statuses
+    assert (lead_id, status) == ("79", STATUS_SKIPPED)
+    assert "приглашение без ответа" in note.lower()
+    assert channel.sent == []
+
+
+def test_an_invite_with_no_recorded_date_is_closed():
+    """Ровно семь строк в листе на 2026-08-03: `invited` проставлялся через
+    `mark_status`, который дату не пишет. Возраст такого приглашения взять
+    неоткуда, а «неизвестно» здесь значит «проверяем вечно»."""
+    repo, channel = _Repo([_lead(sent_at=None)]), _Channel(state="pending")
+    _run(repo, channel)
+
+    (_lead_id, status, note), = repo.statuses
+    assert status == STATUS_SKIPPED
+    assert "не записана" in note
+
+
+def test_an_old_invite_that_was_accepted_still_gets_its_letter():
+    """Срок закрывает только висящие приглашения. Если человек принял — неважно,
+    сколько он думал: письмо ради этого и ждало."""
+    repo, channel = _Repo([_lead(sent_at=STALE)]), _Channel(state="accepted")
+    _run(repo, channel)
+
+    assert len(channel.sent) == 1
+    (lead_id, status), = [(s[0], s[2]) for s in repo.sent]
+    assert (lead_id, status) == ("79", STATUS_SENT)
+    assert repo.statuses == []          # никакого skipped
+
+
+def test_the_window_comes_from_config(monkeypatch):
+    """Иначе срок нельзя ни удлинить, ни укоротить, не трогая код."""
+    monkeypatch.setattr(config, "INVITE_MAX_WAIT_DAYS", 60, raising=False)
+    repo, channel = _Repo([_lead(sent_at=STALE)]), _Channel(state="pending")
+    _run(repo, channel)
+
+    assert repo.statuses == []          # 30 дней < 60 — ещё ждём
+
+
+def test_a_closed_invite_costs_no_letter(monkeypatch):
+    """Проверка возраста стоит после ответа профиля (человек мог принять), но
+    строго ДО генерации: письмо просроченному приглашению не нужно, а стоит
+    оно вызова модели."""
+    class _Boom:
+        def execute(self, lead, cv_text: str = ""):
+            raise AssertionError("генерация не должна вызываться")
+
+    repo, channel = _Repo([_lead(sent_at=STALE)]), _Channel(state="pending")
+    _run(repo, channel, _Boom())
+
+    assert repo.statuses[0][1] == STATUS_SKIPPED
 
 
 def test_an_accepted_invite_gets_the_letter_and_becomes_sent():

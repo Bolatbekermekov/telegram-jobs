@@ -70,3 +70,49 @@ def test_an_unreadable_date_does_not_lose_the_record():
            "Статус": "sent", "Дата отправки": "вчера вечером"}
     got = record_to_sent(rec)
     assert got is not None and got.sent_at is None
+
+
+def test_a_closed_invite_stays_in_the_history():
+    """Просроченное приглашение уходит в `skipped`, но человеку мы УЖЕ писали.
+
+    Без этого адрес выпадает из истории вместе со статусом и снова выглядит
+    нетронутым — то есть защита от дублей перестаёт его знать ровно в тот
+    момент, когда мы решили больше его не трогать.
+    """
+    from app.domain.invite_age import expired_note
+    from app.infrastructure.sheets_repo import record_to_sent
+    from datetime import datetime
+    rec = {"id": "79", "Платформа": "linkedin", "Источник": "https://linkedin.com/in/x",
+           "Вакансия": "Backend", "Статус": "skipped", "Дата отправки": "",
+           "Заметка": expired_note(datetime(2026, 7, 17, 22, 29),
+                                   datetime(2026, 8, 3, 12, 0), 7)}
+    got = record_to_sent(rec)
+    assert got is not None
+    assert got.address == "linkedin.com/in/x"
+
+
+def test_a_skipped_row_with_any_other_note_is_still_not_history():
+    """`skipped` ставится и там, где ничего не отправлялось (rate-limit,
+    дубль). Такие строки в историю не попадают — иначе она сама себя раздует."""
+    from app.infrastructure.sheets_repo import record_to_sent
+    rec = {"id": "1", "Платформа": "linkedin", "Источник": "@x", "Вакансия": "V",
+           "Статус": "skipped", "Дата отправки": "",
+           "Заметка": "already applied: та же вакансия (лид #75, 2026-07-20)"}
+    assert record_to_sent(rec) is None
+
+
+# --- дата отправки доезжает до лида -----------------------------------------
+
+def test_a_lead_carries_the_date_it_was_contacted():
+    """Без этого поля цикл `invited` не может узнать возраст приглашения."""
+    from datetime import datetime
+    rec = {"id": "141", "Платформа": "linkedin", "Источник": "https://linkedin.com/in/x",
+           "Вакансия": "Backend", "Статус": "invited",
+           "Дата отправки": "2026-07-27 22:50"}
+    assert record_to_lead(rec, offset=0).sent_at == datetime(2026, 7, 27, 22, 50)
+
+
+def test_a_lead_without_a_date_has_none():
+    rec = {"id": "141", "Платформа": "linkedin", "Источник": "@x",
+           "Статус": "invited", "Дата отправки": ""}
+    assert record_to_lead(rec, offset=0).sent_at is None
