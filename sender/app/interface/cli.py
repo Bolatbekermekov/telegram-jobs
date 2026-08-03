@@ -36,6 +36,7 @@ from app.application.send_plan import (
     unresolved_thread,
 )
 from app.domain.invite_age import expired_note, invite_expired
+from app.application.answer_log import answers_note
 from app.domain.sent_note import cv_note
 from app.domain.outreach_history import (
     SentRecord,
@@ -77,6 +78,35 @@ def _prompt(msg: str) -> str:
 
 def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
+
+
+def _reset_answer_log(channel) -> None:
+    """Очистить журнал ответов перед лидом.
+
+    Канал живёт между лидами одной платформы (ChannelSwitcher закрывает его
+    только при смене площадки), поэтому без очистки ответы предыдущего лида
+    приклеились бы к заметке следующего — и выглядели бы как вопросы, которых
+    работодатель не задавал.
+    """
+    log = getattr(channel, "answer_log", None)
+    if log is not None:
+        log.reset()
+
+
+def _sent_note(channel, attachment, attach_enabled: bool) -> str:
+    """Заметка отправленной строки: какое резюме ушло и что модель ответила.
+
+    Вопросы в формах отклика отвечает LLM, и её ответы нигде не сохранялись —
+    заявка уходила, а чем именно мы представились работодателю, узнать было
+    неоткуда. Журнал висит на канале (registry._with_answer_log) и заполняется
+    одной обёрткой вокруг общего answerer-а, поэтому работает на всех
+    площадках сразу: внешние формы, LinkedIn Easy Apply, RemoteOK и hh.
+    """
+    note = cv_note(attachment, getattr(channel, "supports_attachment", True),
+                   attach_enabled)
+    log = getattr(channel, "answer_log", None)
+    qa = answers_note(getattr(log, "pairs", []) if log is not None else [])
+    return f"{note}\n{qa}" if qa else note
 
 
 def _record_sent(repo, lead, body: str, platform: str, history=None,
@@ -266,12 +296,11 @@ def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None
         subject = subject_for(lead.vacancy_context or lead.raw_text)
         attachment = variant.pdf_path if config.ATTACH_CV else None
         content = format_for_channel(channel, body, subject, attachment, note)
+        _reset_answer_log(channel)
         result = SendOutreach(channel).execute(lead, content)
         if result.ok:
             if _record_sent(repo, lead, content.body, "linkedin",
-                            note=cv_note(attachment,
-                                         getattr(channel, "supports_attachment", True),
-                                         config.ATTACH_CV)):
+                            note=_sent_note(channel, attachment, config.ATTACH_CV)):
                 print(f"   ✅ #{lead.lead_id}: письмо отправлено.")
             continue
         if result.manual:
@@ -566,13 +595,12 @@ def run() -> None:
                           "лид остаётся 'new'.")
                     continue
 
+            _reset_answer_log(channel)
             result = sender.execute(lead, content)
             if result.ok:
                 if not _record_sent(
                         repo, lead, content.body, platform, sent_history,
-                        note=cv_note(attachment,
-                                     getattr(channel, "supports_attachment", True),
-                                     config.ATTACH_CV)):
+                        note=_sent_note(channel, attachment, config.ATTACH_CV)):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1

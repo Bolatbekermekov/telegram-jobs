@@ -35,6 +35,55 @@ def test_a_successful_write_reports_true():
     assert (body, status) == ("тело", STATUS_SENT)
 
 
+def test_the_questions_the_model_answered_end_up_in_the_note():
+    """Вопросы в формах отклика отвечает LLM, и её ответы нигде не сохранялись:
+    заявка уходила, а чем мы представились работодателю — неизвестно."""
+    from app.interface.cli import _sent_note
+
+    class _Chan:
+        supports_attachment = True
+
+    class _Log:
+        pairs = [("Years of experience", "3"), ("Salary expectations", "4000 EUR")]
+
+    _Chan.answer_log = _Log()
+    note = _sent_note(_Chan(), "/cv/qa/Bolatbek_QA.pdf", attach_enabled=True)
+
+    assert "CV: Bolatbek_QA.pdf" in note
+    assert "Years of experience" in note and "3" in note
+    assert "Salary expectations" in note and "4000 EUR" in note
+
+
+def test_the_log_is_cleared_before_each_lead():
+    """Канал живёт между лидами одной платформы (ChannelSwitcher), поэтому без
+    очистки ответы предыдущего лида приклеились бы к заметке следующего — и
+    выглядели бы как вопросы, которых работодатель не задавал."""
+    from app.application.answer_log import AnswerLog
+    from app.interface.cli import _reset_answer_log
+
+    class _Chan:
+        answer_log = AnswerLog()
+
+    ch = _Chan()
+    ch.answer_log.pairs = [("Прошлый вопрос", "прошлый ответ")]
+    _reset_answer_log(ch)
+    assert ch.answer_log.pairs == []
+
+
+def test_resetting_a_channel_without_a_log_is_harmless():
+    from app.interface.cli import _reset_answer_log
+    _reset_answer_log(object())          # telegram, email — вопросов не задают
+
+
+def test_a_send_without_questions_keeps_the_note_short():
+    from app.interface.cli import _sent_note
+
+    class _Chan:
+        supports_attachment = True
+
+    assert _sent_note(_Chan(), "/cv/qa/x.pdf", attach_enabled=True) == "CV: x.pdf"
+
+
 def test_the_cv_that_went_out_is_written_into_the_note():
     """Резюме выбирается под роль, но в листе от этого не оставалось следа —
     какой из восьми PDF получил рекрутёр, узнать было неоткуда."""
