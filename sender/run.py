@@ -39,7 +39,7 @@ if __name__ == "__main__":
     elif cmd == ["login_threads"]:
         run_login_threads()
     elif cmd and cmd[0] in ("search", "search_linkedin", "search_wellfound",
-                            "search_remoteok", "search_remotive", "search_wwr",
+                            "search_remoteok", "search_remotive",
                             "search_hh"):
         from app.application.search_commands import platforms_arg
         run_search_once(platforms_arg(cmd[0]))

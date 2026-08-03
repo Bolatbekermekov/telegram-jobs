@@ -4,7 +4,7 @@ hh.ru's applicant API is closed and its pages sit behind an anti-bot that
 flags stock Playwright, so we drive real Chrome via patchright with the
 session saved by `make login_hh` (shared with the outreach channel). hh.ru's
 own query engine does the filtering — we do NOT re-filter titles by keyword
-(unlike WWR): relevant vacancies often have Russian titles. Raw DOM
+the way the API-fed boards do: relevant vacancies often have Russian titles. Raw DOM
 extraction is isolated in _vacancy_cards / parse_hh_cards so selector drift
 is easy to fix. start() refuses to run without a saved session instead of
 prompting — the worker must never block on input().

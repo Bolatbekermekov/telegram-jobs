@@ -7,7 +7,6 @@ _TOKEN_TO_PLATFORM = {
     "search_wellfound": "wellfound",
     "search_remoteok": "remoteok",
     "search_remotive": "remotive",
-    "search_wwr": "wwr",
     "search_hh": "hh",
 }
 

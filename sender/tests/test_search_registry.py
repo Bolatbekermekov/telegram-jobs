@@ -35,11 +35,6 @@ def test_build_remotive():
     assert isinstance(build_searcher("remotive"), RemotiveSearcher)
 
 
-def test_build_wwr():
-    from app.infrastructure.search.wwr_search import WWRSearcher
-    assert isinstance(build_searcher("wwr"), WWRSearcher)
-
-
 def test_build_hh():
     from app.infrastructure.search.hh_search import HHSearcher
     assert isinstance(build_searcher("hh"), HHSearcher)

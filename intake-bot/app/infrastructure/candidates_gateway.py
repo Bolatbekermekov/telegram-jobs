@@ -13,7 +13,6 @@ CANDIDATE_COLUMNS = [
 _BADGE = {
     "linkedin": "🔵 LinkedIn", "wellfound": "🅰️ Wellfound",
     "remoteok": "🟢 RemoteOK", "remotive": "🟩 Remotive",
-    "wwr": "🟫 WWR",
 }
 
 
