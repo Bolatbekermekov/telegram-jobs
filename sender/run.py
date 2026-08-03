@@ -19,6 +19,7 @@ from app.interface.cli import (  # noqa: E402
     run_login_browser,
     run_login_wellfound,
     run_login_hh,
+    run_login_remoteok,
     run_login_threads,
     run_search_once,
     run_worker,
@@ -36,6 +37,8 @@ if __name__ == "__main__":
         run_login_wellfound()
     elif cmd == ["login_hh"]:
         run_login_hh()
+    elif cmd == ["login_remoteok"]:
+        run_login_remoteok()
     elif cmd == ["login_threads"]:
         run_login_threads()
     elif cmd and cmd[0] in ("search", "search_linkedin", "search_wellfound",

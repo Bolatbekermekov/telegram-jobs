@@ -829,6 +829,75 @@ def run_login_hh():
     print(f"✅ Сессия сохранена в {config.HH_STATE_PATH}. Этот Chrome можно закрыть.")
 
 
+def run_login_remoteok():
+    """Register/log in to RemoteOK in the user's REAL Chrome, then save the session.
+
+    Поиск по RemoteOK аккаунта не требует — он идёт по открытому JSON API. Эта
+    сессия нужна ровно для отклика: кнопка Apply ведёт на /l/<id>, а тот уводит
+    гостя на /sign-up?user_type=worker (проверено живьём 2026-08-03), так что
+    без входа адрес формы работодателя не показывают вообще.
+
+    Chrome настоящий, а не запущенный автоматикой: регистрация на RemoteOK идёт
+    через почту или Google, а Google в автоматизированном браузере обычно
+    отвечает «this browser may not be secure». После входа куки забираются по
+    CDP в REMOTEOK_STATE_PATH, и этот Chrome можно закрывать.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from app.domain.remoteok_session import is_logged_in
+    from app.infrastructure.search.wellfound_search import build_chrome_debug_args
+
+    if Path(config.REMOTEOK_STATE_PATH).exists():
+        print(f"✅ Сессия RemoteOK уже есть ({config.REMOTEOK_STATE_PATH}). "
+              "Удали этот файл, если хочешь перелогиниться.")
+        return
+
+    args = build_chrome_debug_args(
+        config.REMOTEOK_CHROME_PROFILE, config.REMOTEOK_CDP_PORT,
+        "https://remoteok.com/sign-up?user_type=worker")
+    print("Открываю твой Chrome для входа в RemoteOK...")
+    try:
+        subprocess.Popen([config.CHROME_PATH, *args])
+    except FileNotFoundError:
+        print(f"❌ Не нашёл Chrome по пути {config.CHROME_PATH}. "
+              f"Укажи его в переменной CHROME_PATH.")
+        return
+
+    print("\n1) Зарегистрируйся или войди в RemoteOK в открывшемся Chrome "
+          "(почта или Google).")
+    print("2) Дождись, пока окажешься на сайте залогиненным.")
+    input("3) Вернись сюда и нажми Enter — проверю сессию...")
+
+    try:
+        from patchright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(config.REMOTEOK_CDP_URL)
+            ctx = browser.contexts[0] if browser.contexts else None
+            if ctx is None:
+                print("⚠️ Не нашёл открытую вкладку Chrome. Запусти команду снова.")
+                return
+            page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.goto("https://remoteok.com/", wait_until="domcontentloaded",
+                      timeout=30000)
+            if not is_logged_in(page.content()):
+                # Файл не пишем намеренно: сессия гостя неотличима от рабочей на
+                # диске и вскроется только на отклике, редиректом на /sign-up.
+                print("⚠️ Похоже, вход не завершён — RemoteOK всё ещё предлагает "
+                      "войти. Дологинься в Chrome и запусти `make login_remoteok` "
+                      "снова.")
+                browser.close()  # disconnect only — leaves Chrome running
+                return
+            ctx.storage_state(path=config.REMOTEOK_STATE_PATH)
+            browser.close()  # disconnect only — leaves Chrome running
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Не смог забрать сессию по CDP: {exc}")
+        return
+
+    print(f"✅ Сессия сохранена в {config.REMOTEOK_STATE_PATH}. "
+          "Этот Chrome можно закрыть.")
+
+
 def run_login_threads():
     """One-time interactive Threads login; saves the browser session to a file.
 
@@ -916,6 +985,9 @@ def run_login_all():
         # is not a session to skip — re-login instead.
         "linkedin": has_valid_session(config.LINKEDIN_STATE_PATH),
         "hh": Path(config.HH_STATE_PATH).exists(),
+        # RemoteOK: файл пишется только после проверки страницы
+        # (run_login_remoteok), так что его наличие уже значит живой вход.
+        "remoteok": Path(config.REMOTEOK_STATE_PATH).exists(),
         # Same trap as LinkedIn: a state file without a live sessionid is a guest.
         "threads": threads_has_valid_session(config.THREADS_STATE_PATH),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
@@ -933,7 +1005,8 @@ def run_login_all():
         subprocess.call([sys.executable, str(qr_script)])
 
     actions = {"telegram": _login_telegram, "linkedin": run_login_browser,
-               "hh": run_login_hh, "threads": run_login_threads,
+               "hh": run_login_hh, "remoteok": run_login_remoteok,
+               "threads": run_login_threads,
                "wellfound": run_login_wellfound}
     for p in todo:
         print(f"\n🔑 {p}: вход...")

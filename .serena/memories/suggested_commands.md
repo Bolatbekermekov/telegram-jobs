@@ -1,0 +1,12 @@
+# Operator/developer commands (project root)
+- Main manual sender: `make run`
+- Background search worker: `make worker`
+- Generate without sending: `make dry`
+- Send test to self: `make test`
+- One-shot search: `make search`; platform variants are `make search_linkedin`, `make search_wellfound`, `make search_remoteok`, `make search_remotive`, `make search_hh`.
+- Login: `make login` or the platform-specific login targets in Makefile.
+- Sender unit suite: `make test-unit`
+- Intake suite using the installed sender environment: `PYTHONPATH=intake-bot sender/.venv/bin/python -m pytest intake-bot/tests -q`
+- Opt-in live apply probe: `make apply_probe`; it uses real external sites and must never be run casually.
+- Build all role CVs: `bash sender/build_cvs.sh` (requires `tectonic`; overwrites generated role PDFs).
+- Syntax check without side effects: `sender/.venv/bin/python -m compileall -q sender/app intake-bot/app intake-bot/api`.

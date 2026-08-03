@@ -197,6 +197,19 @@ HH_CDP_URL = os.environ.get("HH_CDP_URL", f"http://127.0.0.1:{HH_CDP_PORT}")
 HH_CHROME_PROFILE = os.environ.get(
     "HH_CHROME_PROFILE", str(_ROOT / "sender" / ".hh_chrome"))
 
+# RemoteOK. Поиск идёт по открытому JSON API и аккаунта НЕ требует — сессия
+# нужна только для отклика: кнопка Apply ведёт на /l/<id>, а тот уводит гостя
+# на /sign-up?user_type=worker (проверено живьём 2026-08-03). Вход, как у hh,
+# делается в настоящем Chrome (регистрация через Google в запущенном
+# автоматикой браузере обычно блокируется), а сессия выгружается по CDP.
+REMOTEOK_STATE_PATH = os.environ.get(
+    "REMOTEOK_STATE_PATH", str(_ROOT / "sender" / "remoteok_state.json"))
+REMOTEOK_CDP_PORT = int(os.environ.get("REMOTEOK_CDP_PORT", "9224"))  # 9222 wf, 9223 hh
+REMOTEOK_CDP_URL = os.environ.get(
+    "REMOTEOK_CDP_URL", f"http://127.0.0.1:{REMOTEOK_CDP_PORT}")
+REMOTEOK_CHROME_PROFILE = os.environ.get(
+    "REMOTEOK_CHROME_PROFILE", str(_ROOT / "sender" / ".remoteok_chrome"))
+
 # Email (SMTP)
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))

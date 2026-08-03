@@ -49,8 +49,8 @@ def test_telegram_session_file_appends_telethon_suffix():
 
 
 def test_platforms_needing_login_keeps_order_and_skips_existing():
-    has = {"telegram": True, "linkedin": False, "hh": False, "threads": False,
-           "wellfound": True}
+    has = {"telegram": True, "linkedin": False, "hh": False, "remoteok": True,
+           "threads": False, "wellfound": True}
     assert platforms_needing_login(has) == ["linkedin", "hh", "threads"]
 
 
@@ -70,3 +70,16 @@ def test_platforms_needing_login_unknown_platform_means_login():
 def test_wellfound_logs_in_last():
     # Its Chrome stays open for CDP, so it must not block the other logins.
     assert LOGIN_ORDER[-1] == "wellfound"
+
+
+def test_remoteok_is_in_the_login_order():
+    """Без сессии RemoteOK отклик невозможен: кнопка Apply уводит гостя на
+    /sign-up. Площадка, которой нет в `make login`, тихо остаётся незалогиненной
+    — а узнаётся это только на первом отклике."""
+    assert "remoteok" in LOGIN_ORDER
+
+
+def test_remoteok_logs_in_before_wellfound():
+    """Его Chrome закрывается сразу после выгрузки куки, а wellfound-овский
+    обязан остаться открытым — значит remoteok идёт раньше."""
+    assert LOGIN_ORDER.index("remoteok") < LOGIN_ORDER.index("wellfound")
