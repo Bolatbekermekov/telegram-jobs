@@ -30,6 +30,34 @@ def test_caps_at_max_jobs():
     assert {c.title for c in out} == {"A", "B"}
 
 
+def test_a_rejected_job_is_reported_so_it_is_never_scored_again():
+    """Отвергнутая вакансия не сохранялась НИКУДА, а порядок выдачи
+    детерминированный — значит одни и те же отказники занимали весь бюджет
+    скоринга в каждом прогоне, и вакансии за ними не начинались никогда."""
+    rejected = []
+    cands = [_cand("A"), _cand("B")]
+    scorer = _Scorer({"A": (80, "good"), "B": (30, "wrong role")})
+    score_and_filter(cands, lambda c: "d", scorer, "P", threshold=60, max_jobs=10,
+                     on_reject=lambda c: rejected.append(c.url))
+
+    assert rejected == ["https://x/B"]
+
+
+def test_a_job_we_could_not_read_is_not_written_off():
+    """Описание не загрузилось — это про сеть, а не про вакансию. Запомнить её
+    как отвергнутую значит потерять её навсегда из-за одного таймаута."""
+    rejected = []
+    cands = [_cand("A")]
+
+    def describe(c):
+        raise RuntimeError("page gone")
+
+    score_and_filter(cands, describe, _Scorer({}), "P", threshold=60, max_jobs=10,
+                     on_reject=lambda c: rejected.append(c.url))
+
+    assert rejected == []
+
+
 def test_describe_failure_skips_only_that_job():
     cands = [_cand("A"), _cand("B")]
     scorer = _Scorer({"A": (90, "ok")})

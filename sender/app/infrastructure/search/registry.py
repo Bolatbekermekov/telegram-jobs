@@ -1,4 +1,6 @@
 """Build the right searcher for a platform (mirrors channels/registry.py)."""
+import time
+
 from app import config
 from app.infrastructure.search.hh_search import HHSearcher
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
@@ -15,12 +17,22 @@ def build_searcher(platform: str):
             people_enabled=config.LINKEDIN_PEOPLE_ENABLED,
             experience=config.LINKEDIN_EXPERIENCE,
             posted_within=config.LINKEDIN_POSTED_WITHIN,
+            workplace=config.LINKEDIN_WORKPLACE,
+            per_keyword=config.SEARCH_PER_KEYWORD,
+            pages=config.LINKEDIN_PAGES,
+            locations=config.SEARCH_LOCATIONS,
+            # Сдвиг стартового запроса меняется каждый час: бюджет обрывает
+            # обход, и без ротации опрашивались бы вечно одни и те же первые
+            # пары «слово + страна».
+            rotate_by=int(time.time() // 3600),
         )
     if platform == "wellfound":
         return WellfoundSearcher(
             config.WELLFOUND_STATE_PATH,
             headless=config.BROWSER_HEADLESS,
             cdp_url=config.WELLFOUND_CDP_URL,
+            per_keyword=config.SEARCH_PER_KEYWORD,
+            remote_only=config.WELLFOUND_REMOTE_ONLY,
         )
     if platform == "remoteok":
         return RemoteOKSearcher(
@@ -35,5 +47,6 @@ def build_searcher(platform: str):
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )
     if platform == "hh":
-        return HHSearcher(config.HH_STATE_PATH, headless=config.BROWSER_HEADLESS)
+        return HHSearcher(config.HH_STATE_PATH, headless=config.BROWSER_HEADLESS,
+                          per_keyword=config.SEARCH_PER_KEYWORD)
     raise ValueError(f"no searcher for platform: {platform}")

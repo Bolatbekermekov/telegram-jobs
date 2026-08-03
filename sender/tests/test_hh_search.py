@@ -72,7 +72,7 @@ def test_searcher_start_raises_without_state(tmp_path):
         s.start()
 
 
-def test_search_splits_limit_across_keywords(monkeypatch):
+def test_each_keyword_gets_its_own_ceiling(monkeypatch):
     s = HHSearcher("hh.json", headless=True)
     state = {"query": ""}
 
@@ -96,9 +96,12 @@ def test_search_splits_limit_across_keywords(monkeypatch):
         for i in range(10)
     ])
 
-    got = s.search(["a", "b"], location="", limit=4)
-    assert len(got) == 4
+    # Бюджет платформы больше не делится между словами: у каждого запроса свой
+    # потолок. Прежнее правило при девяти словах давало по ОДНОЙ вакансии на
+    # слово — и всегда одной и той же.
+    s._per_keyword = 3
+    got = s.search(["a", "b"], location="", limit=100)
     from_a = [c for c in got if "/vacancy/a-" in c.url]
     from_b = [c for c in got if "/vacancy/b-" in c.url]
-    assert len(from_a) == 2
-    assert len(from_b) == 2
+    assert len(from_a) == 3
+    assert len(from_b) == 3

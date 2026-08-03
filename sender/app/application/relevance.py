@@ -35,11 +35,21 @@ def parse_score_response(raw: str) -> tuple[int, str]:
         return 0, ""
 
 
-def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs):
+def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
+                     on_reject=None):
     """Score up to `max_jobs` candidates; keep score >= threshold, stamp Summary.
 
     `describe(candidate) -> str` fetches the job description. A failing describe or
     score skips just that job. Returns the kept candidates (mutated with Summary).
+
+    `on_reject(candidate)` вызывается для вакансии, НЕ дотянувшей до порога, —
+    чтобы её запомнили и больше не оценивали. Без этого отказник не сохранялся
+    никуда: следующий прогон снова качал его описание и снова платил за скоринг,
+    а поскольку порядок выдачи детерминированный, одни и те же отказники
+    занимали весь бюджет, и вакансии за ними не начинались никогда.
+
+    Вакансию, описание которой не прочиталось, сюда не отдаём: это сбой сети, а
+    не вердикт о вакансии, и списывать её навсегда из-за таймаута нельзя.
     """
     kept = []
     for c in candidates[:max_jobs]:
@@ -51,4 +61,6 @@ def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs)
         if score >= threshold:
             c.summary = f"{score}/100: {reason}" if reason else f"{score}/100"
             kept.append(c)
+        elif on_reject is not None:
+            on_reject(c)
     return kept

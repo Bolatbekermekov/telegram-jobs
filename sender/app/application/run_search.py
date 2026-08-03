@@ -8,7 +8,16 @@ from app.domain.candidate import normalize_url
 
 
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
-               on_error=None, scorer=None, profile="", threshold=0, max_jobs=0) -> int:
+               on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
+               scored_out=None) -> int:
+    """`scored_out` — память о вакансиях, которые скорер уже отверг.
+
+    Без неё отказник не сохранялся никуда (`known_urls()` читает только
+    сохранённых кандидатов), поэтому каждый прогон снова качал его описание и
+    снова платил за скоринг. А так как порядок выдачи детерминированный, одни и
+    те же отказники занимали весь бюджет max_jobs, и вакансии за ними не
+    начинались никогда.
+    """
     added = 0
     for platform in platforms:
         searcher = searchers[platform]
@@ -19,10 +28,15 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                 # Drop already-saved jobs BEFORE scoring so max_jobs counts fresh
                 # ones and we never spend OpenAI calls on duplicates.
                 known = candidates_repo.known_urls()
+                if scored_out is not None:
+                    known |= scored_out.known()
                 found = [c for c in found if normalize_url(c.url) not in known]
                 found = score_and_filter(
                     found, lambda c: searcher.describe(c.url),
-                    scorer, profile, threshold, max_jobs)
+                    scorer, profile, threshold, max_jobs,
+                    # score_and_filter отдаёт кандидата, память хранит ссылку.
+                    on_reject=(None if scored_out is None
+                               else lambda c: scored_out.add(c.url)))
             added += candidates_repo.add_new(found)
         except Exception as exc:  # noqa: BLE001 — isolate per-platform failures
             if on_error is not None:
@@ -32,4 +46,11 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                 searcher.stop()
             except Exception:  # noqa: BLE001
                 pass
+    if scored_out is not None:
+        # После всех платформ: упасть на записи файла кэша значит потерять уже
+        # найденных кандидатов, а они дороже памяти об отказниках.
+        try:
+            scored_out.save()
+        except Exception:  # noqa: BLE001
+            pass
     return added

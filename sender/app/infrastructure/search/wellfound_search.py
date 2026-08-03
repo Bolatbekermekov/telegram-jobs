@@ -50,8 +50,13 @@ def eligibility_block(page_text: str) -> str:
     return "\n".join(out)
 
 
-def build_jobs_url(keyword: str) -> str:
-    qs = urlencode({"q": keyword, "remote": "true"})
+def build_jobs_url(keyword: str, remote_only: bool = False) -> str:
+    """remote=true раньше был вшит; человек готов к релокации, и офисные
+    вакансии отсекать незачем."""
+    qs = {"q": keyword}
+    if remote_only:
+        qs["remote"] = "true"
+    qs = urlencode(qs)
     return f"https://wellfound.com/jobs?{qs}"
 
 
@@ -89,10 +94,13 @@ class WellfoundSearcher:
     name = "wellfound"
 
     def __init__(self, storage_state_path: str, headless: bool = True,
-                 cdp_url: str | None = None):
+                 cdp_url: str | None = None, per_keyword: int = 25,
+                 remote_only: bool = False):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._cdp_url = cdp_url
+        self._per_keyword = per_keyword
+        self._remote_only = remote_only
         self._pw = None
         self._browser = None
         self._page = None
@@ -202,10 +210,11 @@ class WellfoundSearcher:
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         from app.domain.search_request import per_keyword_limit
-        per_kw = per_keyword_limit(limit, len(keywords_list))
+        per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         found: list[Candidate] = []
         for kw in keywords_list:
-            self._page.goto(build_jobs_url(kw), wait_until="domcontentloaded")
+            self._page.goto(build_jobs_url(kw, self._remote_only),
+                            wait_until="domcontentloaded")
             found += parse_job_cards(self._job_cards(), limit=per_kw)
         return found[:limit]
 

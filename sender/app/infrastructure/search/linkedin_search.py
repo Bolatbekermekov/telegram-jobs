@@ -9,22 +9,114 @@ from urllib.parse import urlencode
 from app.domain.candidate import Candidate, KIND_JOB, KIND_PROFILE
 
 
+# Сколько вакансий LinkedIn отдаёт на одной странице выдачи (замер живой
+# страницы 2026-08-03: li[data-occludable-job-id] -> ровно 25). Следующая
+# страница адресуется смещением start=25, 50, ...
+PAGE_SIZE = 25
+
+# Сколько снимков списка делать, прокручивая страницу. Пять шагов на 25 карточек
+# с запасом: замер показал, что одновременно отрисовано около десяти.
+_SCROLL_STEPS = 5
+_SCROLL_SETTLE_MS = 900
+
+# Снимок всего списка одним вызовом. Заголовок дублируется скрытым span-ом для
+# скринридеров, поэтому берётся только первая строка.
+_HARVEST_JS = """() => {
+  const out = [];
+  document.querySelectorAll('li[data-occludable-job-id]').forEach(li => {
+    const pick = sel => {
+      const el = li.querySelector(sel);
+      return el ? (el.innerText || '').split('\\n')[0].trim() : '';
+    };
+    out.push({
+      id: li.getAttribute('data-occludable-job-id') || '',
+      title: pick('.artdeco-entity-lockup__title'),
+      company: pick('.artdeco-entity-lockup__subtitle'),
+      location: pick('.artdeco-entity-lockup__caption'),
+    });
+  });
+  return out;
+}"""
+
+# Прокрутка к элементу с нужным порядковым номером: скроллим сам список, а не
+# окно — выдача LinkedIn живёт в своей прокручиваемой колонке.
+_SCROLL_JS = """(step) => {
+  const items = document.querySelectorAll('li[data-occludable-job-id]');
+  if (!items.length) return;
+  const idx = Math.min(items.length - 1, Math.ceil(items.length * step / 5));
+  items[idx].scrollIntoView({block: 'center'});
+}"""
+
+
 def build_jobs_url(keywords: str, location: str,
-                   experience: str = "1,2,3", posted_within: str = "r604800") -> str:
+                   experience: str = "1,2,3", posted_within: str = "r604800",
+                   workplace: str = "", start: int = 0) -> str:
+    """Ссылка на выдачу LinkedIn.
+
+    `workplace` (f_WT: 1=офис, 2=удалённо, 3=гибрид) по умолчанию ПУСТОЙ — то
+    есть подходит любой формат. Раньше здесь стояло f_WT=2 константой, которую
+    нельзя было выключить, и она отсекала 60–75% вакансий: замер 2026-08-03 за
+    неделю дал «python developer» 1000+ удалённых против 3000+ всего, а
+    «ai engineer» — 2000+ против 8000+. Человеку, готовому к релокации, этот
+    фильтр отрезал именно то, что ему подходит.
+    """
     qs = {
         "keywords": keywords,
         "location": location,
-        "f_WT": "2",            # Remote
         "f_TPR": posted_within,  # recency window (r604800 = 7 days)
     }
+    if workplace:
+        qs["f_WT"] = workplace
     if experience:
         qs["f_E"] = experience   # 1=Internship, 2=Entry/Junior, 3=Associate/Junior+
+    if start:
+        qs["start"] = start
     return f"https://www.linkedin.com/jobs/search/?{urlencode(qs)}"
 
 
 def build_people_url(keywords: str) -> str:
     qs = urlencode({"keywords": keywords})
     return f"https://www.linkedin.com/search/results/people/?{qs}"
+
+
+def _rotate(items: list, by: int) -> list:
+    """Тот же список, начиная с элемента `by` (по кругу)."""
+    if not items:
+        return items
+    k = by % len(items)
+    return items[k:] + items[:k]
+
+
+def merge_harvest(batches) -> list:
+    """Собрать карточки из нескольких «снимков» списка в один набор без дублей.
+
+    Список выдачи виртуализирован: LinkedIn держит отрисованными только видимые
+    карточки и перерабатывает их при скролле. Замер 2026-08-03: в списке 25
+    элементов li[data-occludable-job-id], а отрисованных div.job-card-container
+    всего 7, и после прокрутки стало 10, а не 25. Значит увидеть все сразу
+    нельзя — снимки делаются по ходу скролла и склеиваются здесь.
+
+    Идентификатор вакансии есть у каждого li сразу, поэтому ссылка собирается
+    даже для карточки, которая так и не отрисовалась: заголовок это бонус
+    (описание всё равно читает describe() со страницы вакансии), а потерянная
+    ссылка — потерянная вакансия.
+    """
+    by_id: dict[str, dict] = {}
+    for batch in batches:
+        for row in batch or []:
+            jid = str((row or {}).get("id") or "").strip()
+            if not jid:
+                continue
+            seen = by_id.setdefault(jid, {"title": "", "company": "", "location": ""})
+            for field in ("title", "company", "location"):
+                value = str(row.get(field) or "").strip()
+                if value and not seen[field]:
+                    seen[field] = value
+    return [
+        _LiveCard(title=v["title"], company=v["company"], location=v["location"],
+                  href=f"https://www.linkedin.com/jobs/view/{jid}/")
+        for jid, v in by_id.items()
+    ]
 
 
 def parse_job_cards(cards, limit: int) -> list[Candidate]:
@@ -62,12 +154,19 @@ class LinkedInSearcher:
 
     def __init__(self, storage_state_path: str, headless: bool = True,
                  people_enabled: bool = False,
-                 experience: str = "1,2,3", posted_within: str = "r604800"):
+                 experience: str = "1,2,3", posted_within: str = "r604800",
+                 workplace: str = "", per_keyword: int = PAGE_SIZE,
+                 pages: int = 1, locations=None, rotate_by: int = 0):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._people_enabled = people_enabled
         self._experience = experience
         self._posted_within = posted_within
+        self._workplace = workplace
+        self._per_keyword = per_keyword
+        self._pages = max(1, pages)
+        self._locations = list(locations) if locations else []
+        self._rotate_by = rotate_by
         self._pw = None
         self._browser = None
         self._page = None
@@ -106,26 +205,31 @@ class LinkedInSearcher:
             return ""
 
     def _job_cards(self):
-        """Return card wrappers exposing get_text(role)/get_href(). Selectors here.
+        """Все вакансии страницы выдачи, а не только отрисованные.
 
-        LinkedIn moved job-card fields onto the shared `artdeco-entity-lockup__*`
-        classes; the title is duplicated by a visually-hidden a11y span, so we keep
-        only the first line.
+        Список виртуализирован (см. merge_harvest): прежний обход
+        `div.job-card-container` видел 7 карточек из 25. Поэтому страница
+        прокручивается шагами, после каждого делается снимок всего списка, и
+        снимки склеиваются.
+
+        Один evaluate на снимок вместо локаторов на каждое поле: 25 карточек по
+        три поля — это 75 обращений с таймаутами, из которых каждое непопадание
+        стоит секунды.
         """
-        cards = []
-        for el in self._page.locator("div.job-card-container").all():
+        batches = []
+        for step in range(_SCROLL_STEPS):
             try:
-                href = el.locator("a.job-card-container__link").first.get_attribute(
-                    "href", timeout=2000)
+                batches.append(self._page.evaluate(_HARVEST_JS))
+            except Exception:  # noqa: BLE001 — снимок это не повод ронять прогон
+                break
+            if step == _SCROLL_STEPS - 1:
+                break
+            try:
+                self._page.evaluate(_SCROLL_JS, step + 1)
+                self._page.wait_for_timeout(_SCROLL_SETTLE_MS)
             except Exception:  # noqa: BLE001
-                href = ""
-            cards.append(_LiveCard(
-                title=self._text(el, ".artdeco-entity-lockup__title").split("\n")[0],
-                company=self._text(el, ".artdeco-entity-lockup__subtitle"),
-                location=self._text(el, ".artdeco-entity-lockup__caption"),
-                href=href,
-            ))
-        return cards
+                break
+        return merge_harvest(batches)
 
     def describe(self, url: str) -> str:
         """Open a job page and return its description text (best-effort)."""
@@ -153,17 +257,49 @@ class LinkedInSearcher:
         return cards
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
+        """Перебор ключевое слово × локация × страница, пока не наберём `limit`.
+
+        Локаций может быть несколько: раньше на всё была одна строка
+        SEARCH_LOCATION, и вакансии в UAE, Турции или отдельных странах EU не
+        искались никогда.
+        """
         from app.domain.search_request import per_keyword_limit
-        per_kw = per_keyword_limit(limit, len(keywords_list))
+        per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
+        locations = self._locations or [location]
         found: list[Candidate] = []
-        for kw in keywords_list:
-            self._page.goto(
-                build_jobs_url(kw, location, self._experience, self._posted_within),
-                wait_until="domcontentloaded")
-            found += parse_job_cards(self._job_cards(), limit=per_kw)
-            if self._people_enabled:
+        # Страница — ВНЕШНИЙ цикл, ключевое слово — внутренний. Порядок не
+        # косметика: бюджет платформы обрывает обход, и при обходе «слово, потом
+        # его страницы» первое же слово выбирало бы весь лимит, а до QA и AI
+        # очередь не доходила бы никогда. Именно от этого защищала прежняя
+        # делёжка бюджета — теперь то же самое делает порядок.
+        # Бюджет обрывает обход, поэтому стартовая пара сдвигается от прогона к
+        # прогону: иначе опрашивались бы вечно одни и те же первые запросы, а
+        # остальные роли и страны не искались бы никогда.
+        keywords_list = _rotate(list(keywords_list), self._rotate_by)
+        locations = _rotate(list(locations), self._rotate_by)
+        exhausted: set[tuple[str, str]] = set()
+        for page in range(self._pages):
+            for loc in locations:
+                for kw in keywords_list:
+                    if (kw, loc) in exhausted:
+                        continue        # по этой паре вакансии кончились
+                    self._page.goto(
+                        build_jobs_url(kw, loc, self._experience,
+                                       self._posted_within, self._workplace,
+                                       start=page * PAGE_SIZE),
+                        wait_until="domcontentloaded")
+                    cards = self._job_cards()
+                    found += parse_job_cards(cards, limit=per_kw)
+                    if not cards:
+                        exhausted.add((kw, loc))
+                    if len(found) >= limit:
+                        return found[:limit]
+        if self._people_enabled:
+            for kw in keywords_list:
                 self._page.goto(build_people_url(kw), wait_until="domcontentloaded")
                 found += parse_people_cards(self._people_cards(), limit=per_kw)
+                if len(found) >= limit:
+                    return found[:limit]
         return found[:limit]
 
 

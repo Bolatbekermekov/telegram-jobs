@@ -124,6 +124,14 @@ def _notify_done(platforms, added: int) -> None:
                   search_done_message(list(platforms), added))
 
 
+def _scored_out_store():
+    """Память об отвергнутых вакансиях, или None, когда скоринг выключен."""
+    if not config.RELEVANCE_ENABLED:
+        return None
+    from app.infrastructure.scored_out_store import ScoredOutStore
+    return ScoredOutStore(config.SCORED_OUT_PATH)
+
+
 def _relevance_args() -> dict:
     """Kwargs that turn on AI relevance scoring in run_search, or {} when disabled."""
     if not config.RELEVANCE_ENABLED:
@@ -637,7 +645,7 @@ def run_worker():
     ctrl_ws = book.worksheet(config.CONTROL_TAB)
 
     control = ControlRepo(ctrl_ws)
-    candidates = CandidatesRepo(cand_ws, main_ws, config.SEARCH_LIMIT_PER_PLATFORM)
+    candidates = CandidatesRepo(cand_ws, main_ws, config.CANDIDATES_PENDING_CAP)
     searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS}
 
     def run_one(req):
@@ -647,6 +655,7 @@ def run_worker():
             keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
             limit=config.SEARCH_LIMIT_PER_PLATFORM,
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+            scored_out=_scored_out_store(),
             **_relevance_args(),
         )
         _notify_done(plats, added)
@@ -691,7 +700,7 @@ def run_search_once(platforms):
     book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
     candidates = CandidatesRepo(
         book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
-        config.SEARCH_LIMIT_PER_PLATFORM)
+        config.CANDIDATES_PENDING_CAP)
     if "hh" in platforms and not Path(config.HH_STATE_PATH).exists():
         # Manual run: log in interactively now instead of failing with a hint.
         # (The worker never gets here — it builds its searchers itself.)
@@ -703,6 +712,7 @@ def run_search_once(platforms):
         keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
         limit=config.SEARCH_LIMIT_PER_PLATFORM,
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+        scored_out=_scored_out_store(),
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")

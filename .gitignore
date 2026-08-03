@@ -41,6 +41,9 @@ sender/.remoteok_chrome/
 # HTML carries the CSRF token, the full name and resume data — never commit it.
 sender/.hh_chat_debug/
 
+# Локальный кэш вакансий, отвергнутых скорером (не источник истины)
+sender/.scored_out.json
+
 # Playwright MCP browser profile (session data / artifacts, not source)
 .playwright-mcp/
 

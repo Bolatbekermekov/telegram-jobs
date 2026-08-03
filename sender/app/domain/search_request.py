@@ -24,12 +24,23 @@ def platforms_for(platform: str) -> list[str]:
     return [platform]
 
 
-def per_keyword_limit(total: int, n_keywords: int) -> int:
-    """Split the per-platform card budget across keywords (>=1 each).
+def per_keyword_limit(total: int, n_keywords: int, per_keyword: int) -> int:
+    """Потолок на ОДИН запрос: `per_keyword`, но не больше бюджета платформы.
 
-    Without this the first keyword fills the whole budget and later keywords
-    (other roles) never get scraped.
+    Бюджет между словами больше не делится. Старое правило считало
+    max(1, total // n_keywords), и с девятью словами при бюджете 15 это давало
+    ровно ОДНУ карточку на запрос — всегда одну и ту же, потому что LinkedIn
+    сортирует выдачу по релевантности, а не по дате. Замер листа: 36 кандидатов
+    в первый день и 4–11 в каждый следующий, всё остальное отсеивалось как
+    дубль. При том что на странице LinkedIn лежит 25 вакансий, а по одному
+    только слову «ai engineer» за неделю их больше восьми тысяч.
+
+    Перебор останавливает уже сам вызывающий, когда наберёт `total`.
+
+    Ноль в любой из настроек значит «ограничения с этой стороны нет», а не «ноль
+    карточек»: опечатка в .env не должна молча выключать поиск целиком.
     """
     if n_keywords <= 0:
         return total
-    return max(1, total // n_keywords)
+    ceilings = [v for v in (per_keyword, total) if v > 0]
+    return max(1, min(ceilings)) if ceilings else 1

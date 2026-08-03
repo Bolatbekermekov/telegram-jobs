@@ -143,7 +143,26 @@ SEARCH_KEYWORDS = [
     if k.strip()
 ]
 SEARCH_LOCATION = os.environ.get("SEARCH_LOCATION", "Worldwide")
-SEARCH_LIMIT_PER_PLATFORM = int(os.environ.get("SEARCH_LIMIT_PER_PLATFORM", "15"))
+# Список локаций для обхода. Одной строки было мало: вакансии в UAE, Турции или
+# отдельных странах EU не искались никогда, а замер 2026-08-03 показал там живые
+# пулы (UAE «ai engineer» — 68 за неделю, Turkey «vue developer» — 65).
+# Пусто => берём одну SEARCH_LOCATION.
+SEARCH_LOCATIONS = [
+    s.strip() for s in os.environ.get("SEARCH_LOCATIONS", "").split(",") if s.strip()
+]
+# Потолок карточек на ОДИН запрос (слово × локация × страница). Раньше бюджет
+# платформы делился между словами: 15 на 9 слов давало по одной вакансии на
+# запрос, и всегда одну и ту же — LinkedIn сортирует по релевантности, а не по
+# дате. 25 = ровно страница выдачи LinkedIn.
+SEARCH_PER_KEYWORD = int(os.environ.get("SEARCH_PER_KEYWORD", "25"))
+# Предохранитель на прогон: сколько карточек максимум собрать с платформы.
+# Реально ограничивает не он, а MATCH_MAX_JOBS ниже — скорить всё собранное мы
+# всё равно не будем.
+SEARCH_LIMIT_PER_PLATFORM = int(os.environ.get("SEARCH_LIMIT_PER_PLATFORM", "250"))
+# Сколько непросмотренных кандидатов держать в очереди на платформу. Раньше эту
+# роль исполнял SEARCH_LIMIT_PER_PLATFORM, то есть одна настройка отвечала и за
+# глубину поиска, и за длину очереди человеку.
+CANDIDATES_PENDING_CAP = int(os.environ.get("CANDIDATES_PENDING_CAP", "60"))
 SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))
 WORKER_POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "60"))
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
@@ -162,6 +181,18 @@ LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").low
 # Empty = all levels. Recency f_TPR: r604800 = 7 days.
 LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3")
 LINKEDIN_POSTED_WITHIN = os.environ.get("LINKEDIN_POSTED_WITHIN", "r604800")
+# Формат работы (f_WT): 1=офис, 2=удалённо, 3=гибрид, пусто=любой. По умолчанию
+# ПУСТО. Раньше здесь стояла константа f_WT=2, которую нельзя было выключить, и
+# она отрезала 60–75% вакансий: замер 2026-08-03 за неделю дал «python
+# developer» 1000+ удалённых против 3000+ всего, «ai engineer» — 2000+ против
+# 8000+. Человеку, готовому к релокации, этот фильтр убирал именно то, что ему
+# подходит.
+LINKEDIN_WORKPLACE = os.environ.get("LINKEDIN_WORKPLACE", "")
+# Сколько страниц выдачи проходить по каждому запросу (по 25 вакансий).
+LINKEDIN_PAGES = int(os.environ.get("LINKEDIN_PAGES", "2"))
+# Wellfound: у него в ссылке поиска тоже был вшит remote=true.
+WELLFOUND_REMOTE_ONLY = os.environ.get(
+    "WELLFOUND_REMOTE_ONLY", "false").lower() == "true"
 
 # RemoteOK / Remotive (HTTP-only platforms — no browser, no login).
 HTTP_USER_AGENT = os.environ.get(
@@ -176,9 +207,15 @@ REMOTIVE_API_URL = os.environ.get(
 # AI relevance filtering of search results.
 RELEVANCE_ENABLED = os.environ.get("RELEVANCE_ENABLED", "true").lower() == "true"
 MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))
-MATCH_MAX_JOBS = int(os.environ.get("MATCH_MAX_JOBS", "12"))  # per platform per run
+MATCH_MAX_JOBS = int(os.environ.get("MATCH_MAX_JOBS", "30"))  # per platform per run
 SEARCH_PROFILE_PATH = os.environ.get(
     "SEARCH_PROFILE_PATH", str(_ROOT / "sender" / "search_profile.txt"))
+# Локальная память о вакансиях, которые скорер уже отверг: без неё каждый
+# прогон заново качал их описания и заново платил за скоринг, а сами они
+# занимали весь бюджет MATCH_MAX_JOBS. Файл вспомогательный (gitignored):
+# потерять его значит один раз переоценить отказников, не больше.
+SCORED_OUT_PATH = os.environ.get(
+    "SCORED_OUT_PATH", str(_ROOT / "sender" / ".scored_out.json"))
 # Human-like delay between scrape actions.
 PACING_MIN_SECONDS = int(os.environ.get("PACING_MIN_SECONDS", "2"))
 PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))

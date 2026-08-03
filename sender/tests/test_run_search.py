@@ -96,3 +96,57 @@ def test_run_search_skips_already_known_before_scoring():
                        scorer=_Scorer(), profile="P", threshold=60, max_jobs=10)
     assert added == 1
     assert s.described == ["https://x/new"]   # the dup was never described/scored
+
+
+# --- вакансия, отвергнутая скорером, больше не оценивается --------------------
+#
+# Отказник не сохранялся никуда: known_urls() читает только сохранённых
+# кандидатов. Каждый следующий прогон снова качал его описание и снова платил за
+# скоринг — а так как порядок выдачи детерминированный, одни и те же отказники
+# занимали весь бюджет, и вакансии за ними не начинались никогда.
+
+class _FakeScoredOut:
+    def __init__(self, known=()):
+        self._known = set(known)
+        self.saved = False
+
+    def known(self):
+        return set(self._known)
+
+    def add(self, url):
+        self._known.add(normalize_url(url))
+
+    def save(self):
+        self.saved = True
+
+
+def test_a_rejected_job_is_remembered():
+    store = _FakeScoredOut()
+    drop = Candidate("linkedin", "job", "https://x/drop", "drop", "c", "", "x", "")
+    run_search(["linkedin"], {"linkedin": _FakeSearcher([drop])}, _FakeRepo(),
+               keywords=["junior"], location="Worldwide", limit=15,
+               scorer=_Scorer(), profile="P", threshold=60, max_jobs=10,
+               scored_out=store)
+
+    assert "https://x/drop" in store.known()
+    assert store.saved
+
+
+def test_a_remembered_reject_is_never_described_again():
+    store = _FakeScoredOut(known=["https://x/old"])
+    old = Candidate("linkedin", "job", "https://x/old", "keep", "c", "", "x", "")
+    new = Candidate("linkedin", "job", "https://x/new", "keep", "c", "", "x", "")
+    s = _FakeSearcher([old, new])
+    run_search(["linkedin"], {"linkedin": s}, _FakeRepo(),
+               keywords=["junior"], location="Worldwide", limit=15,
+               scorer=_Scorer(), profile="P", threshold=60, max_jobs=10,
+               scored_out=store)
+
+    assert s.described == ["https://x/new"]
+
+
+def test_without_a_store_everything_still_works():
+    """Память — необязательная деталь: без неё поиск обязан работать как раньше."""
+    added = run_search(["linkedin"], {"linkedin": _FakeSearcher([_cand("https://x/1")])},
+                       _FakeRepo(), keywords=["junior"], location="Worldwide", limit=15)
+    assert added == 1

@@ -67,9 +67,11 @@ class _LiveCard:
 class HHSearcher:
     name = "hh"
 
-    def __init__(self, storage_state_path: str, headless: bool = False):
+    def __init__(self, storage_state_path: str, headless: bool = False,
+                 per_keyword: int = 25):
         self._storage_state_path = storage_state_path
         self._headless = headless
+        self._per_keyword = per_keyword
         self._pw = None
         self._browser = None
         self._page = None
@@ -123,7 +125,7 @@ class HHSearcher:
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         found: list[Candidate] = []
         seen: set[str] = set()
-        per_kw = per_keyword_limit(limit, len(keywords_list))
+        per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         for query in keywords_list:
             kw_found = 0
             for page_n in range(SEARCH_PAGES):
