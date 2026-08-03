@@ -1,5 +1,7 @@
 """Use-case: generate a personalized outreach message for a lead."""
 from app.domain.lead import Lead
+from app.domain.message_language import detect_language
+from app.domain.signature import localize_signature
 
 
 class GenerateMessage:
@@ -12,14 +14,30 @@ class GenerateMessage:
         # cv_text здесь это запасной вариант: реальное CV выбирается под роль
         # лида и приходит в execute/execute_with_note отдельным аргументом.
 
+    def _signature_for(self, lead: Lead) -> str:
+        """Подпись на языке письма.
+
+        Модель её не пишет — это фиксированный блок из signature.txt, который
+        клеится уже после генерации, поэтому language_rule на него не
+        действует. Английское письмо уезжало с русским «С уважением, Bolatbek»
+        в конце: единственное русское слово в остальном английском тексте.
+
+        Язык берётся из ТОГО ЖЕ текста, из которого его берёт правило для
+        модели (openai_client), — иначе письмо и подпись разъедутся.
+        """
+        return localize_signature(
+            self._signature_text,
+            detect_language(lead.vacancy_context or lead.raw_text))
+
     def execute(self, lead: Lead, cv_text: str = "") -> str:
         body = self._ai.generate(
             cv_text=cv_text or self._cv_text,
             profile_text=self._profile_text,
             vacancy_context=lead.vacancy_context or lead.raw_text,
         )
-        if self._signature_text:
-            return f"{body}\n\n{self._signature_text}"
+        signature = self._signature_for(lead)
+        if signature:
+            return f"{body}\n\n{signature}"
         return body
 
     def execute_with_note(self, lead: Lead, note_limit: int,
@@ -35,8 +53,9 @@ class GenerateMessage:
             vacancy_context=lead.vacancy_context or lead.raw_text,
             note_limit=note_limit,
         )
-        if self._signature_text:
-            letter = f"{letter}\n\n{self._signature_text}"
+        signature = self._signature_for(lead)
+        if signature:
+            letter = f"{letter}\n\n{signature}"
         return letter, note
 
 
