@@ -145,6 +145,38 @@ def test_a_remembered_reject_is_never_described_again():
     assert s.described == ["https://x/new"]
 
 
+# --- дубли ВНУТРИ одного прогона ---------------------------------------------
+#
+# Локации перекрываются по построению: «Worldwide» включает все страны, а
+# «European Union» — Германию, Нидерланды и Польшу. Замер живого LinkedIn
+# 2026-08-03 по одному слову и трём локациям: 75 карточек, 65 уникальных, то
+# есть 13% дублей — и каждый занимал бы отдельный слот в бюджете скоринга.
+
+def test_the_same_job_found_twice_is_scored_once():
+    repo = _FakeRepo()
+    same = "https://x/keep"
+    s = _FakeSearcher([
+        Candidate("linkedin", "job", same, "keep", "c", "", "x", ""),
+        Candidate("linkedin", "job", same + "?utm=eu", "keep", "c", "", "x", ""),
+    ])
+    added = run_search(["linkedin"], {"linkedin": s}, repo,
+                       keywords=["junior"], location="Worldwide", limit=15,
+                       scorer=_Scorer(), profile="P", threshold=60, max_jobs=10)
+
+    assert len(s.described) == 1
+    assert added == 1
+
+
+def test_deduplication_happens_even_without_a_scorer():
+    """Без скоринга дубль просто уезжает в лист второй строкой."""
+    repo = _FakeRepo()
+    added = run_search(["linkedin"], {"linkedin": _FakeSearcher(
+        [_cand("https://x/1"), _cand("https://x/1?ref=a"), _cand("https://x/2")])},
+        repo, keywords=["junior"], location="Worldwide", limit=15)
+
+    assert added == 2
+
+
 def test_without_a_store_everything_still_works():
     """Память — необязательная деталь: без неё поиск обязан работать как раньше."""
     added = run_search(["linkedin"], {"linkedin": _FakeSearcher([_cand("https://x/1")])},

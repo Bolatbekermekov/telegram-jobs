@@ -7,6 +7,30 @@ from app.application.relevance import score_and_filter
 from app.domain.candidate import normalize_url
 
 
+def _unique(candidates):
+    """Одна вакансия — одна карточка, даже если её нашли несколько запросов.
+
+    Локации перекрываются по построению: «Worldwide» включает все страны, а
+    «European Union» — Германию, Нидерланды и Польшу, поэтому одна и та же
+    вакансия приходит из нескольких запросов одного прогона. Замер живого
+    LinkedIn 2026-08-03 по одному слову и трём локациям: 75 карточек, 65
+    уникальных. Без этой склейки каждый дубль занимал бы отдельный слот в
+    бюджете скоринга и стоил бы отдельного вызова модели.
+
+    Дедупликация в листе (`known_urls`) от этого не спасает: она сравнивает с
+    УЖЕ СОХРАНЁННЫМИ строками, а два одинаковых URL внутри одной выдачи для неё
+    оба новые.
+    """
+    seen, out = set(), []
+    for c in candidates:
+        key = normalize_url(c.url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
                scored_out=None) -> int:
@@ -23,7 +47,7 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
         searcher = searchers[platform]
         try:
             searcher.start()
-            found = searcher.search(keywords, location, limit)
+            found = _unique(searcher.search(keywords, location, limit))
             if scorer is not None:
                 # Drop already-saved jobs BEFORE scoring so max_jobs counts fresh
                 # ones and we never spend OpenAI calls on duplicates.
