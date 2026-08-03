@@ -177,6 +177,30 @@ def test_deduplication_happens_even_without_a_scorer():
     assert added == 2
 
 
+# --- сколько времени ушло на площадку ----------------------------------------
+
+def test_each_platform_reports_its_time_and_yield():
+    seen = []
+    searchers = {"linkedin": _FakeSearcher([_cand("https://x/1")]),
+                 "wellfound": _FakeSearcher([])}
+    run_search(["linkedin", "wellfound"], searchers, _FakeRepo(),
+               keywords=["junior"], location="Worldwide", limit=15,
+               on_platform_done=lambda p, secs, n: seen.append((p, n, secs >= 0)))
+
+    assert seen == [("linkedin", 1, True), ("wellfound", 0, True)]
+
+
+def test_a_failed_platform_is_reported_as_a_failure_not_as_an_empty_one():
+    """Иначе площадка, упавшая на первой секунде, неотличима от площадки, где
+    просто ничего не нашлось."""
+    seen = []
+    run_search(["linkedin"], {"linkedin": _FakeSearcher([], boom=True)}, _FakeRepo(),
+               keywords=["junior"], location="Worldwide", limit=15,
+               on_platform_done=lambda p, secs, n: seen.append((p, n)))
+
+    assert seen == [("linkedin", None)]
+
+
 def test_without_a_store_everything_still_works():
     """Память — необязательная деталь: без неё поиск обязан работать как раньше."""
     added = run_search(["linkedin"], {"linkedin": _FakeSearcher([_cand("https://x/1")])},

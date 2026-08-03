@@ -157,6 +157,8 @@ class WellfoundChannel:
     name = "wellfound"
     body_limit = None
     needs_subject = False
+    # Форма отклика Wellfound принимает только текст — файла там нет.
+    supports_attachment = False
 
     def __init__(self, cdp_url: str, dry_run: bool = False):
         self._cdp_url = cdp_url

@@ -166,7 +166,8 @@ class SheetsRepo:
         records = self._ws.get_all_records(expected_headers=COLUMNS)
         return [r for r in (record_to_sent(rec) for rec in records) if r is not None]
 
-    def mark_sent(self, lead: Lead, message: str, status: str) -> None:
+    def mark_sent(self, lead: Lead, message: str, status: str,
+                  note: str = "") -> None:
         """Record a delivered outreach — message, status and timestamp at once.
 
         Сообщение / Статус / Дата отправки are adjacent columns, so this is one
@@ -180,10 +181,19 @@ class SheetsRepo:
         formula.
         """
         now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+        # «Заметка» стоит сразу за «Датой отправки», поэтому она уезжает тем же
+        # ранговым write-ом — отдельный вызов мог бы лечь только наполовину.
+        # Без заметки диапазон намеренно короче: пустая строка затёрла бы то,
+        # что там уже написано (например, причину прошлой неудачи).
+        values = [message, status, now]
+        last_col = COL_DATE_SENT
+        if note:
+            values.append(note)
+            last_col = COL_NOTE
         cells = (f"{rowcol_to_a1(lead.row, COL_MESSAGE)}"
-                 f":{rowcol_to_a1(lead.row, COL_DATE_SENT)}")
+                 f":{rowcol_to_a1(lead.row, last_col)}")
         _with_retry(lambda: self._ws.update(
-            [[message, status, now]],
+            [values],
             cells,
             value_input_option=ValueInputOption.raw,
         ))

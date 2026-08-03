@@ -43,8 +43,8 @@ class _Repo:
     def mark_status(self, lead, status, note=""):
         self.statuses.append((lead.lead_id, status, note))
 
-    def mark_sent(self, lead, message, status):
-        self.sent.append((lead.lead_id, message, status))
+    def mark_sent(self, lead, message, status, note=""):
+        self.sent.append((lead.lead_id, message, status, note))
 
     def update_vacancy(self, lead, vacancy_context):
         self.vacancies.append((lead.lead_id, vacancy_context))
@@ -190,9 +190,35 @@ def test_an_accepted_invite_gets_the_letter_and_becomes_sent():
     _run(repo, channel)
 
     assert len(channel.sent) == 1
-    (lead_id, body, status), = repo.sent
+    (lead_id, body, status, _note), = repo.sent
     assert (lead_id, status) == ("79", STATUS_SENT)
     assert "вакансия" in body.lower()
+
+
+def test_the_note_records_which_cv_actually_went_out(monkeypatch):
+    """Резюме выбирается под роль, а в листе от этого не оставалось следа —
+    какой из восьми PDF получил рекрутёр, узнать было неоткуда."""
+    monkeypatch.setattr(config, "ATTACH_CV", True, raising=False)
+    repo, channel = _Repo([_lead()]), _Channel(state="accepted")
+    _run(repo, channel)
+
+    (_, _, _, note), = repo.sent
+    assert note == "CV: qa.pdf"
+
+
+def test_a_channel_without_attachments_says_so_instead_of_naming_a_file(monkeypatch):
+    """Wellfound принимает только текст: написать «CV: …pdf» значило бы
+    утверждать, что файл ушёл, — а он не уходил."""
+    monkeypatch.setattr(config, "ATTACH_CV", True, raising=False)
+
+    class _NoFiles(_Channel):
+        supports_attachment = False
+
+    repo = _Repo([_lead()])
+    _run(repo, _NoFiles(state="accepted"))
+
+    (_, _, _, note), = repo.sent
+    assert "без CV" in note and ".pdf" not in note
 
 
 def test_an_accepted_invite_carries_the_cv(monkeypatch):

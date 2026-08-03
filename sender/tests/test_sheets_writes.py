@@ -134,6 +134,29 @@ def test_mark_sent_writes_message_status_and_date_in_a_single_call():
     assert values[0][1] == "sent"
 
 
+def test_mark_sent_writes_the_note_in_the_same_call():
+    """Сообщение / Статус / Дата отправки / Заметка стоят подряд, поэтому
+    заметка о резюме уезжает тем же ранговым write-ом — отдельный вызов мог бы
+    лечь только наполовину и оставить строку без статуса."""
+    ws = _FakeWorksheet()
+    _repo(ws).mark_sent(_Lead(), "тело", "sent", note="CV: Bolatbek_QA.pdf")
+
+    assert ws.calls == 1
+    (values, cells, _), = ws.updates
+    assert cells == "G7:J7"
+    assert values[0][3] == "CV: Bolatbek_QA.pdf"
+
+
+def test_mark_sent_without_a_note_does_not_touch_that_cell():
+    """Иначе отправка затирала бы заметку, оставленную человеком или прошлой
+    неудачей."""
+    ws = _FakeWorksheet()
+    _repo(ws).mark_sent(_Lead(), "тело", "sent")
+
+    (_, cells, _), = ws.updates
+    assert cells == "G7:I7"
+
+
 def test_mark_sent_stores_a_leading_equals_as_text_not_a_formula():
     """The body is model-generated from a scraped vacancy — never evaluate it."""
     ws = _FakeWorksheet()

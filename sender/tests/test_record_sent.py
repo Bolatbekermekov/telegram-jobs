@@ -19,20 +19,30 @@ class _OkRepo:
     def __init__(self):
         self.calls = []
 
-    def mark_sent(self, lead, body, status):
-        self.calls.append((lead, body, status))
+    def mark_sent(self, lead, body, status, note=""):
+        self.calls.append((lead, body, status, note))
 
 
 class _BrokenRepo:
-    def mark_sent(self, lead, body, status):
+    def mark_sent(self, lead, body, status, note=""):
         raise RuntimeError("APIError: [-1]: <!DOCTYPE html> 502")
 
 
 def test_a_successful_write_reports_true():
     repo = _OkRepo()
     assert _record_sent(repo, _Lead(), "тело", "telegram") is True
-    (_, body, status), = repo.calls
+    (_, body, status, _note), = repo.calls
     assert (body, status) == ("тело", STATUS_SENT)
+
+
+def test_the_cv_that_went_out_is_written_into_the_note():
+    """Резюме выбирается под роль, но в листе от этого не оставалось следа —
+    какой из восьми PDF получил рекрутёр, узнать было неоткуда."""
+    repo = _OkRepo()
+    _record_sent(repo, _Lead(), "тело", "telegram",
+                 note="CV: Bolatbek_Yermekov_Backend_Go.pdf")
+    (_, _, _, note), = repo.calls
+    assert note == "CV: Bolatbek_Yermekov_Backend_Go.pdf"
 
 
 def test_a_failed_write_does_not_raise():

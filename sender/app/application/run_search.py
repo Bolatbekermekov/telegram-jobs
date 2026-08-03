@@ -3,6 +3,8 @@
 One platform failing neither stops the others nor kills the caller's loop.
 Returns the number of new candidates written.
 """
+import time
+
 from app.application.relevance import score_and_filter
 from app.domain.candidate import normalize_url
 
@@ -33,7 +35,7 @@ def _unique(candidates):
 
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
-               scored_out=None) -> int:
+               scored_out=None, on_platform_done=None) -> int:
     """`scored_out` — память о вакансиях, которые скорер уже отверг.
 
     Без неё отказник не сохранялся никуда (`known_urls()` читает только
@@ -45,6 +47,11 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
     added = 0
     for platform in platforms:
         searcher = searchers[platform]
+        # Замер идёт вокруг ВСЕЙ работы по площадке, включая скоринг: он и есть
+        # самая долгая её часть (страница описания плюс вызов модели на каждую
+        # вакансию), и без него цифра не отвечала бы на вопрос «где застряли».
+        started = time.monotonic()
+        gained = None
         try:
             searcher.start()
             found = _unique(searcher.search(keywords, location, limit))
@@ -61,7 +68,8 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                     # score_and_filter отдаёт кандидата, память хранит ссылку.
                     on_reject=(None if scored_out is None
                                else lambda c: scored_out.add(c.url)))
-            added += candidates_repo.add_new(found)
+            gained = candidates_repo.add_new(found)
+            added += gained
         except Exception as exc:  # noqa: BLE001 — isolate per-platform failures
             if on_error is not None:
                 on_error(platform, exc)
@@ -70,6 +78,13 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                 searcher.stop()
             except Exception:  # noqa: BLE001
                 pass
+            if on_platform_done is not None:
+                # `gained is None` = площадка упала. Без этого различия падение
+                # на первой секунде читается как «просто ничего не нашлось».
+                try:
+                    on_platform_done(platform, time.monotonic() - started, gained)
+                except Exception:  # noqa: BLE001 — отчёт не должен ронять поиск
+                    pass
     if scored_out is not None:
         # После всех платформ: упасть на записи файла кэша значит потерять уже
         # найденных кандидатов, а они дороже памяти об отказниках.

@@ -36,6 +36,7 @@ from app.application.send_plan import (
     unresolved_thread,
 )
 from app.domain.invite_age import expired_note, invite_expired
+from app.domain.sent_note import cv_note
 from app.domain.outreach_history import (
     SentRecord,
     duplicate_reason,
@@ -78,7 +79,8 @@ def _show(message: str) -> None:
     print("\n--- СООБЩЕНИЕ ---\n" + message + "\n-----------------")
 
 
-def _record_sent(repo, lead, body: str, platform: str, history=None) -> bool:
+def _record_sent(repo, lead, body: str, platform: str, history=None,
+                 note: str = "") -> bool:
     """Write a delivered send to the sheet; report whether the write landed.
 
     The message is already in the recruiter's inbox by the time this runs, so a
@@ -100,7 +102,7 @@ def _record_sent(repo, lead, body: str, platform: str, history=None) -> bool:
                                   vacancy=lead.vacancy_context or lead.raw_text,
                                   sent_at=datetime.now(), lead_id=lead.lead_id))
     try:
-        repo.mark_sent(lead, body, STATUS_SENT)
+        repo.mark_sent(lead, body, STATUS_SENT, note=note)
         return True
     except Exception as exc:  # noqa: BLE001 — already delivered; never raise here
         print("\n" + "!" * 62)
@@ -114,14 +116,14 @@ def _record_sent(repo, lead, body: str, platform: str, history=None) -> bool:
         return False
 
 
-def _notify_done(platforms, added: int) -> None:
+def _notify_done(platforms, added: int, timings=None) -> None:
     """Best-effort Telegram ping after a search; no-op unless token+chat configured."""
     if not (config.TELEGRAM_BOT_TOKEN and config.NOTIFY_CHAT_ID):
         return
     from app.application.notify import search_done_message
     from app.infrastructure.telegram_notify import send_telegram
     send_telegram(config.TELEGRAM_BOT_TOKEN, config.NOTIFY_CHAT_ID,
-                  search_done_message(list(platforms), added))
+                  search_done_message(list(platforms), added, timings))
 
 
 def _scored_out_store():
@@ -266,7 +268,10 @@ def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None
         content = format_for_channel(channel, body, subject, attachment, note)
         result = SendOutreach(channel).execute(lead, content)
         if result.ok:
-            if _record_sent(repo, lead, content.body, "linkedin"):
+            if _record_sent(repo, lead, content.body, "linkedin",
+                            note=cv_note(attachment,
+                                         getattr(channel, "supports_attachment", True),
+                                         config.ATTACH_CV)):
                 print(f"   ✅ #{lead.lead_id}: письмо отправлено.")
             continue
         if result.manual:
@@ -563,7 +568,11 @@ def run() -> None:
 
             result = sender.execute(lead, content)
             if result.ok:
-                if not _record_sent(repo, lead, content.body, platform, sent_history):
+                if not _record_sent(
+                        repo, lead, content.body, platform, sent_history,
+                        note=cv_note(attachment,
+                                     getattr(channel, "supports_attachment", True),
+                                     config.ATTACH_CV)):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
@@ -580,7 +589,12 @@ def run() -> None:
                 # повторится), но в таблицу кладём то, что реально дошло: запись
                 # content.body утверждала бы, что рекрутёр получил письмо, которого
                 # никто не получал.
-                if not _record_sent(repo, lead, content.note or content.body, platform, sent_history):
+                if not _record_sent(
+                        repo, lead, content.note or content.body, platform,
+                        sent_history,
+                        # Файл сюда не уходит по устройству LinkedIn: к запросу
+                        # на контакт прикладывается только записка.
+                        note="без CV (запрос на контакт — файл не прикладывается)"):
                     print("🛑 Останавливаю прогон, пока строка не поправлена.")
                     break
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
@@ -650,15 +664,17 @@ def run_worker():
 
     def run_one(req):
         plats = platforms_for(req.platform)
+        timings = []
         added = run_search(
             plats, searchers, candidates,
             keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
             limit=config.SEARCH_LIMIT_PER_PLATFORM,
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
             scored_out=_scored_out_store(),
+            on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
             **_relevance_args(),
         )
-        _notify_done(plats, added)
+        _notify_done(plats, added, timings)
         return added
 
     tz = _dt.timezone(_dt.timedelta(hours=config.AUTO_SEARCH_TZ_OFFSET))
@@ -707,16 +723,25 @@ def run_search_once(platforms):
         run_login_hh()
     searchers = {p: build_searcher(p) for p in platforms}
     print(f"Ищу вакансии: {', '.join(platforms)}...")
+    timings = []
+
+    def _platform_done(platform, secs, n):
+        from app.application.notify import format_duration
+        timings.append((platform, secs, n))
+        got = "ошибка" if n is None else (f"+{n}" if n else "пусто")
+        print(f"   {platform}: {format_duration(secs)}, {got}")
+
     added = run_search(
         platforms, searchers, candidates,
         keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
         limit=config.SEARCH_LIMIT_PER_PLATFORM,
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
         scored_out=_scored_out_store(),
+        on_platform_done=_platform_done,
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
-    _notify_done(platforms, added)
+    _notify_done(platforms, added, timings)
 
 
 def run_login_browser():

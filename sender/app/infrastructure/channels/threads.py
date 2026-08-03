@@ -78,6 +78,8 @@ class ThreadsChannel:
     name = "threads"
     body_limit = _BODY_LIMIT
     needs_subject = False
+    # ЛС в Threads файлов не принимает — см. докстроку модуля.
+    supports_attachment = False
 
     def __init__(self, state_path: str, headless: bool = False):
         self._state_path = state_path
