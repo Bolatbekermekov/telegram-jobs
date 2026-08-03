@@ -107,6 +107,44 @@ def _match_choice(options: list[str], *wants: str) -> int | None:
     return None
 
 
+# «Сколько лет опыта»: и общий вопрос, и привязанный к технологии, EN и RU.
+# «experience» без слова про годы сюда не входит намеренно — это уже просьба
+# рассказать, а не назвать число.
+_EXPERIENCE_RE = re.compile(
+    r"years?\s+of\s+experience|experience\s*\(\s*years?|years?\s+experience|"
+    # «Опыт работы (лет)» — между словами стоит ещё одно, поэтому не \w*, а
+    # короткий промежуток: длинную прозу всё равно отсечёт _MAX_LABEL_CHARS.
+    r"how\s+many\s+years|опыт[^\n]{0,15}лет|лет\s+опыта|стаж",
+    re.I)
+
+# Число внутри варианта списка: «3-5 years» -> 3, «5+» -> 5.
+_LEADING_NUMBER = re.compile(r"\d+")
+
+
+def _experience_answer(f: FieldObs, years: int) -> FillAction:
+    """Ответ на вопрос о годах опыта: число, а в списке — подходящий диапазон.
+
+    Списки почти всегда предлагают диапазоны («0-1», «1-3», «3-5», «5+»).
+    Берём первый, чьё НИЖНЕЕ значение уже не меньше нужного, иначе самый
+    старший из доступных: «0-1» это не то, что человек про себя говорит.
+    """
+    if f.options:
+        best = None
+        for i, opt in enumerate(f.options):
+            m = _LEADING_NUMBER.search(str(opt))
+            low_bound = int(m.group(0)) if m else -1
+            if low_bound >= years:
+                best = i
+                break
+            if low_bound >= 0:
+                best = i          # запоминаем самый старший из тех, что ниже
+        if best is None:
+            best = len(f.options) - 1
+        return FillAction(field=f, choice_index=best, value=f.options[best],
+                          source="profile")
+    return FillAction(field=f, value=str(years), source="profile")
+
+
 def _yes_no(f: FieldObs, yes: bool, source: str = "profile") -> FillAction:
     if f.options:
         idx = _match_choice(f.options, "yes" if yes else "no")
@@ -115,7 +153,8 @@ def _yes_no(f: FieldObs, yes: bool, source: str = "profile") -> FillAction:
     return FillAction(field=f, value="Yes" if yes else "No", source=source)
 
 
-def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
+def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
+              cover_letter_path: str = "") -> FillAction:
     low = f"{f.label} {f.name}".strip().lower()
     # Length is judged on the LABEL alone, never on label+name. Ashby names every
     # field with a UUID ("8d640ab2-9852-452b-9798-92d28cba…"), which adds ~37
@@ -126,9 +165,19 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
     caption_len = len((f.label or "").strip() or low)
 
     if f.type == "file":
-        # Attach the CV only to a resume/CV upload — never to a cover-letter,
-        # portfolio, photo, or other document field we don't have a file for.
-        if re.search(r"cover|portfolio|photo|picture|certificate|transcript|other", low):
+        # Сопроводительное письмо — отдельный документ, и оно у нас есть: письмо
+        # под эту вакансию уже написано, PDF собирается из него же. Раньше поле
+        # оставалось пустым, и обязательное утаскивало заявку в `manual`.
+        if re.search(r"cover\s*letter|motivation|сопровод", low):
+            if cover_letter_path:
+                return FillAction(field=f, value=cover_letter_path, is_file=True,
+                                  source="cover_letter")
+            return FillAction(field=f, source="unmapped")
+        # Attach the CV only to a resume/CV upload — never to a portfolio, photo,
+        # or other document field we don't have a file for. Класть сюда резюме
+        # нельзя ни при каких условиях: работодатель получит не тот документ, и
+        # заметить это будет некому.
+        if re.search(r"portfolio|photo|picture|certificate|transcript|other", low):
             return FillAction(field=f, source="unmapped")
         return FillAction(field=f, value=cv_path, is_file=True, source="cv")
 
@@ -175,6 +224,18 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str) -> FillAction:
             if ans:
                 return FillAction(field=f, value=ans, source="custom")
             return FillAction(field=f, needs_ai=True, source="ai")
+
+    # «Сколько лет опыта» — вопрос с готовым ответом, а не повод звать модель.
+    # Замер 2026-08-03: до этого правила он возвращал `unmapped` во всех
+    # формулировках, и обязательное поле утаскивало всю заявку в `manual`, уже
+    # потратив генерацию письма и поднятый браузер. Встречается и в формах ATS,
+    # и в LinkedIn Easy Apply.
+    #
+    # Ограничение по длине подписи — как у зарплаты: «Расскажите об опыте работы
+    # в распределённых командах» это проза, и подставлять туда число бессмысленно.
+    if (caption_len <= _MAX_LABEL_CHARS and profile.min_experience_years > 0
+            and _EXPERIENCE_RE.search(low)):
+        return _experience_answer(f, profile.min_experience_years)
 
     # Salary is the one recognised field whose right answer depends on the JOB, not
     # on a number we carry around: "minimum you would accept, in £ per month" has a
@@ -307,7 +368,9 @@ def _only_the_real_resume_field(actions: list[FillAction]) -> None:
 
     An unlabelled file input is only used when nothing on the form names a resume.
     """
-    files = [a for a in actions if a.is_file]
+    # Сопроводительное письмо сюда не попадает: оно нацелено осознанно, по
+    # подписи поля, а правило написано против БЕЗЫМЯННОГО дропзона Ashby.
+    files = [a for a in actions if a.is_file and a.source != "cover_letter"]
     if len(files) < 2:
         return
     named = [a for a in files
@@ -319,8 +382,9 @@ def _only_the_real_resume_field(actions: list[FillAction]) -> None:
             a.is_file, a.value, a.source = False, "", "unmapped"
 
 
-def build_plan(obs: PageObservation, profile: ApplyProfile, cv_path: str) -> ApplyPlan:
-    actions = [map_field(f, profile, cv_path)
+def build_plan(obs: PageObservation, profile: ApplyProfile, cv_path: str,
+               cover_letter_path: str = "") -> ApplyPlan:
+    actions = [map_field(f, profile, cv_path, cover_letter_path)
                for f in obs.fields if is_fillable_field(f)]
     _drop_duplicated_country_code(actions)
     _only_the_real_resume_field(actions)

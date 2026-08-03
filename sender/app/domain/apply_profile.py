@@ -20,6 +20,11 @@ class ApplyProfile:
     work_authorization: str = ""
     needs_visa_sponsorship: bool = False
     desired_salary: str = ""
+    # Сколько лет опыта называть в ответ на вопрос «years of experience».
+    # 0 = не подставлять число, оставить вопрос модели. Такой вопрос есть и в
+    # формах ATS, и в LinkedIn Easy Apply, и часто он обязательный: без ответа
+    # вся заявка уходит в `manual`, уже потратив генерацию письма и браузер.
+    min_experience_years: int = 3
     open_to_relocation: bool = False
     notice_period: str = ""
     # Keys are lowercase question substrings -> ready answers ("" => let the AI answer).

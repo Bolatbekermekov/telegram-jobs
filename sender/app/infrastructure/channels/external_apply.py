@@ -559,6 +559,20 @@ def _page_unavailable(page) -> bool:
     return bool(_GONE_RE.search(text))
 
 
+# Подпись поля-загрузки, которое просит сопроводительное письмо.
+_COVER_LETTER_FILE_RE = re.compile(r"cover\s*letter|motivation|сопровод", re.I)
+
+
+def _wants_cover_letter_file(obs) -> bool:
+    """Есть ли на форме загрузка сопроводительного письма.
+
+    Спрашиваем до сборки PDF: tectonic это отдельный процесс на несколько
+    секунд, и запускать его на каждой форме, где такого поля нет, незачем.
+    """
+    return any(f.type == "file" and _COVER_LETTER_FILE_RE.search(f"{f.label} {f.name}")
+               for f in obs.fields)
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
@@ -591,7 +605,15 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     if not host_allowed(obs.url):
         raise ManualApplyRequired(f"незнакомый сайт, заполни вручную: {obs.url}")
 
-    plan = build_plan(obs, profile, cv_path)
+    # Сопроводительное письмо файлом. Собирается ИЗ УЖЕ НАПИСАННОГО письма, то
+    # есть ничего заново не выдумывается; если tectonic не установлен или сборка
+    # не удалась, вернётся пустая строка и поле останется незаполненным — ровно
+    # как было до этой возможности.
+    cover_letter = ""
+    if _wants_cover_letter_file(obs):
+        from app.infrastructure.cover_letter_pdf import render_cover_letter_pdf
+        cover_letter = render_cover_letter_pdf(content.body)
+    plan = build_plan(obs, profile, cv_path, cover_letter_path=cover_letter)
     answer_ai_fields(plan, answerer, vacancy_context or content.body)
     missing = plan.unmapped_required()
     if missing:

@@ -29,6 +29,9 @@ needs_visa_sponsorship: false
 open_to_relocation: true
 
 desired_salary: ""          # пусто — вопрос уйдёт модели
+# Сколько лет опыта называть в ответ на «years of experience».
+# 0 = не подставлять, оставить вопрос модели.
+min_experience_years: 3
 notice_period: "2 недели"
 
 # Готовые ответы на повторяющиеся вопросы форм.

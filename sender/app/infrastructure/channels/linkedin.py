@@ -743,7 +743,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
     status that reads like the send broke, on a lead nothing was ever wrong with.
     """
     from app.infrastructure.channels.external_apply import (
-        fill_fields, scrape_until_ready,
+        _wants_cover_letter_file, fill_fields, scrape_until_ready,
     )
     from app.application.auto_apply import answer_ai_fields, build_plan
 
@@ -764,7 +764,14 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
             # the contact step from the account itself, so a run without an apply
             # profile can still walk the flow — it just adds nothing of its own.
             obs, _route = scrape_until_ready(page)
-            plan = build_plan(obs, profile, cv_path)
+            # Easy Apply тоже спрашивает сопроводительное письмо файлом — там
+            # это отдельный шаг «Дополнительные документы». Собираем PDF из уже
+            # написанного письма; нет tectonic — поле останется пустым, как было.
+            cover_letter = ""
+            if _wants_cover_letter_file(obs):
+                from app.infrastructure.cover_letter_pdf import render_cover_letter_pdf
+                cover_letter = render_cover_letter_pdf(content.body)
+            plan = build_plan(obs, profile, cv_path, cover_letter_path=cover_letter)
             answer_ai_fields(plan, answerer, content.body)
             missing = plan.unmapped_required()
             if missing:
