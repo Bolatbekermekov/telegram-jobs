@@ -8,7 +8,9 @@ import re
 from urllib.parse import unquote, urlsplit
 
 from app.application.apply_guard import host_allowed, leaked_secrets
-from app.application.auto_apply import answer_ai_fields, build_plan
+from app.application.auto_apply import (
+    COVER_LETTER_RE, answer_ai_fields, build_plan,
+)
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
@@ -559,17 +561,13 @@ def _page_unavailable(page) -> bool:
     return bool(_GONE_RE.search(text))
 
 
-# Подпись поля-загрузки, которое просит сопроводительное письмо.
-_COVER_LETTER_FILE_RE = re.compile(r"cover\s*letter|motivation|сопровод", re.I)
-
-
 def _wants_cover_letter_file(obs) -> bool:
     """Есть ли на форме загрузка сопроводительного письма.
 
     Спрашиваем до сборки PDF: tectonic это отдельный процесс на несколько
     секунд, и запускать его на каждой форме, где такого поля нет, незачем.
     """
-    return any(f.type == "file" and _COVER_LETTER_FILE_RE.search(f"{f.label} {f.name}")
+    return any(f.type == "file" and COVER_LETTER_RE.search(f"{f.label} {f.name}")
                for f in obs.fields)
 
 

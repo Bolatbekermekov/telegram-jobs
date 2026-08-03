@@ -41,6 +41,27 @@ def test_without_a_letter_the_field_stays_as_it_was():
     assert got.value == ""
 
 
+def test_the_letter_is_recognised_in_the_languages_we_search_in():
+    """Замер 2026-08-03: «Anschreiben», «List motywacyjny», «Lettera di
+    presentazione» и «Carta de presentación» получали РЕЗЮМЕ вместо письма —
+    работодателю уходил не тот документ, и заметить это было некому. Германия,
+    Польша и Италия входят в SEARCH_LOCATIONS."""
+    for label in ("Anschreiben", "Motivationsschreiben", "List motywacyjny",
+                  "Lettera di presentazione", "Carta de presentación",
+                  "Lettre de motivation", "Сопроводительное письмо",
+                  "Letter of motivation", "Cover Letter (optional)"):
+        got = map_field(_file_field(label), PROFILE, CV, cover_letter_path=LETTER)
+        assert got.value == LETTER, label
+
+
+def test_a_vague_documents_field_never_gets_the_cv():
+    """«Additional documents» — это не поле резюме. Резюме уже загружено в своё,
+    и второй копией мы бы вытеснили то, что работодатель там ждал."""
+    for label in ("Additional documents", "Other documents", "Supporting documents"):
+        got = map_field(_file_field(label), PROFILE, CV, cover_letter_path=LETTER)
+        assert got.source != "cv", label
+
+
 def test_other_document_uploads_are_still_left_alone():
     """Портфолио, фото и справки — не письмо и не резюме."""
     for label in ("Portfolio", "Photo", "Certificate"):

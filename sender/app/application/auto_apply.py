@@ -107,6 +107,29 @@ def _match_choice(options: list[str], *wants: str) -> int | None:
     return None
 
 
+# Подпись поля, которое просит СОПРОВОДИТЕЛЬНОЕ ПИСЬМО, на языках стран, по
+# которым мы ищем. Замер 2026-08-03: «Anschreiben» (стандартное немецкое слово),
+# «List motywacyjny», «Lettera di presentazione» и «Carta de presentación»
+# получали РЕЗЮМЕ вместо письма — работодателю уходил не тот документ, и
+# заметить это было некому. Германия, Польша и Италия входят в SEARCH_LOCATIONS.
+COVER_LETTER_RE = re.compile(
+    r"cover\s*letter|motivation(al)?\s*letter|letter\s+of\s+motivation|"
+    r"anschreiben|motivationsschreiben|"          # DE
+    r"lettre\s+de\s+motivation|"                  # FR
+    r"list\s+motywacyjny|"                        # PL
+    r"lettera\s+di\s+presentazione|"             # IT
+    r"carta\s+de\s+presentaci|"                  # ES
+    r"сопровод",                                  # RU
+    re.I)
+
+# Поля-загрузки, куда резюме класть НЕЛЬЗЯ, даже если мы не знаем, что там нужно.
+# «Additional documents» — не поле резюме: своё резюме уже загружено, и второй
+# копией мы вытеснили бы то, чего работодатель там ждал.
+_NOT_A_RESUME_UPLOAD_RE = re.compile(
+    r"portfolio|photo|picture|certificate|transcript|other|"
+    r"additional\s+document|supporting\s+document|документ",
+    re.I)
+
 # «Сколько лет опыта»: и общий вопрос, и привязанный к технологии, EN и RU.
 # «experience» без слова про годы сюда не входит намеренно — это уже просьба
 # рассказать, а не назвать число.
@@ -168,7 +191,7 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         # Сопроводительное письмо — отдельный документ, и оно у нас есть: письмо
         # под эту вакансию уже написано, PDF собирается из него же. Раньше поле
         # оставалось пустым, и обязательное утаскивало заявку в `manual`.
-        if re.search(r"cover\s*letter|motivation|сопровод", low):
+        if COVER_LETTER_RE.search(low):
             if cover_letter_path:
                 return FillAction(field=f, value=cover_letter_path, is_file=True,
                                   source="cover_letter")
@@ -177,7 +200,7 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         # or other document field we don't have a file for. Класть сюда резюме
         # нельзя ни при каких условиях: работодатель получит не тот документ, и
         # заметить это будет некому.
-        if re.search(r"portfolio|photo|picture|certificate|transcript|other", low):
+        if _NOT_A_RESUME_UPLOAD_RE.search(low):
             return FillAction(field=f, source="unmapped")
         return FillAction(field=f, value=cv_path, is_file=True, source="cv")
 
