@@ -15,6 +15,10 @@ class ApplyProfile:
     city: str = ""
     country: str = ""
     linkedin: str = ""
+    # Телеграм-ник в форме «@nick». Формы спрашивают его наравне с почтой
+    # («Telegram handle»), а ответ на него обязан совпадать с тем, что уходит в
+    # подписи письма, иначе работодатель получает два разных ника.
+    telegram: str = ""
     github: str = ""
     portfolio: str = ""
     work_authorization: str = ""

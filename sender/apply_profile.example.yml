@@ -19,7 +19,11 @@ phone: "+7 777 000 00 00"
 city: "Алматы"
 country: "Казахстан"
 
+# linkedin и telegram перебиваются строками из sender/signature.txt, если они
+# там заполнены: контакт в форме отклика обязан совпадать с контактом в подписи
+# письма. Меняй его в signature.txt, здесь он нужен только как запасной.
 linkedin: "https://www.linkedin.com/in/ivanov"
+telegram: "@ivanov"
 github: "https://github.com/ivanov"
 portfolio: ""
 

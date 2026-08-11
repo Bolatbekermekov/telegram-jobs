@@ -1,16 +1,24 @@
 """Use-case: generate a personalized outreach message for a lead."""
+from app.domain.contacts import Contacts, canonicalize, parse_contacts
 from app.domain.lead import Lead
 from app.domain.message_language import detect_language
 from app.domain.signature import localize_signature
 
 
 class GenerateMessage:
-    def __init__(self, ai, cv_text: str, profile_text: str, signature_text: str = ""):
+    def __init__(self, ai, cv_text: str, profile_text: str, signature_text: str = "",
+                 contacts: Contacts | None = None):
         # ai: object with .generate(cv_text, profile_text, vacancy_context) -> str
         self._ai = ai
         self._cv_text = cv_text
         self._profile_text = profile_text
         self._signature_text = signature_text.strip()
+        # Контакты по умолчанию берутся из той же подписи: она и есть их
+        # источник правды (app/domain/contacts.py). Модель видит CV, где записан
+        # СТАРЫЙ телеграм-ник, и переносит его в текст — в письме оказывались два
+        # разных ника сразу, наш в подписи и чужой в теле.
+        self._contacts = contacts if contacts is not None else parse_contacts(
+            self._signature_text)
         # cv_text здесь это запасной вариант: реальное CV выбирается под роль
         # лида и приходит в execute/execute_with_note отдельным аргументом.
 
@@ -37,8 +45,8 @@ class GenerateMessage:
         )
         signature = self._signature_for(lead)
         if signature:
-            return f"{body}\n\n{signature}"
-        return body
+            body = f"{body}\n\n{signature}"
+        return canonicalize(body, self._contacts)
 
     def execute_with_note(self, lead: Lead, note_limit: int,
                           cv_text: str = "") -> tuple[str, str]:
@@ -56,7 +64,8 @@ class GenerateMessage:
         signature = self._signature_for(lead)
         if signature:
             letter = f"{letter}\n\n{signature}"
-        return letter, note
+        # Записка тоже: её читает тот же человек, и ник в ней такой же наш.
+        return canonicalize(letter, self._contacts), canonicalize(note, self._contacts)
 
 
 def generate_body(generator, lead, cv_text: str = ""):

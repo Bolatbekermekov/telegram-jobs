@@ -24,7 +24,7 @@
 #   make apply_probe    -> LIVE routing check on the 3 real external-apply URLs (network; no submit)
 
 PYTHON ?= sender/.venv/bin/python
-TO ?= @bolatbekermeko_v
+TO ?= @bolatbek_yermekov
 
 .PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login_remoteok login_threads login search search_linkedin search_wellfound search_remoteok search_remotive search_hh bot_menu test-unit apply_probe
 

@@ -1,5 +1,6 @@
 """Map a platform string to a freshly-built (not yet started) OutreachChannel."""
 from app.application.answer_log import AnswerLog, wrap_answerer
+from app.application.hh_questions import canonicalize_answers
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
@@ -23,7 +24,12 @@ def _hh_answerer(config):
                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS)
         cv = load_cv_text(config.CV_PATH)
         profile = load_text_file(config.PROFILE_PATH)
-        return ai.answer_questions(cv, profile, vacancy_context, questions)
+        answers = ai.answer_questions(cv, profile, vacancy_context, questions)
+        # Один и тот же ник во всех ответах — тот, что стоит в подписи. Правка
+        # здесь, а не в каждом канале: этот answerer обслуживает и hh, и внешние
+        # формы, и LinkedIn Easy Apply. Журнал ответов вешается снаружи, поэтому
+        # в «Заметку» попадёт уже исправленное — то, что реально ушло.
+        return canonicalize_answers(answers, getattr(config, "CONTACTS", None))
 
     return answer
 
@@ -41,7 +47,8 @@ def _external_apply_deps(config, log=None):
     return {
         "enabled": True,
         "fn": external_apply,
-        "profile": load_apply_profile(config.APPLY_PROFILE_PATH),
+        "profile": load_apply_profile(config.APPLY_PROFILE_PATH,
+                                      getattr(config, "CONTACTS", None)),
         "cv_path": config.CV_PATH,
         # generic CV+profile AI answerer, обёрнутый журналом ответов
         "answerer": wrap_answerer(_hh_answerer(config), log) if log else _hh_answerer(config),

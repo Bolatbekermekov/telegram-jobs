@@ -27,6 +27,7 @@ _LABEL_RULES = [
     (re.compile(r"last name|surname|family name", re.I), lambda p: p.last_name),
     (re.compile(r"full name|your name|\bname\b", re.I), lambda p: p.full_name),
     (re.compile(r"linkedin", re.I), lambda p: p.linkedin),
+    (re.compile(r"telegram|телеграм|\btg\b", re.I), lambda p: p.telegram),
     (re.compile(r"github", re.I), lambda p: p.github),
     (re.compile(r"portfolio|personal website|website|\burl\b", re.I), lambda p: p.portfolio),
     (re.compile(r"\bcity\b|town", re.I), lambda p: p.city),
@@ -416,7 +417,11 @@ def build_plan(obs: PageObservation, profile: ApplyProfile, cv_path: str,
 
 def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
     """Fill needs_ai actions using the injected answerer. Reuses hh_questions.fill_plan
-    to clamp choices and normalise text, keeping one answer format across channels."""
+    to clamp choices and normalise text, keeping one answer format across channels.
+
+    Контакты в ответах модели приводятся к каноническим раньше, на самом
+    answerer-е (см. registry._hh_answerer): так один и тот же ник уходит и в
+    форму отклика, и в опросник hh, который сюда не заходит вовсе."""
     from app.application.hh_questions import fill_plan
 
     ai_actions = plan.ai_fields

@@ -9,6 +9,8 @@ A question is a dict: {"id": str, "type": "text"|"choice", "prompt": str,
 """
 import json
 
+from app.domain.contacts import canonicalize
+
 
 def parse_ai_answers(raw: str) -> dict:
     """Parse the model's JSON into {question_id: answer_dict}.
@@ -41,6 +43,25 @@ def parse_ai_answers(raw: str) -> dict:
         # 0 is falsy — the FIRST question's answer was thrown away twice over.
         if qid is not None:
             out[str(qid)] = a
+    return out
+
+
+def canonicalize_answers(answers_by_id, contacts) -> dict:
+    """Ответы модели, но с НАШИМИ контактами вместо любых других.
+
+    Модель отвечает по CV, а в CV записан старый телеграм-ник: на вопрос
+    «ваш telegram» она добросовестно переписывала его из документа, и
+    работодатель получал в форме один ник, а в подписи письма другой. Правится
+    здесь, на общем формате ответов, потому что через него проходят все три
+    пути: опросник hh, внешняя форма отклика и LinkedIn Easy Apply.
+    """
+    if not answers_by_id or not contacts:
+        return answers_by_id
+    out = {}
+    for qid, answer in answers_by_id.items():
+        if isinstance(answer, dict) and isinstance(answer.get("text"), str):
+            answer = {**answer, "text": canonicalize(answer["text"], contacts)}
+        out[qid] = answer
     return out
 
 

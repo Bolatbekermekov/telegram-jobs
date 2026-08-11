@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.domain.contacts import parse_contacts
 from app.domain.cv_files import find_any_cv
 
 # Load the shared .env at the project root (telegram-jobs/.env).
@@ -102,6 +103,11 @@ def _read_signature() -> str:
 
 
 SIGNATURE_TEXT = _read_signature()
+
+# Контакты отправителя, разобранные из подписи: один ник и один профиль на все
+# площадки. Всё остальное (поля формы отклика, ответы модели, тело письма)
+# приводится к ним — см. app/domain/contacts.py.
+CONTACTS = parse_contacts(SIGNATURE_TEXT)
 
 # --- Per-platform settings (all optional; a platform is enabled when configured) ---
 
