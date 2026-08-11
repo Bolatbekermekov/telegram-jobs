@@ -7,9 +7,11 @@ from app.application.send_plan import (
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
+    pause_after,
     skip_reason,
     unresolved_thread,
 )
+from app.application.send_outreach import SendResult
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 
 _KNOWN_T = {"telegram", "linkedin", "hh"}
@@ -381,3 +383,27 @@ def test_hold_is_not_skip():
     """`skip` is terminal — a typo must not burn the lead. `hold` writes no status,
     so the lead stays `new` and the next run offers it again."""
     assert CONFIRM_HOLD != CONFIRM_SKIP
+
+
+# --- анти-бан пауза ---------------------------------------------------------
+
+def test_a_real_send_is_followed_by_a_pause():
+    assert pause_after(SendResult(ok=True)) is True
+
+
+def test_an_invite_carrying_the_note_is_followed_by_a_pause():
+    """Записку читает живой человек, для площадки это отправленный текст."""
+    assert pause_after(SendResult(ok=False, invited=True)) is True
+
+
+def test_an_invite_without_a_note_is_not_worth_a_pause():
+    """Клик «Connect» и ни строчки текста. Минута простоя после него покупает
+    только простой — прогон стоял 107 секунд ради нажатой кнопки."""
+    assert pause_after(SendResult(ok=False, invited_plain=True)) is False
+
+
+def test_nothing_sent_means_nothing_to_wait_out():
+    for result in (SendResult(ok=False, rate_limited=True),
+                   SendResult(ok=False, manual=True),
+                   SendResult(ok=False, error="boom")):
+        assert pause_after(result) is False, result

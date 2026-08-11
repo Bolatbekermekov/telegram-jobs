@@ -32,6 +32,7 @@ from app.application.send_plan import (
     has_placeholder,
     hold_reason,
     needs_vacancy_refetch,
+    pause_after,
     skip_reason,
     unresolved_thread,
 )
@@ -606,9 +607,6 @@ def run() -> None:
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"✅ Отправлено [{platform}] "
                       f"(всего за прогон: {sent_per_platform[platform]}).")
-                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
-                print(f"⏳ Пауза {delay} c (анти-бан)...")
-                time.sleep(delay)
             elif result.invited:
                 # Запрос на контакт уходит с ЗАПИСКОЙ, а не с письмом целиком (см.
                 # _invite_note в linkedin.py) — и это весь охват на этого лида:
@@ -628,9 +626,6 @@ def run() -> None:
                 sent_per_platform[platform] = sent_per_platform.get(platform, 0) + 1
                 print(f"📨 Запрос на контакт с письмом отправлен [{platform}] "
                       f"(всего за прогон: {sent_per_platform[platform]}).")
-                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
-                print(f"⏳ Пауза {delay} c (анти-бан)...")
-                time.sleep(delay)
             elif result.invited_plain:
                 # The request reached them, our letter did not. Not a send: park
                 # as `invited` so every later run checks whether they accepted,
@@ -640,21 +635,34 @@ def run() -> None:
                 repo.mark_invited(lead, note=result.error)
                 print(f"🤝 Запрос на контакт БЕЗ письма [{platform}] — жду подтверждения "
                       f"(лид #{lead.lead_id} в 'invited').")
-                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
-                print(f"⏳ Пауза {delay} c (анти-бан)...")
-                time.sleep(delay)
             elif result.manual:
                 # Couldn't auto-apply (gate/unknown form); leave for a manual apply.
                 repo.mark_status(lead, STATUS_MANUAL, note=result.error)
                 print(f"✋ Нужен ручной отклик [{platform}]: {result.error}")
             elif result.rate_limited:
-                repo.mark_status(lead, STATUS_SKIPPED, note=result.error or "rate-limited")
+                # Статус НЕ пишем — ни `skipped`, ни `failed`. Ограничение это
+                # состояние площадки, а не брак лида: сообщение не ушло, а
+                # телеграмный спам-лимит («Too many requests») снимается сам за
+                # часы. Живой лид умирал молча, потому что `skipped` терминален
+                # (и вообще запрещён), а `failed` врал бы про причину.
+                # Оставляем `new` — ровно то, что докстрока skip_reason уже
+                # обещает и что получают остальные лиды этой площадки на
+                # guard'е в начале цикла.
                 rate_limited.add(platform)
                 print(f"🛑 Платформа '{platform}' ограничила нас ({result.error or 'rate-limited'}) "
-                      "— остальные её лиды оставляю на следующий прогон.")
+                      f"— лид #{lead.lead_id} и остальные её лиды оставляю "
+                      "на следующий прогон ('new').")
             else:
                 repo.mark_status(lead, STATUS_FAILED, note=result.error)
                 print(f"❌ Ошибка отправки: {result.error}")
+
+            if pause_after(result):
+                # Одна пауза на итерацию вместо трёх копий в ветках выше:
+                # правило «ждём только после того, что площадка видит как
+                # сообщение» живёт в send_plan.pause_after и закреплено тестом.
+                delay = random.randint(config.MIN_DELAY_SECONDS, config.MAX_DELAY_SECONDS)
+                print(f"⏳ Пауза {delay} c (анти-бан)...")
+                time.sleep(delay)
     finally:
         switcher.close()
 

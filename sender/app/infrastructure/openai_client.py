@@ -5,6 +5,7 @@ import re
 from openai import OpenAI
 
 from app.domain.message_language import detect_language, language_rule
+from app.domain.seniority import strip_seniority
 
 _QUESTIONS_SYSTEM = (
     "Ты отвечаешь на обязательные вопросы работодателя в отклике на hh.ru ОТ ЛИЦА "
@@ -63,7 +64,10 @@ _SYSTEM = (
     "(продукт, домен, стек; если упомянут AI/ML, скажи, что интересно работать с AI). "
     "НЕ выдумывай факты о компании сверх вакансии и НИКОГДА не оставляй плейсхолдеров или "
     "квадратных скобок. "
-    "НИКОГДА не называй уровень кандидата словом (junior/middle/senior). "
+    "НИКОГДА не пиши слова уровня (junior / middle / senior / джуниор / миддл / "
+    "сеньор), ни про кандидата, ни про вакансию. Название роли бери БЕЗ уровня: "
+    "вакансию «Senior Go Developer» называй «Go Developer», «Middle QA Engineer» "
+    "называй «QA Engineer». "
     "НЕ вставляй ссылки и URL в тело письма. НЕ добавляй подпись и контакты в конце. "
     "Без заискивания и хеджей ('если вам релевантен', 'надеюсь на ответ'). "
     "Язык сообщения = язык вакансии. Объём примерно 100-160 слов. "
@@ -81,6 +85,16 @@ def _strip_dashes(text: str) -> str:
     while ", ," in text:
         text = text.replace(", ,", ",")
     return text.replace("  ", " ").strip()
+
+
+def _clean(text: str) -> str:
+    """Обе страховочные сетки над ответом модели, в одном месте.
+
+    Порядок важен: `strip_seniority` прибирает шов после себя (лишние пробелы,
+    запятые, опустевшие скобки), а `_strip_dashes` шов оставляет, поэтому
+    убирать уровень надо последним.
+    """
+    return strip_seniority(_strip_dashes(text))
 
 
 def _note_rules(limit: int) -> str:
@@ -167,7 +181,7 @@ class OpenAIMessageGenerator:
             ],
             max_completion_tokens=self._max_output_tokens,
         )
-        return _strip_dashes((resp.choices[0].message.content or "").strip())
+        return _clean((resp.choices[0].message.content or "").strip())
 
     def generate_with_note(self, cv_text: str, profile_text: str,
                            vacancy_context: str, note_limit: int) -> tuple[str, str]:
@@ -195,7 +209,7 @@ class OpenAIMessageGenerator:
             max_completion_tokens=self._max_output_tokens,
         )
         letter, note = _parse_letter_and_note(resp.choices[0].message.content or "")
-        return _strip_dashes(letter), _strip_dashes(note)
+        return _clean(letter), _clean(note)
 
     def answer_questions(self, cv_text: str, profile_text: str, vacancy_context: str,
                          questions: list) -> dict:
