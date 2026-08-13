@@ -31,6 +31,100 @@ def is_link_only(text: str) -> bool:
     return len(without_noise.strip()) < _MIN_MEANINGFUL_CHARS
 
 
+# Sentence punctuation that `\S+` swallows but no url ends with. The same set
+# `contact.py:_clean` strips off a detected contact, for the same reason: the url
+# with the period stuck to it is a 404, and a lead read from it has no
+# description at all.
+_TRAILING = ".,);]>\"'"
+
+
+def iter_urls(text: str):
+    """Every http(s) url in `text`, trailing sentence punctuation trimmed."""
+    for m in _URL_RE.finditer(text or ""):
+        url = m.group(0).rstrip(_TRAILING)
+        if url:
+            yield url
+
+
+# LinkedIn rewrites every outbound url inside post text as `lnkd.in/<code>`, so a
+# `t.me` link an author put in their own hiring post is invisible to contact
+# detection until the rewrite is undone. The rewrite does NOT answer 3xx: it
+# answers 200 with a ~5 KB interstitial ("This link will take you to a page that's
+# not on LinkedIn") whose only external anchor carries the real address. Verified
+# live 2026-08-13; the fixture pair under tests/fixtures/linkedin pins both halves.
+_LNKD_IN_RE = re.compile(r"^https?://lnkd\.in/", re.IGNORECASE)
+_EXTERNAL_URL_RE = re.compile(
+    r'data-tracking-control-name="external_url_click"[^>]*href="([^"]+)"',
+    re.IGNORECASE)
+
+
+def is_lnkd_in_url(url: str) -> bool:
+    return bool(_LNKD_IN_RE.match((url or "").strip()))
+
+
+def extract_external_url(html: str) -> str:
+    """The destination an `lnkd.in` interstitial points at, or "" if absent."""
+    m = _EXTERNAL_URL_RE.search(html or "")
+    return _html.unescape(m.group(1)) if m else ""
+
+
+# --- which urls carry a vacancy ---------------------------------------------
+# Pure string tests, so they live here rather than next to the fetch that uses
+# them: `application/extract_lead.py` has to tell a LinkedIn post from an hh page
+# to decide whether a message's own text is allowed to stand in for the page.
+# `infrastructure/vacancy_fetcher.py` re-exports every name below, which is how
+# the sender's cli and both test suites still reach them.
+
+_HH_VACANCY_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?hh\.(?:ru|kz|uz|by|kg|az|tj)/vacancy/\d+", re.IGNORECASE)
+# Both job-URL shapes: `/jobs/view/<id>` and the share form
+# `/jobs/view/<slug>-<id>`. Only the first used to match, so a lead saved from a
+# shared link was not even a candidate for the vacancy re-read (lead #169).
+_LINKEDIN_JOB_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?linkedin\.com/jobs/view/(?:[^/?#]*-)?\d+",
+    re.IGNORECASE)
+_LINKEDIN_POST_RE = re.compile(
+    r"^https?://(?:[\w.-]*\.)?linkedin\.com/(?:posts/|feed/update/)", re.IGNORECASE)
+_THREADS_POST_RE = re.compile(
+    r"^https?://(?:www\.)?threads\.(?:com|net)/@[\w.]+/post/[\w-]+", re.IGNORECASE)
+
+
+def is_hh_vacancy_url(url: str) -> bool:
+    return bool(_HH_VACANCY_RE.match((url or "").strip()))
+
+
+def is_linkedin_job_url(url: str) -> bool:
+    return bool(_LINKEDIN_JOB_RE.match((url or "").strip()))
+
+
+def is_linkedin_post_url(url: str) -> bool:
+    return bool(_LINKEDIN_POST_RE.match((url or "").strip()))
+
+
+def is_threads_post_url(url: str) -> bool:
+    return bool(_THREADS_POST_RE.match((url or "").strip()))
+
+
+def is_fetchable_vacancy_url(url: str) -> bool:
+    return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
+            or is_linkedin_post_url(url) or is_threads_post_url(url))
+
+
+def pick_vacancy_url(text: str) -> str:
+    """The first url in `text` whose page can be read for a description, or "".
+
+    Deliberately NOT `detect_contact`'s answer. That function decides whom to
+    reply to and ranks a Telegram handle above every link, so a message carrying
+    both a contact and a vacancy link would aim the fetch at the handle and never
+    open the link — which is exactly how leads were saved with an empty
+    «Вакансия» that nothing downstream could recover.
+    """
+    for url in iter_urls(text):
+        if is_fetchable_vacancy_url(url):
+            return url
+    return ""
+
+
 _TAG_RE = re.compile(r"<[^>]+>")
 _SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
 _WS_RE = re.compile(r"\s+")

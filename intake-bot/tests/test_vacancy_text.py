@@ -313,3 +313,77 @@ def test_the_plain_description_tag_does_not_win_when_it_comes_first():
         '<meta property="og:description" content="Ищу Full Stack Developer, полный текст поста" />'
     )
     assert extract_threads_post(html) == "Ищу Full Stack Developer, полный текст поста"
+
+
+# --- pick_vacancy_url -------------------------------------------------------
+
+def test_the_post_link_is_picked_even_when_the_message_names_a_contact():
+    """The bug this function exists for. `detect_contact` answers @ivan_hr here,
+    so the fetch was aimed at a Telegram handle, the post was never opened, and
+    the lead landed with an empty «Вакансия» that nothing downstream recovered.
+    WHICH url carries the description is a different question from WHOM we reply
+    to, and it has to be asked separately."""
+    text = ("Ребята, вот интересная вакансия, посмотри: "
+            "https://www.linkedin.com/posts/acme_hiring-activity-7300000000-AbCd"
+            " пиши @ivan_hr")
+    assert vf.pick_vacancy_url(text) == (
+        "https://www.linkedin.com/posts/acme_hiring-activity-7300000000-AbCd")
+
+
+def test_a_message_with_no_vacancy_link_picks_nothing():
+    assert vf.pick_vacancy_url("Ищем Python-разработчика, пиши @ivan_hr") == ""
+    assert vf.pick_vacancy_url("") == ""
+
+
+def test_a_contact_link_is_not_a_vacancy_link():
+    """A t.me link is whom to write to, not a page carrying a description."""
+    assert vf.pick_vacancy_url("пиши https://t.me/ivan_hr") == ""
+
+
+def test_the_sentence_period_is_not_part_of_the_url():
+    """`https?://\\S+` swallows the period that ended the sentence, and the site
+    answers 404 for the url with it attached — so the read fails and the lead is
+    saved with no description at all."""
+    assert vf.pick_vacancy_url(
+        "Вакансия тут: https://hh.kz/vacancy/135171273.") == \
+        "https://hh.kz/vacancy/135171273"
+
+
+def test_the_first_fetchable_link_wins_when_the_message_carries_several():
+    text = ("канал https://t.me/jobs_channel, вакансия "
+            "https://hh.kz/vacancy/135171273 и ещё "
+            "https://www.linkedin.com/posts/acme_hiring-activity-73-AbCd")
+    assert vf.pick_vacancy_url(text) == "https://hh.kz/vacancy/135171273"
+
+
+# --- resolve_lnkd_in --------------------------------------------------------
+
+_FX_LI = Path(__file__).parent / "fixtures" / "linkedin"
+
+
+def test_the_address_behind_a_lnkd_in_link_is_recovered(monkeypatch):
+    """LinkedIn rewrites every outbound url in post text as `lnkd.in/…`, so a
+    Telegram link inside a hiring post is invisible to contact detection until
+    the rewrite is undone. The rewrite does not answer 3xx — it answers 200 and
+    an interstitial page, and the real address is an href inside it."""
+    html = (_FX_LI / "lnkd_interstitial.html").read_text(encoding="utf-8")
+    calls = _patched_httpx(monkeypatch, [_FakeResp(200, html)])
+    assert vf.resolve_lnkd_in("https://lnkd.in/dpAQNfdG") == \
+        "https://t.me/geeklink_jobs_bot"
+    assert calls == ["https://lnkd.in/dpAQNfdG"]
+
+
+def test_only_lnkd_in_is_ever_fetched(monkeypatch):
+    """The urls this is fed come out of a stranger's post text. A resolver that
+    fetched whatever it was handed would turn any hiring post into a request the
+    serverless function makes on the author's behalf."""
+    calls = _patched_httpx(monkeypatch, [])
+    assert vf.resolve_lnkd_in("https://evil.example/redirect") == ""
+    assert vf.resolve_lnkd_in("https://t.me/ivan_hr") == ""
+    assert calls == []
+
+
+def test_an_interstitial_without_the_external_link_resolves_to_nothing(monkeypatch):
+    _patched_httpx(monkeypatch, [_FakeResp(200, "<html>Page not found</html>")])
+    assert vf.resolve_lnkd_in("https://lnkd.in/dead") == ""
+

@@ -141,3 +141,117 @@ def test_linkedin_job_link_is_fetched_too():
 
     assert fetcher.calls == ["https://www.linkedin.com/jobs/view/4439324251/"]
     assert summarizer.seen.startswith("Chatbot Developer")
+
+
+# --- a LinkedIn post is read, and it can re-point the lead -------------------
+
+POST = "https://www.linkedin.com/posts/daria-hr_python-activity-7300000000-AbCd"
+AUTHOR = "https://www.linkedin.com/in/daria-hr/"
+
+
+def test_a_post_link_inside_a_chatty_message_is_still_read():
+    """`is_link_only` is False here — the prose outlives the urls — so the old flow
+    summarised «посмотри, вроде под тебя» into «Вакансия» and never opened the post.
+    A post is not an hh page: its body is the only place where both the description
+    and the address to apply to exist, so it is read whatever the message says."""
+    raw = ("Привет! Тут в LinkedIn выложили вакансию, вроде как раз под тебя, "
+           "посмотри и откликнись если норм: " + POST)
+    fetcher = _Fetcher("Ищем Junior Python Developer, удалёнка, 2000-3000 USD.")
+
+    ExtractLeadFromText(detect_contact, _RecordingSummarizer("ok"), _FakeRepo(),
+                        fetcher).execute(raw)
+
+    assert fetcher.calls == [POST]
+
+
+def test_the_summary_sees_the_post_and_the_message_together():
+    """What the forwarder wrote is not noise — a salary they happen to know, a
+    «готовы на релокацию» the post never says — and replacing it with the post
+    loses it."""
+    raw = ("Смотри, вот эта вакансия точно под тебя, и они вроде готовы на "
+           "релокацию: " + POST)
+    summarizer = _RecordingSummarizer("ok")
+
+    ExtractLeadFromText(detect_contact, summarizer, _FakeRepo(),
+                        _Fetcher("Ищем Junior Python Developer, удалёнка.")).execute(raw)
+
+    assert "Junior Python Developer" in summarizer.seen
+    assert "готовы на релокацию" in summarizer.seen
+
+
+def test_a_telegram_handle_in_the_post_re_points_the_lead():
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("Junior Python Developer"), _FakeRepo(),
+        _Fetcher("Ищем Junior Python Developer. Резюме в телеграм @daria_hr"),
+    ).execute("Вот вакансия: " + POST)
+
+    assert (lead.platform, lead.target) == ("telegram", "@daria_hr")
+    assert lead.note == f"контакт из LinkedIn-поста: {POST}"
+
+
+def test_an_email_in_the_post_re_points_the_lead():
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем QA Engineer. CV на hr@acme.io"),
+    ).execute("Вот вакансия: " + POST)
+
+    assert (lead.platform, lead.target) == ("email", "hr@acme.io")
+
+
+def test_a_handle_in_the_message_beats_one_in_the_post():
+    """Whoever forwarded the message chose that address deliberately. The post is
+    consulted only when the message names nobody we can write to directly."""
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем Python-разработчика. Резюме в телеграм @daria_hr"),
+    ).execute("Вот вакансия: " + POST + " пиши @ivan_hr")
+
+    assert (lead.platform, lead.target) == ("telegram", "@ivan_hr")
+    assert lead.note == ""
+
+
+def test_a_post_naming_nobody_goes_to_its_author():
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем Go-разработчика в Алматы, гибрид. Откликайтесь!"),
+    ).execute("Вот вакансия: " + POST)
+
+    assert (lead.platform, lead.target) == ("linkedin", AUTHOR)
+    assert lead.note == f"автор LinkedIn-поста: {POST}"
+
+
+def test_a_company_share_with_no_author_in_the_url_keeps_the_post_link():
+    """`/feed/update/…` carries no author id in its slug. Keeping the post url is
+    what lets the sender say it cannot find an author, instead of writing to ""."""
+    url = "https://www.linkedin.com/feed/update/urn:li:activity:7300000000/"
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем Go-разработчика, гибрид."),
+    ).execute("Вот вакансия: " + url)
+
+    assert (lead.platform, lead.target) == ("linkedin", url)
+
+
+def test_a_post_that_could_not_be_read_keeps_the_link_for_the_laptop():
+    """A throttled read must not cost the lead its only re-readable url. An author
+    profile is not a page the vacancy can be re-read from, and
+    `needs_vacancy_refetch` + `is_fetchable_vacancy_url(target)` on the laptop is
+    what fills «Вакансия» on the second, unhurried attempt."""
+    lead = ExtractLeadFromText(detect_contact, _RecordingSummarizer("s"),
+                               _FakeRepo(), _Fetcher("")).execute("Вот вакансия: " + POST)
+
+    assert (lead.platform, lead.target) == ("linkedin", POST)
+    assert lead.vacancy_context == ""
+    assert lead.note == ""
+
+
+def test_a_telegram_link_behind_the_rewrite_re_points_the_lead():
+    """End to end: LinkedIn serves the post's `t.me` link rewritten as `lnkd.in`,
+    and the injected resolver is the only reason it becomes a contact."""
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем Python-разработчика. Писать: https://lnkd.in/abc123"),
+        resolve_link=lambda _u: "https://t.me/daria_hr",
+    ).execute("Вот вакансия: " + POST)
+
+    assert (lead.platform, lead.target) == ("telegram", "https://t.me/daria_hr")

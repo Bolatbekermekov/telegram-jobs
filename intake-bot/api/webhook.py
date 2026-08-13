@@ -18,7 +18,9 @@ from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
 from app.domain.contact import detect_contact  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
-from app.infrastructure.vacancy_fetcher import fetch_vacancy_text  # noqa: E402
+from app.infrastructure.vacancy_fetcher import (  # noqa: E402
+    fetch_vacancy_text, resolve_lnkd_in,
+)
 from app.infrastructure.candidates_gateway import (  # noqa: E402
     CandidatesGateway, build_vacancy_message, parse_callback,
 )
@@ -48,7 +50,8 @@ def _build_repo() -> SheetsRepo:
 def _build_use_case() -> ExtractLeadFromText:
     summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
     return ExtractLeadFromText(detect_contact, summarizer, _build_repo(),
-                               fetcher=fetch_vacancy_text)
+                               fetcher=fetch_vacancy_text,
+                               resolve_link=resolve_lnkd_in)
 
 
 def _book():
@@ -246,10 +249,15 @@ async def telegram_webhook(
         # reads the link again before it sends anything.
         vacancy = lead.vacancy_context or (
             "не прочиталась сейчас — дочитаю при отправке с ноута")
+        # A lead saved as «telegram / @acme_hr» from a message that named neither is
+        # the one answer here that is genuinely surprising, so it says why. Without
+        # it there is no way to tell a handle read out of a post from one typed by
+        # hand — and so no way to notice it read the wrong one.
+        routing = f"\nℹ️ {lead.note}" if lead.note else ""
         _reply(
             chat_id,
-            f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}\n"
-            f"Вакансия: {vacancy}{extra}",
+            f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}"
+            f"{routing}\nВакансия: {vacancy}{extra}",
         )
     except ValueError:
         _reply(
