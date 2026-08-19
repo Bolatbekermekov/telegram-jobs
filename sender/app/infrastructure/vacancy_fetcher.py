@@ -34,9 +34,10 @@ and a datacenter IP that any of these sites may throttle, so every failure retur
 # where a layer below the network can reach them.
 from app.domain.vacancy_text import (  # noqa: F401 — re-exported, see above
     extract_external_url, extract_hh_vacancy, extract_linkedin_post,
-    extract_linkedin_vacancy, extract_threads_post, is_fetchable_vacancy_url,
-    is_hh_vacancy_url, is_linkedin_job_url, is_linkedin_post_url, is_lnkd_in_url,
-    is_threads_post_url, iter_urls, pick_vacancy_url,
+    extract_linkedin_vacancy, extract_threads_post, expand_short_links,
+    is_fetchable_vacancy_url, is_hh_vacancy_url, is_linkedin_job_url,
+    is_linkedin_post_url, is_lnkd_in_url, is_threads_post_url, iter_urls,
+    pick_vacancy_url, strip_tracking_params,
 )
 
 # A browser UA: a bot-looking one gets throttled by hh and LinkedIn.
@@ -72,12 +73,17 @@ _RETRY_DELAY_SECONDS = 2.0
 _SHORTENER_TIMEOUT_SECONDS = 3.0
 
 
-def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
-         *, ua: str = _UA) -> str:
-    """GET `url`, retrying once on throttling or a network blip.
+def _get_page(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
+              *, ua: str = _UA) -> tuple[str, str]:
+    """GET `url` -> (body, final url), retrying once on throttling or a blip.
 
     A 403/404 is the site's final answer (restricted or removed vacancy) — retry
     it and you only wait longer for the same nothing.
+
+    The FINAL url is the second return value because redirects are followed here,
+    so by the time the body exists the address that produced it is otherwise gone.
+    `resolve_lnkd_in` is the whole reason: one of the two `lnkd.in` shapes exists
+    only as a 3xx and leaves no trace in any body.
     """
     import time
 
@@ -89,15 +95,22 @@ def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
             resp = httpx.get(url, headers={"User-Agent": ua}, timeout=timeout,
                              follow_redirects=True)
             if resp.status_code == 200:
-                return resp.text
+                return resp.text, str(getattr(resp, "url", "") or "")
             if resp.status_code in (403, 404, 410):
-                return ""
+                return "", ""
         except Exception:  # noqa: BLE001 — a timeout or reset is worth one retry
             if attempt == attempts - 1:
-                return ""
+                return "", ""
         if attempt < attempts - 1:
             _sleep(_RETRY_DELAY_SECONDS * (attempt + 1))
-    return ""
+    return "", ""
+
+
+def _get(url: str, timeout: float, attempts: int = _RETRY_ATTEMPTS, sleep=None,
+         *, ua: str = _UA) -> str:
+    """The body `url` answers, or "" — see `_get_page`, which this is the common
+    half of. Kept as its own name because every page reader wants only the body."""
+    return _get_page(url, timeout, attempts, sleep, ua=ua)[0]
 
 
 def resolve_lnkd_in(url: str, timeout: float = _SHORTENER_TIMEOUT_SECONDS) -> str:
@@ -112,9 +125,17 @@ def resolve_lnkd_in(url: str, timeout: float = _SHORTENER_TIMEOUT_SECONDS) -> st
     if not is_lnkd_in_url(url):
         return ""
     try:
-        return extract_external_url(_get(url, timeout))
+        html, final_url = _get_page(url, timeout)
     except Exception:  # noqa: BLE001 — a contact we can't recover is not a lost lead
         return ""
+    # The `/p/<code>` shape — someone sharing a POST rather than a link inside one
+    # — is a plain 301 to `linkedin.com/posts/…` and serves no interstitial, so
+    # the href below finds nothing (verified live 2026-08-19 on lnkd.in/p/dckb8nUV).
+    # Leaving the host is what tells the two apart: the outbound rewrite answers
+    # 200 on lnkd.in itself and only its body knows the destination.
+    if final_url and not is_lnkd_in_url(final_url):
+        return strip_tracking_params(final_url)
+    return extract_external_url(html)
 
 
 def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:

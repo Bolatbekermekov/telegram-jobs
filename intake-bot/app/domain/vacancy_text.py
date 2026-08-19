@@ -68,6 +68,66 @@ def extract_external_url(html: str) -> str:
     return _html.unescape(m.group(1)) if m else ""
 
 
+# The share sheet appends its own tail to whatever it hands out:
+# `?utm_source=share&utm_medium=member_desktop&rcm=<blob>`. The `rcm` blob
+# identifies the person who shared, so it is not only noise in «Источник» — it
+# rides along into every later fetch of that url. Params that ADDRESS a page
+# (hh's `?text=python`) are left alone; only the known tracking names go.
+_TRACKING_PARAM_RE = re.compile(
+    r"^(?:utm_\w+|rcm|trk|trackingId|originalReferer)$", re.IGNORECASE)
+
+
+def strip_tracking_params(url: str) -> str:
+    """`url` without the share sheet's tracking params."""
+    base, sep, rest = (url or "").strip().partition("?")
+    if not sep:
+        return base
+    query, hash_sep, fragment = rest.partition("#")
+    kept = [p for p in query.split("&")
+            if p and not _TRACKING_PARAM_RE.match(p.partition("=")[0])]
+    return base + ("?" + "&".join(kept) if kept else "") + hash_sep + fragment
+
+
+# Each expansion is an http request inside a serverless budget of ~10s that still
+# has a page read and a summary to pay for. Two is enough for a real message: a
+# forwarded post carries one link, occasionally a second.
+_MAX_EXPANDED_LINKS = 2
+
+
+def expand_short_links(text: str, resolve_link, limit: int = _MAX_EXPANDED_LINKS) -> str:
+    """`text` with LinkedIn's short links replaced by the addresses behind them.
+
+    Sharing a POST gives `lnkd.in/p/<code>`, and that shape matches no contact
+    rule and no fetchable-url rule — `detect_contact` answered None and intake
+    replied «Не нашёл контакт» to a perfectly ordinary hiring post. Undoing the
+    rewrite before anything else looks at the message is what makes it the
+    ordinary `linkedin.com/posts/…` case the rest of the flow already handles.
+
+    Only `lnkd.in` is ever handed to `resolve_link`: the urls in here come out of
+    a message a stranger sent, and a resolver fed any of them would let the sender
+    of that message choose a request this function makes on its behalf.
+    """
+    if resolve_link is None:
+        return text or ""
+    budget = limit
+
+    def _swap(m):
+        nonlocal budget
+        matched = m.group(0)
+        url = matched.rstrip(_TRAILING)
+        if budget <= 0 or not is_lnkd_in_url(url):
+            return matched
+        budget -= 1
+        try:
+            resolved = resolve_link(url)
+        except Exception:  # noqa: BLE001 — an unreachable shortener costs the
+            # expansion, never the lead: the message is saved as it was written.
+            return matched
+        return resolved + matched[len(url):] if resolved else matched
+
+    return _URL_RE.sub(_swap, text or "")
+
+
 # --- which urls carry a vacancy ---------------------------------------------
 # Pure string tests, so they live here rather than next to the fetch that uses
 # them: `application/extract_lead.py` has to tell a LinkedIn post from an hh page

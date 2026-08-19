@@ -255,3 +255,43 @@ def test_a_telegram_link_behind_the_rewrite_re_points_the_lead():
     ).execute("Вот вакансия: " + POST)
 
     assert (lead.platform, lead.target) == ("telegram", "https://t.me/daria_hr")
+
+
+def test_a_post_shared_as_a_short_link_is_accepted():
+    """The whole message is `https://lnkd.in/p/<code>`. Nothing in it matches any
+    contact rule — not linkedin.com, not hh, not a handle — so intake answered
+    «Не нашёл контакт» and the lead was never saved. Undoing the rewrite BEFORE
+    detection is what turns it into the ordinary post case."""
+    fetcher = _Fetcher("Ищем Python-разработчика в Алматы. Опыт от 3 лет.")
+    summarizer = _RecordingSummarizer("Python-разработчик, Алматы")
+    raw = "https://lnkd.in/p/dckb8nUV"
+
+    lead = ExtractLeadFromText(
+        detect_contact, summarizer, _FakeRepo(), fetcher,
+        resolve_link=lambda _u: POST,
+    ).execute(raw)
+
+    # The short link became the post, and everything downstream is the ordinary
+    # post case: the body is read, names no address, so the lead goes to its author.
+    assert fetcher.calls == [POST]
+    assert (lead.platform, lead.target) == ("linkedin", AUTHOR)
+    assert lead.note == f"автор LinkedIn-поста: {POST}"
+    assert lead.vacancy_context == "Python-разработчик, Алматы"
+    assert lead.raw_text == raw           # what the user actually sent is kept
+
+
+def test_a_contact_inside_a_post_reached_through_a_short_link_still_wins():
+    """End to end over both rewrite shapes at once: the message carries the `/p/`
+    share, and the post behind it names a Telegram address as an outbound rewrite."""
+    resolved = {
+        "https://lnkd.in/p/dckb8nUV": POST,
+        "https://lnkd.in/abc123": "https://t.me/daria_hr",
+    }
+    lead = ExtractLeadFromText(
+        detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+        _Fetcher("Ищем Python-разработчика. Писать: https://lnkd.in/abc123"),
+        resolve_link=lambda u: resolved.get(u, ""),
+    ).execute("https://lnkd.in/p/dckb8nUV")
+
+    assert (lead.platform, lead.target) == ("telegram", "https://t.me/daria_hr")
+    assert lead.note == f"контакт из LinkedIn-поста: {POST}"

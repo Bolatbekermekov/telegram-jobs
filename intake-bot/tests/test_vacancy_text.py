@@ -387,3 +387,106 @@ def test_an_interstitial_without_the_external_link_resolves_to_nothing(monkeypat
     _patched_httpx(monkeypatch, [_FakeResp(200, "<html>Page not found</html>")])
     assert vf.resolve_lnkd_in("https://lnkd.in/dead") == ""
 
+
+
+def test_a_post_short_link_is_resolved_by_the_redirect_it_answers(monkeypatch):
+    """`lnkd.in/p/<code>` is the OTHER shape of the rewrite: sharing a post itself,
+    not an outbound url inside one. It answers 301 to `linkedin.com/posts/…` and
+    serves no interstitial at all, so the href-scraping branch finds nothing —
+    verified live 2026-08-19 on https://lnkd.in/p/dckb8nUV. The final url of the
+    followed redirect is the only place the destination exists."""
+    final = ("https://www.linkedin.com/posts/aliaksandra-kuzniatsova-a49761387_"
+             "hiring-job-hr-share-7495386136005992448-khSF/")
+    resp = _FakeResp(200, "<html>post page, no external_url_click anchor</html>")
+    resp.url = final + "?utm_source=share&utm_medium=member_desktop&rcm=ACoAAGocylY"
+    calls = _patched_httpx(monkeypatch, [resp])
+
+    assert vf.resolve_lnkd_in("https://lnkd.in/p/dckb8nUV") == final
+    assert calls == ["https://lnkd.in/p/dckb8nUV"]
+
+
+def test_the_interstitial_still_wins_when_the_short_link_stays_on_lnkd_in(monkeypatch):
+    """The outbound rewrite does NOT leave the host — it answers 200 on lnkd.in —
+    so a final url that is still `lnkd.in` must fall through to the href, not be
+    handed back as the destination."""
+    html = (_FX_LI / "lnkd_interstitial.html").read_text(encoding="utf-8")
+    resp = _FakeResp(200, html)
+    resp.url = "https://lnkd.in/dpAQNfdG"
+    _patched_httpx(monkeypatch, [resp])
+
+    assert vf.resolve_lnkd_in("https://lnkd.in/dpAQNfdG") == "https://t.me/geeklink_jobs_bot"
+
+
+# --- tracking params --------------------------------------------------------
+
+def test_share_tracking_is_dropped_but_real_query_survives():
+    """The share sheet appends utm_* and an `rcm` blob that identifies the SHARER.
+    Storing it in «Источник» carries it into every later fetch, and it is noise the
+    lead has to be read past. Params that address a page are not touched."""
+    from app.domain.vacancy_text import strip_tracking_params as strip
+
+    assert strip("https://www.linkedin.com/posts/x/?utm_source=share&rcm=ACoAA") == \
+        "https://www.linkedin.com/posts/x/"
+    assert strip("https://hh.ru/search/vacancy?text=python&utm_medium=share") == \
+        "https://hh.ru/search/vacancy?text=python"
+    # The fragment addresses a place ON the page, so it is not tracking and stays.
+    assert strip("https://example.com/a?b=1#frag") == "https://example.com/a?b=1#frag"
+    assert strip("https://example.com/a?utm_source=share#frag") == "https://example.com/a#frag"
+    assert strip("https://example.com/a") == "https://example.com/a"
+
+
+# --- expanding a short link inside the message ------------------------------
+
+def test_a_short_link_in_the_message_is_replaced_by_what_it_points_at():
+    from app.domain.vacancy_text import expand_short_links
+
+    calls = []
+
+    def resolve(url):
+        calls.append(url)
+        return "https://www.linkedin.com/posts/acme_hiring-activity-73-AbCd/"
+
+    assert expand_short_links("Вакансия: https://lnkd.in/p/dckb8nUV.", resolve) == \
+        "Вакансия: https://www.linkedin.com/posts/acme_hiring-activity-73-AbCd/."
+    assert calls == ["https://lnkd.in/p/dckb8nUV"]
+
+
+def test_expanding_never_touches_a_url_that_is_not_the_rewrite():
+    """Every url here comes out of a message a stranger sent, so the resolver is
+    asked about `lnkd.in` and nothing else."""
+    from app.domain.vacancy_text import expand_short_links
+
+    asked = []
+    text = "https://evil.example/r и https://t.me/ivan_hr и https://hh.ru/vacancy/1"
+
+    assert expand_short_links(text, lambda u: asked.append(u) or "x") == text
+    assert asked == []
+
+
+def test_an_unresolvable_short_link_leaves_the_message_as_it_was():
+    from app.domain.vacancy_text import expand_short_links
+
+    text = "Вакансия: https://lnkd.in/dead"
+    assert expand_short_links(text, lambda _u: "") == text
+
+    def boom(_u):
+        raise RuntimeError("throttled")
+
+    assert expand_short_links(text, boom) == text
+
+
+def test_at_most_two_short_links_are_expanded():
+    """Each expansion is an http request inside a ~10s serverless budget."""
+    from app.domain.vacancy_text import expand_short_links
+
+    asked = []
+    text = " ".join(f"https://lnkd.in/code{i}" for i in range(5))
+    expand_short_links(text, lambda u: asked.append(u) or "")
+    assert asked == ["https://lnkd.in/code0", "https://lnkd.in/code1"]
+
+
+def test_expanding_without_a_resolver_is_a_no_op():
+    from app.domain.vacancy_text import expand_short_links
+
+    text = "Вакансия: https://lnkd.in/p/dckb8nUV"
+    assert expand_short_links(text, None) == text

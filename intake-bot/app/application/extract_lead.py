@@ -4,7 +4,8 @@ from app.domain.post_contact import (
     DIRECT_PLATFORMS, pick_post_contact, post_author_profile_url,
 )
 from app.domain.vacancy_text import (
-    is_fetchable_vacancy_url, is_link_only, is_linkedin_post_url, pick_vacancy_url,
+    expand_short_links, is_fetchable_vacancy_url, is_link_only,
+    is_linkedin_post_url, pick_vacancy_url,
 )
 
 _FALLBACK_LEN = 280
@@ -17,9 +18,11 @@ class ExtractLeadFromText:
         # repo: object with .append_lead(ExtractedLead) -> int (row id)
         # fetcher: callable(url) -> str, the vacancy text behind a link ("" if
         #          unavailable). Optional so the use-case still runs offline.
-        # resolve_link: callable(url) -> str, undoes LinkedIn's `lnkd.in` rewrite so
-        #          a t.me link inside a post can be seen. Optional for the same
-        #          reason; without it only a plain @handle in a post is found.
+        # resolve_link: callable(url) -> str, undoes LinkedIn's `lnkd.in` rewrite.
+        #          Read twice: on the MESSAGE, so a post shared as `lnkd.in/p/…`
+        #          is seen as the post it is, and inside the POST, so a t.me link
+        #          the author wrote becomes a contact. Optional; without it a
+        #          short-link-only message is refused as «Не нашёл контакт».
         self._detect = detector
         self._summarizer = summarizer
         self._repo = repo
@@ -27,19 +30,28 @@ class ExtractLeadFromText:
         self._resolve_link = resolve_link
 
     def execute(self, raw_text: str) -> ExtractedLead:
-        contact = self._detect(raw_text)
+        # Before anything reads the message: a post shared from the LinkedIn app
+        # arrives as `https://lnkd.in/p/<code>`, which matches no contact rule and
+        # no fetchable-url rule, so intake answered «Не нашёл контакт» and dropped
+        # a perfectly ordinary hiring post. Expanded here rather than in the
+        # detector because it costs a request, and this is the one place that
+        # knows a request is affordable. `raw_text` below still stores what the
+        # user actually sent.
+        text = expand_short_links(raw_text, self._resolve_link)
+
+        contact = self._detect(text)
         if contact is None:
             raise ValueError("no_contact")
 
-        url = self._vacancy_url(raw_text, contact)
-        read = self._worth_reading(raw_text, url)
+        url = self._vacancy_url(text, contact)
+        read = self._worth_reading(text, url)
         page_text = self._fetch(url) if read else ""
 
         platform, target, note = self._route(contact, url, page_text)
         lead = ExtractedLead(
             platform=platform,
             target=target,
-            vacancy_context=self._vacancy_text(raw_text, page_text, read),
+            vacancy_context=self._vacancy_text(text, page_text, read),
             raw_text=raw_text,
             note=note,
         )
