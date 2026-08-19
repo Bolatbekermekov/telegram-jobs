@@ -16,6 +16,7 @@ from fastapi import FastAPI, Header, Request  # noqa: E402
 from app import config  # noqa: E402
 from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
 from app.domain.contact import detect_contact  # noqa: E402
+from app.domain.telegram_message import message_text  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
 from app.infrastructure.vacancy_fetcher import (  # noqa: E402
@@ -203,7 +204,10 @@ async def telegram_webhook(
 
     message = update.get("message") or update.get("channel_post") or {}
     chat_id = (message.get("chat") or {}).get("id")
-    text = (message.get("text") or "").strip()
+    # NOT `message["text"]`: a hyperlink's address never appears there — Telegram
+    # keeps it in `entities` — and a post forwarded with its picture has no
+    # `text` field at all. See app/domain/telegram_message.py.
+    text = message_text(message)
 
     if not chat_id or not text:
         return {"ok": True}

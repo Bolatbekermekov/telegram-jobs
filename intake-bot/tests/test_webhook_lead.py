@@ -63,3 +63,45 @@ def test_the_use_case_is_wired_to_undo_linkedins_link_rewrite(monkeypatch):
 
     assert uc._resolve_link is wh.resolve_lnkd_in
     assert uc._fetch is wh.fetch_vacancy_text
+
+
+def test_a_link_that_is_only_a_hyperlink_reaches_the_use_case(monkeypatch):
+    """A forwarded post whose LinkedIn url lives under the words «пост на
+    LinkedIn» has no url in `message["text"]`. Reading that field alone is what
+    made intake answer «Не нашёл контакт» to it."""
+    monkeypatch.setattr(wh.config, "TELEGRAM_WEBHOOK_SECRET", "", raising=False)
+    monkeypatch.setattr(wh, "_reply", lambda chat_id, text: None)
+    seen = []
+    lead = ExtractedLead(platform="linkedin", target="https://www.linkedin.com/posts/x/",
+                         vacancy_context="Node.js", raw_text="raw")
+    monkeypatch.setattr(
+        wh, "_build_use_case",
+        lambda: type("_UC", (), {"execute": lambda _s, t: (seen.append(t), lead)[1]})())
+
+    update = {"message": {
+        "chat": {"id": 5},
+        "text": "PixelPlex ищет Node.js. Ищет Мария Кохович, её пост на LinkedIn.",
+        "entities": [{"type": "text_link", "offset": 47, "length": 15,
+                      "url": "https://www.linkedin.com/posts/maria_hiring-activity-7-abc/"}],
+    }}
+    asyncio.run(wh.telegram_webhook(_FakeRequest(update), ""))
+
+    assert seen and "https://www.linkedin.com/posts/maria_hiring-activity-7-abc/" in seen[0]
+
+
+def test_a_photo_with_a_caption_is_not_dropped(monkeypatch):
+    """A hiring post forwarded with its picture has no `text` at all."""
+    monkeypatch.setattr(wh.config, "TELEGRAM_WEBHOOK_SECRET", "", raising=False)
+    monkeypatch.setattr(wh, "_reply", lambda chat_id, text: None)
+    seen = []
+    lead = ExtractedLead(platform="telegram", target="@acme_hr",
+                         vacancy_context="Node.js", raw_text="raw")
+    monkeypatch.setattr(
+        wh, "_build_use_case",
+        lambda: type("_UC", (), {"execute": lambda _s, t: (seen.append(t), lead)[1]})())
+
+    update = {"message": {"chat": {"id": 5}, "photo": [{"file_id": "f"}],
+                          "caption": "Ищем бэкендера, пиши @acme_hr"}}
+    asyncio.run(wh.telegram_webhook(_FakeRequest(update), ""))
+
+    assert seen and "@acme_hr" in seen[0]
