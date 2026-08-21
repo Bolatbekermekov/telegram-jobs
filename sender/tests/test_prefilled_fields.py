@@ -10,7 +10,7 @@ from app.domain.page_observation import FieldObs, PageObservation
 
 PROFILE = ApplyProfile(
     full_name="Bolatbek Yermekov", first_name="Bolatbek", last_name="Yermekov",
-    email="ermekbolatbek21@gmail.com", phone="+7 775 720 0604",
+    email="ermekovbolatbek50@gmail.com", phone="+7 775 720 0604",
 )
 
 # --- verbatim from the live page ------------------------------------------
@@ -61,11 +61,11 @@ def test_a_dropdown_is_answered_by_option_index_never_by_typing():
     """.fill() on a <select> raises, and on a required field that raise is a
     manual apply — which is exactly how these leads kept dying."""
     field = FieldObs(tag="select", type="select-one", label="Email", required=True,
-                     options=["Select an option", "ermekbolatbek21@gmail.com"],
+                     options=["Select an option", "ermekovbolatbek50@gmail.com"],
                      value="Select an option", ref="0")
     action = map_field(field, PROFILE, "cv.pdf")
     assert action.choice_index == 1
-    assert action.value == "ermekbolatbek21@gmail.com"
+    assert action.value == "ermekovbolatbek50@gmail.com"
 
 
 def test_a_dropdown_with_no_matching_option_is_left_for_a_human():

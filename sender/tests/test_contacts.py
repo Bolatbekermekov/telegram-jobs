@@ -17,7 +17,7 @@ from app.infrastructure.apply_profile_loader import load_apply_profile
 
 SIGN = ("С уважением, Bolatbek\n"
         "Telegram: @bolatbek_yermekov\n"
-        "Email: ermekbolatbek21@gmail.com\n"
+        "Email: ermekovbolatbek50@gmail.com\n"
         "LinkedIn: https://www.linkedin.com/in/bolatbek-yermekov-9b2261418/")
 CONTACTS = parse_contacts(SIGN)
 
@@ -71,9 +71,9 @@ def test_any_other_linkedin_profile_becomes_ours():
 
 
 def test_an_email_address_is_not_mistaken_for_a_handle():
-    """В «…21@gmail.com» тоже есть «@», и подмена сломала бы адрес."""
-    assert canonicalize("Email: ermekbolatbek21@gmail.com", CONTACTS) == \
-        "Email: ermekbolatbek21@gmail.com"
+    """В «…50@gmail.com» тоже есть «@», и подмена сломала бы адрес."""
+    assert canonicalize("Email: ermekovbolatbek50@gmail.com", CONTACTS) == \
+        "Email: ermekovbolatbek50@gmail.com"
 
 
 def test_a_job_link_is_left_alone():

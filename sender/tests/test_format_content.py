@@ -14,7 +14,7 @@ _SIGNED = (
     "Здравствуйте, Анна.\n\nМой стек: Python, TypeScript.\n\n"
     "С уважением, Bolatbek\n"
     "Telegram: @bolatbekermeko_v\n"
-    "Email: ermekbolatbek21@gmail.com\n"
+    "Email: ermekovbolatbek50@gmail.com\n"
     "LinkedIn: https://www.linkedin.com/in/bolatbekermekov/"
 )
 
@@ -64,8 +64,8 @@ def test_channel_drops_its_own_contact_line_from_the_signature():
     c = format_for_channel(ch, body=_SIGNED, subject=None, attachment_path=None)
     assert "linkedin.com" not in c.body.lower()
     assert "Telegram: @bolatbekermeko_v" in c.body
-    assert "Email: ermekbolatbek21@gmail.com" in c.body
-    assert c.body.endswith("Email: ermekbolatbek21@gmail.com")
+    assert "Email: ermekovbolatbek50@gmail.com" in c.body
+    assert c.body.endswith("Email: ermekovbolatbek50@gmail.com")
     assert c.body.startswith("Здравствуйте, Анна.\n\nМой стек")
 
 

@@ -13,7 +13,7 @@ from app.domain.signature import localize_signature
 
 SIGNATURE = ("С уважением, Bolatbek\n"
              "Telegram: @bolatbekermeko_v\n"
-             "Email: ermekbolatbek21@gmail.com\n"
+             "Email: ermekovbolatbek50@gmail.com\n"
              "LinkedIn: https://www.linkedin.com/in/bolatbekermekov/")
 
 
