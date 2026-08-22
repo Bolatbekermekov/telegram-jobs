@@ -100,7 +100,26 @@ SEL_MENU_CONNECT = ("a[role='menuitem']:has-text('Установить конт�
 # Message overlay (LinkedIn msg-form; classes are language-independent).
 SEL_MSG_BOX = ("div.msg-form__contenteditable[contenteditable='true'], "
                "[role='textbox'][contenteditable='true']")
-SEL_MSG_SEND = "button.msg-form__send-button"
+# TWO send controls exist, one per overlay state, and the old constant knew only
+# the first. Measured live 2026-08-22 with both bubbles open at once:
+#   an EXISTING thread  -> button.msg-form__send-button  (a labelled «Отправить»)
+#   a NEW message from a profile -> button.msg-form__send-btn
+#     (artdeco-button--circle, type=submit, icon `send-privately-small`)
+# The profile path this file walks always opens the NEW-message form, so on a
+# fresh browser context — no docked conversation anywhere — the old selector
+# matched NOTHING, `_press_send` fell through to its Enter fallback, and that
+# form does not send on Enter (it has a subject field above the body). The text
+# stayed in the box and the send was correctly reported as unconfirmed. Nothing
+# was ever delivered; the guard was right and the selector was stale.
+SEL_MSG_SEND = "button.msg-form__send-btn, button.msg-form__send-button"
+# One conversation bubble holds exactly one composer and one send control — the
+# same measurement, per bubble. Everything below is read from ONE bubble rather
+# than from the page, because `.last` resolved twice over two independent lists
+# can name two different forms: with a docked chat open, the page's only
+# `msg-form__send-button` belonged to THAT chat while the filled box belonged to
+# the profile overlay. The mismatch surfaced as a failure here, but the same
+# shape could have pressed Send on somebody else's conversation.
+SEL_MSG_BUBBLE = "div.msg-overlay-conversation-bubble"
 
 # Connect-with-note flow. Verified live 2026-07-09 (RU account): clicking
 # "Установить контакт" opens a modal ("Добавить заметку в приглашение?") whose
@@ -174,16 +193,20 @@ def _trim_to_sentence(text: str, limit: int) -> str:
     return text[:cut].rstrip() if cut > 0 else text[:limit]
 
 
-def _attach_cv(page, path: str) -> None:
+def _attach_cv(page, path: str, scope=None) -> None:
     """Attach the CV file to the open message thread. Fails loudly if the file
-    input never appears — better to skip the lead than send a CV-less message."""
-    file_input = page.locator(SEL_FILE_INPUT)
+    input never appears — better to skip the lead than send a CV-less message.
+
+    `scope` is the conversation bubble being written to; the CV has to ride the
+    same form as the text, for the reason spelled out at SEL_MSG_BUBBLE."""
+    where = scope if scope is not None else page
+    file_input = where.locator(SEL_FILE_INPUT)
     if file_input.count() == 0:
-        btn = page.locator(SEL_ATTACH_BTN)
+        btn = where.locator(SEL_ATTACH_BTN)
         if btn.count() > 0:
             btn.first.click()
             page.wait_for_timeout(500)
-        file_input = page.locator(SEL_FILE_INPUT)
+        file_input = where.locator(SEL_FILE_INPUT)
     if file_input.count() == 0:
         raise ChannelError("LinkedIn: не нашёл поле вложения — CV не прикреплён")
     file_input.first.set_input_files(path)
@@ -248,7 +271,7 @@ def _wait_until(page, predicate, timeout_ms: int) -> bool:
     return False
 
 
-def _press_send(page, composer) -> None:
+def _press_send(page, composer, scope=None) -> None:
     """Press «Отправить» on the open composer and confirm the message left it.
 
     NOT a Playwright .click(). That click needs a hit point inside the viewport,
@@ -275,7 +298,7 @@ def _press_send(page, composer) -> None:
       and a lead recorded as `sent` with nothing sent is the one outcome worse
       than a failed one.
     """
-    send = page.locator(SEL_MSG_SEND)
+    send = (scope if scope is not None else page).locator(SEL_MSG_SEND)
     if send.count() > 0:
         # `.last`, matching the box that was filled: one bubble is the normal
         # case, but the two must never be able to name different forms.
@@ -304,7 +327,13 @@ def _send_message(page, content: OutreachContent) -> None:
     silent no-op."""
     _click_via_dom(page.locator(SEL_MESSAGE_BTN).first)
     page.wait_for_timeout(1500)
-    box = page.locator(SEL_MSG_BOX)
+    # The bubble first, everything else inside it — see SEL_MSG_BUBBLE. `.last`
+    # is resolved ONCE here: the bubble LinkedIn just opened is appended after
+    # any docked ones. A layout with no bubble at all falls back to the page, so
+    # this cannot be worse than what it replaces.
+    bubbles = page.locator(SEL_MSG_BUBBLE)
+    scope = bubbles.last if bubbles.count() > 0 else page
+    box = scope.locator(SEL_MSG_BOX)
     if box.count() == 0:
         raise ManualApplyRequired(
             "LinkedIn: сообщение доступно только через InMail (Premium) — "
@@ -317,8 +346,8 @@ def _send_message(page, content: OutreachContent) -> None:
     composer.focus()
     composer.fill(content.body)
     if content.attachment_path:
-        _attach_cv(page, content.attachment_path)
-    _press_send(page, composer)
+        _attach_cv(page, content.attachment_path, scope)
+    _press_send(page, composer, scope)
 
 
 def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
@@ -655,7 +684,7 @@ def _open_apply_flow(page, job_url: str):
         raise _ExternalApplyNeeded()
 
     job_id = _job_id(job_url)
-    hrefless = None
+    hrefless = []
     for i in range(min(count, 12)):
         candidate = entry.nth(i)
         try:
@@ -666,18 +695,33 @@ def _open_apply_flow(page, job_url: str):
             page.goto(href, wait_until="domcontentloaded")
             _settle(page)
             return candidate
-        if not href and hrefless is None:
-            hrefless = candidate
+        if not href:
+            hrefless.append(candidate)
 
-    # No href names this job. A single caption-only control is still plausibly the
-    # real button (an older rendering); several are the rail, and guessing among
-    # them is how the walk ended up in another vacancy.
-    if hrefless is not None and count == 1:
-        _click_via_dom(hrefless)
+    # No href names this job. Counted among the controls WITHOUT an href, not
+    # among all matches — and that distinction is the whole of lead #309.
+    #
+    # Measured live 2026-08-22 on job 4456728594, whose apply Voyager reports as
+    # `ComplexOnsiteApply` (Easy Apply, no companyApplyUrl at all): once the
+    # similar-jobs rail mounts, this selector matches THREE elements — the top
+    # card's `<button>Простая подача заявки</button>` with no href, and two rail
+    # `<a>`s carrying the same caption in their subtree, both pointing at
+    # `/jobs/search-results/?keywords=` where no job id appears.
+    #
+    # The old test asked for `count == 1`, meaning the page had to hold exactly
+    # one match in total. Three matched, so a vacancy with a working Easy Apply
+    # was declared external, the offsite lookup correctly found no apply url, and
+    # the lead died as «нет ссылки внешнего отклика».
+    #
+    # A rail entry always carries an href; the top card's button never does. So
+    # ONE hrefless candidate is the button, unambiguously. Several still are not:
+    # guessing among caption-only controls is how the walk ended up eight clicks
+    # deep in somebody else's vacancy, and that refusal stays.
+    if len(hrefless) == 1:
+        _click_via_dom(hrefless[0])
         _settle(page)
-        return hrefless
+        return hrefless[0]
     raise _ExternalApplyNeeded()
-    return entry
 
 
 def _job_id(url: str) -> str:
