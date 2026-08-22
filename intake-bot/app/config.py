@@ -22,7 +22,10 @@ GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 SHEET_ID = os.environ["SHEET_ID"]
 SHEET_TAB = os.environ.get("SHEET_TAB", "Лист1")
 
-CANDIDATES_TAB = os.environ.get("CANDIDATES_TAB", "Кандидаты")
+# Вкладка «Кандидаты» боту больше не нужна: подтверждение найденного убрано
+# 2026-08-22, поиск на ноуте кладёт лид сразу в основную вкладку. Настройки
+# CANDIDATES_TAB и SHOW_BATCH (сколько карточек слать пачкой) ушли вместе с ним;
+# у ноутбучной половины CANDIDATES_TAB остался — она читает старую вкладку ради
+# дедупликации.
 CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
-SHOW_BATCH = int(os.environ.get("SHOW_BATCH", "7"))

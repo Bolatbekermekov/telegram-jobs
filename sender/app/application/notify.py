@@ -39,7 +39,10 @@ def search_done_message(platforms, added: int, timings=None) -> str:
     """
     plats = ", ".join(platforms)
     if added:
-        head = f"✅ Поиск завершён ({plats}): +{added} вакансий.\nЖми /show_vacancies"
+        # Подтверждать больше нечего: найденное уже лежит лидами `new` и уйдёт
+        # ближайшим прогоном. Раньше здесь звали жать /show_vacancies.
+        head = (f"✅ Поиск завершён ({plats}): +{added} вакансий — "
+                "уже в очереди на отправку.")
     else:
         head = f"✅ Поиск завершён ({plats}): ничего нового."
     if not timings:

@@ -15,9 +15,10 @@ def is_stale(last_seen: str, now: _dt.datetime, threshold_seconds: int) -> bool:
 
 def start_search_reply(online: bool) -> str:
     if online:
-        return "🔎 Запускаю поиск — кандидаты появятся через пару минут. Потом жми /show_vacancies."
+        return ("🔎 Запускаю поиск — найденное само встанет в очередь на отправку "
+                "через пару минут. Одобрять ничего не надо.")
     return ("⚠️ Ноут сейчас офлайн. Поставил поиск в очередь — выполню, как включишь ноут. "
-            "Потом жми /show_vacancies.")
+            "Найденное сразу пойдёт в работу.")
 
 
 class ControlGateway:

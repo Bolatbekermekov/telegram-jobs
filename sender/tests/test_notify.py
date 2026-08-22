@@ -1,11 +1,14 @@
 from app.application.notify import format_duration, search_done_message
 
 
-def test_message_with_new_candidates_points_to_show_vacancies():
+def test_message_with_new_candidates_says_they_are_already_queued():
+    """Подтверждать нечего: с 2026-08-22 найденное сразу лежит лидами `new`.
+    Звать в /show_vacancies больше нельзя — команды нет."""
     msg = search_done_message(["linkedin", "wellfound"], 15)
     assert "15" in msg
     assert "linkedin, wellfound" in msg
-    assert "/show_vacancies" in msg
+    assert "очереди на отправку" in msg
+    assert "/show_vacancies" not in msg
 
 
 def test_message_with_zero_says_nothing_new():

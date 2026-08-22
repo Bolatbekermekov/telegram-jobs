@@ -22,9 +22,6 @@ from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
 from app.infrastructure.vacancy_fetcher import (  # noqa: E402
     fetch_vacancy_text, resolve_lnkd_in,
 )
-from app.infrastructure.candidates_gateway import (  # noqa: E402
-    CandidatesGateway, build_vacancy_message, parse_callback,
-)
 from app.infrastructure.control_gateway import ControlGateway  # noqa: E402
 
 app = FastAPI()
@@ -69,39 +66,14 @@ def _book():
     return gspread.authorize(creds).open_by_key(config.SHEET_ID)
 
 
-def _candidates_gateway():
-    book = _book()
-    return CandidatesGateway(book.worksheet(config.CANDIDATES_TAB),
-                             book.worksheet(config.SHEET_TAB))
-
-
 def _control_gateway():
     return ControlGateway(_book().worksheet(config.CONTROL_TAB))
 
 
-def _reply_with_buttons(chat_id: int, text: str, buttons) -> None:
-    import json
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text,
-               "reply_markup": json.dumps({"inline_keyboard": buttons})}
-    data = urllib.parse.urlencode(payload).encode()
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
-    except Exception:
-        pass
-
-
-def _edit_message(chat_id: int, message_id: int, text: str) -> None:
-    """Replace a card's text and drop its inline keyboard (decision is final)."""
-    import json
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/editMessageText"
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
-               "reply_markup": json.dumps({"inline_keyboard": []})}
-    data = urllib.parse.urlencode(payload).encode()
-    try:
-        urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=10)
-    except Exception:
-        pass
+# Кнопок в боте больше нет, поэтому нет и отправки клавиатур с правкой карточек:
+# `_reply_with_buttons` и `_edit_message` обслуживали ТОЛЬКО ✅/❌ у найденных
+# вакансий. Подтверждение убрано (2026-08-22) — поиск кладёт лид сразу в
+# основную вкладку, и телефону нечего решать.
 
 
 def _do_start_search(chat_id: int, platform: str) -> None:
@@ -112,43 +84,17 @@ def _do_start_search(chat_id: int, platform: str) -> None:
     _reply(chat_id, start_search_reply(online))
 
 
-def _do_show_vacancies(chat_id: int) -> None:
-    gw = _candidates_gateway()
-    rows = gw.pending(config.SHOW_BATCH)
-    if not rows:
-        _reply(chat_id, "Пока нет новых вакансий. Запусти /start_search.")
-        return
-    for row in rows:
-        text, buttons = build_vacancy_message(row)
-        _reply_with_buttons(chat_id, text, buttons)
-
-
-def _do_approve(cid: str) -> None:
-    _candidates_gateway().approve(cid)
-
-
-def _do_skip(cid: str) -> None:
-    _candidates_gateway().reject(cid)
-
-
 def _handle_command(text: str, chat_id: int) -> bool:
     from app.domain.bot_commands import command_to_search_platform
     platform = command_to_search_platform(text)
     if platform is not None:
         _do_start_search(chat_id, platform)
         return True
-    if text.startswith("/show_vacancies"):
-        _do_show_vacancies(chat_id)
-        return True
+    # `/show_vacancies` жил здесь до 2026-08-22 и показывал найденное с кнопками
+    # ✅/❌. Подтверждение убрано целиком: поиск пишет лид сразу в основную
+    # вкладку, и одобрять больше нечего. Команда не распознаётся намеренно —
+    # пусть уйдёт в обычную ветку разбора сообщения, а не делает вид, что живёт.
     return False
-
-
-def _handle_callback(data: str) -> None:
-    action, cid = parse_callback(data)
-    if action == "approve":
-        _do_approve(cid)
-    elif action == "skip":
-        _do_skip(cid)
 
 
 # Human-readable labels for the statuses we know about, in display order.
@@ -189,17 +135,10 @@ async def telegram_webhook(
 
     update = await request.json()
 
-    callback = update.get("callback_query")
-    if callback:
-        from app.infrastructure.candidates_gateway import decided_text
-        data = callback.get("data", "")
-        _handle_callback(data)
-        cb_msg = callback.get("message") or {}
-        cb_chat = (cb_msg.get("chat") or {}).get("id")
-        cb_mid = cb_msg.get("message_id")
-        if cb_chat and cb_mid:
-            action = "approve" if data.startswith("approve") else "skip"
-            _edit_message(cb_chat, cb_mid, decided_text(cb_msg.get("text") or "", action))
+    # Нажатия на кнопки больше не приходят: клавиатур бот не шлёт с 2026-08-22.
+    # Ответ на старую карточку, которая ещё висит у кого-то в переписке, надо
+    # проглотить молча — Telegram иначе будет повторять апдейт.
+    if update.get("callback_query"):
         return {"ok": True}
 
     message = update.get("message") or update.get("channel_post") or {}
@@ -221,7 +160,7 @@ async def telegram_webhook(
             "Команда /status — сводка по лидам (сколько new / sent).\n"
             "Поиск: /start_search — по всем платформам, /search_linkedin, "
             "/search_wellfound, /search_remoteok, /search_remotive, /search_hh. "
-            "/show_vacancies — показать найденные.",
+            "Найденное сразу встаёт в очередь на отправку — одобрять не нужно.",
         )
         return {"ok": True}
 
