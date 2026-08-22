@@ -476,4 +476,4 @@ def test_known_limit_any_unambiguous_shape_wins_even_a_bystanders():
     # a bystander's LinkedIn — the residual is not a t.me quirk
     assert resolved("Резюме смотрел @kollega, его профиль linkedin.com/in/kollega. "
                     "Отклики через форму.") == (
-        "linkedin", "linkedin.com/in/kollega", "")
+        "linkedin", "https://www.linkedin.com/in/kollega", "")

@@ -6,7 +6,25 @@ infrastructure/vacancy_fetcher.py so this stays testable on saved HTML.
 import html as _html
 import re
 
-_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+from app.domain.contact import canonical_linkedin_url
+
+# A url as MESSAGES actually carry one. The scheme is optional in real traffic: a
+# phone paste and Telegram's own link text both drop it, which is why every rule in
+# contact.py has always written it `(?:https?://)?`. Everything in THIS module
+# required it, so `linkedin.com/jobs/view/…` was not a url here at all — and the
+# damage was silent rather than an error: `is_link_only` counted the link's own 108
+# characters as prose, so the message looked like it carried a description, the page
+# was never fetched, and «Вакансия» became the summariser explaining that it cannot
+# open links. Measured live 2026-08-22 on the X-FLOW job 4455783459.
+#
+# Scheme-less matching is bounded to the hosts this project handles and demands a
+# path after the host, so ordinary prose stays prose: "пиши на hh.ru" has no path,
+# and the left boundary keeps the host from matching inside an email address.
+_KNOWN_HOST = (r"(?:[\w-]+\.)*(?:linkedin\.com|lnkd\.in|t\.me|telegram\.me|"
+               r"hh\.(?:ru|kz|uz|by|kg|az|tj)|wellfound\.com|angel\.co|"
+               r"threads\.(?:com|net))")
+_URL_RE = re.compile(rf"https?://\S+|(?<![\w@.-]){_KNOWN_HOST}/\S*", re.IGNORECASE)
+_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 # What the hh iOS share sheet wraps around the link.
 _SHARE_BOILERPLATE_RE = re.compile(
     r"sent via hh mobile app|отправлено из мобильного приложения hh|"
@@ -38,12 +56,28 @@ def is_link_only(text: str) -> bool:
 _TRAILING = ".,);]>\"'"
 
 
+def _absolute(url: str) -> str:
+    """A matched url in the shape the fetch and every `is_*_url` test expect.
+
+    Two normalisations, and both are load-bearing rather than tidy. The scheme,
+    because a url without one is not something an http client will accept and not
+    something the anchored predicates below will match. And LinkedIn's apex host,
+    through the same helper `detect_contact` uses: `linkedin.com/jobs/view/…`
+    answers 200 with a 20 KB shell that holds no advert, where the `www` host
+    serves the whole page. `canonical_linkedin_url` is a no-op for every other
+    host, which is why it can sit on the common path.
+    """
+    if not _SCHEME_RE.match(url):
+        url = f"https://{url}"
+    return canonical_linkedin_url(url)
+
+
 def iter_urls(text: str):
-    """Every http(s) url in `text`, trailing sentence punctuation trimmed."""
+    """Every url in `text` — absolute, trailing sentence punctuation trimmed."""
     for m in _URL_RE.finditer(text or ""):
         url = m.group(0).rstrip(_TRAILING)
         if url:
-            yield url
+            yield _absolute(url)
 
 
 # LinkedIn rewrites every outbound url inside post text as `lnkd.in/<code>`, so a
@@ -115,11 +149,14 @@ def expand_short_links(text: str, resolve_link, limit: int = _MAX_EXPANDED_LINKS
         nonlocal budget
         matched = m.group(0)
         url = matched.rstrip(_TRAILING)
-        if budget <= 0 or not is_lnkd_in_url(url):
+        # Tested and requested in absolute form, replaced by length of the ORIGINAL
+        # match: a share that dropped the scheme is still the same short link.
+        absolute = _absolute(url)
+        if budget <= 0 or not is_lnkd_in_url(absolute):
             return matched
         budget -= 1
         try:
-            resolved = resolve_link(url)
+            resolved = resolve_link(absolute)
         except Exception:  # noqa: BLE001 — an unreachable shortener costs the
             # expansion, never the lead: the message is saved as it was written.
             return matched

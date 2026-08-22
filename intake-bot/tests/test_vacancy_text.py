@@ -1,5 +1,7 @@
 """Deciding a message has no vacancy text, and pulling one out of hh HTML."""
-from app.domain.vacancy_text import extract_hh_vacancy, is_link_only
+from app.domain.vacancy_text import (
+    extract_hh_vacancy, is_fetchable_vacancy_url, is_link_only, pick_vacancy_url,
+)
 
 IOS_SHARE = ("Vacancy: https://hh.kz/vacancy/135171273?from=share_ios\n\n"
              "Sent via hh mobile app https://hh.ru/mobile?from=share_ios")
@@ -490,3 +492,35 @@ def test_expanding_without_a_resolver_is_a_no_op():
 
     text = "Вакансия: https://lnkd.in/p/dckb8nUV"
     assert expand_short_links(text, None) == text
+
+
+# --- links shared without their scheme ---------------------------------------
+# The shape a phone paste and Telegram's own link text produce. `detect_contact`
+# always accepted it, this module did not, and the mismatch was silent: the link's
+# own characters counted as prose, so the message never looked link-only, the page
+# was never read, and the summariser's "не удалось извлечь" landed in «Вакансия».
+def test_a_bare_link_is_still_a_link_only_message():
+    assert is_link_only("linkedin.com/jobs/view/senior-fullstack-engineer-at-x-flow"
+                        "-4455783459?trk=public_post_feed-job-posting-content")
+
+
+def test_a_bare_vacancy_link_is_pickable_and_comes_back_absolute():
+    picked = pick_vacancy_url("linkedin.com/jobs/view/senior-fullstack-engineer"
+                              "-at-x-flow-4455783459")
+    assert picked.startswith("https://www.linkedin.com/jobs/view/")
+    assert is_fetchable_vacancy_url(picked)
+
+
+def test_the_apex_host_is_folded_onto_www_even_when_the_scheme_was_typed():
+    """Measured: the apex answers 200 with a 20 KB shell that holds no advert."""
+    assert pick_vacancy_url("https://linkedin.com/jobs/view/4455783459") == \
+        "https://www.linkedin.com/jobs/view/4455783459"
+
+
+def test_prose_that_merely_names_a_host_is_not_a_link():
+    """No path after the host, so «пиши на hh.ru» stays prose — widening the url
+    rule must not start summarising messages as though they were shares."""
+    text = ("Привет! Мы ищем backend-разработчика в команду, стек Python и Postgres, "
+            "офис в Астане, вилка обсуждается. Подробности есть на hh.ru, спрашивай.")
+    assert not is_link_only(text)
+    assert pick_vacancy_url(text) == ""

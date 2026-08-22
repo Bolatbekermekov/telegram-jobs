@@ -1,6 +1,7 @@
 from app.domain.contact import (
     Contact, canonical_threads_url, detect_contact, threads_author,
 )
+from app.domain.vacancy_text import is_fetchable_vacancy_url
 
 
 def test_telegram_handle():
@@ -309,8 +310,11 @@ _GOLDEN = [
     ("john@gmail.com", "email", "john@gmail.com"),
     # Ordering: the handle rule is second of six, so a later handle beats an earlier email.
     ("пиши boss@acme.com или @ivan_hr", "telegram", "@ivan_hr"),
-    ("профиль https://linkedin.com/in/ivan", "linkedin", "https://linkedin.com/in/ivan"),
-    ("см. (linkedin.com/in/abc).", "linkedin", "linkedin.com/in/abc"),
+    ("профиль https://linkedin.com/in/ivan", "linkedin", "https://www.linkedin.com/in/ivan"),
+    # Trailing punctuation trimmed AND the missing scheme put back: the target is
+    # what the fetcher will be handed, and `^https?://` is what every url
+    # predicate downstream tests for.
+    ("см. (linkedin.com/in/abc).", "linkedin", "https://www.linkedin.com/in/abc"),
     # Regional domain folded onto hh.ru (the saved session is hh.ru-only), tracking dropped.
     ("откликнуться https://astana.hh.kz/vacancy/135297431?from=share_ios",
      "hh", "https://hh.ru/vacancy/135297431"),
@@ -327,7 +331,7 @@ _GOLDEN = [
     ("Ищем разработчика @ Astana, откликайтесь на hh.ru/vacancy/12345",
      "hh", "https://hh.ru/vacancy/12345"),
     ("CV -> hr @ acme.com или https://linkedin.com/in/ivan",
-     "linkedin", "https://linkedin.com/in/ivan"),
+     "linkedin", "https://www.linkedin.com/in/ivan"),
     # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
     # Telegram target — it is an Instagram/Threads handle. The capture stops at the
     # dot, so taking the match stored "@maria": a real, unrelated user who was never
@@ -361,3 +365,30 @@ def test_golden_parity_vectors():
         if actual != expected:
             drift.append(f"  {text!r}\n    expected {expected}\n    got      {actual}")
     assert not drift, "detect_contact drifted from the golden vectors:\n" + "\n".join(drift)
+
+
+# --- a LinkedIn link shared without its scheme -------------------------------
+# Every rule here takes the scheme as optional (`(?:https?://)?`), because that is
+# how links arrive from a phone paste and from Telegram's own link text. The hh and
+# Threads rules then canonicalise what they matched into an absolute URL; the
+# LinkedIn rule stored it verbatim. Downstream, every predicate in vacancy_text
+# anchors on `^https?://` — so `linkedin.com/jobs/view/…` was a contact nothing
+# would ever fetch, and «Вакансия» got the summariser's apology instead of the
+# advert (measured live 2026-08-22 on the X-FLOW job below).
+def test_a_linkedin_job_link_without_a_scheme_is_still_a_page_we_can_read():
+    c = detect_contact(
+        "linkedin.com/jobs/view/senior-fullstack-engineer-at-x-flow-4455783459"
+        "?trk=public_post_feed-job-posting-content")
+    assert c.platform == "linkedin"
+    assert is_fetchable_vacancy_url(c.target), c.target
+
+
+def test_a_scheme_less_linkedin_profile_is_canonicalised_too():
+    """Not job-only: the sender opens a profile target as a URL as well."""
+    assert detect_contact("Профиль: linkedin.com/in/ivan-ivanov").target == \
+        "https://www.linkedin.com/in/ivan-ivanov"
+
+
+def test_a_scheme_that_is_already_there_is_left_alone():
+    assert detect_contact("https://www.linkedin.com/in/ivan").target == \
+        "https://www.linkedin.com/in/ivan"

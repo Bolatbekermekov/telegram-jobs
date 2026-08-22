@@ -96,6 +96,36 @@ def canonical_hh_url(url: str) -> str:
     return _HH_REGIONAL_RE.sub("https://hh.ru/", url, count=1)
 
 
+# A scheme is optional in every rule above, because that is how links arrive: a
+# phone paste and Telegram's own link text both drop it. The siblings put it back
+# — hh through `canonical_hh_url`, Threads through `canonical_threads_url` — and
+# this rule did not, so `linkedin.com/jobs/view/…` was stored as the contact
+# verbatim. Every predicate in vacancy_text anchors on `^https?://`, so that lead
+# was not a candidate for the vacancy read at all: nothing fetched the page, and
+# «Вакансия» was filled by the summariser explaining it cannot open links. Same
+# class of miss as the slug shape (lead #169), one layer earlier.
+_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+
+
+_LINKEDIN_APEX_RE = re.compile(r"^https?://linkedin\.com/", re.IGNORECASE)
+
+
+def canonical_linkedin_url(url: str) -> str:
+    """A LinkedIn link -> one the fetcher can actually open.
+
+    The host matters as much as the scheme, and it is not cosmetic. Measured live
+    2026-08-22 on the same job: `www.linkedin.com/jobs/view/…` answers 200 with the
+    whole 247 KB job page, while the apex `linkedin.com/jobs/view/…` answers 200
+    with a 20 KB shell that carries no advert at all. Both are "200", so nothing
+    downstream could tell them apart — the read just came back empty. Subdomains
+    other than the apex are left as written: they were not measured, and a guess
+    here is a silently empty read.
+    """
+    if not _SCHEME_RE.match(url):
+        url = f"https://{url}"
+    return _LINKEDIN_APEX_RE.sub("https://www.linkedin.com/", url, count=1)
+
+
 def detect_contact(text: str) -> Contact | None:
     m = _TME_RE.search(text)
     if m:
@@ -134,7 +164,7 @@ def detect_contact(text: str) -> Contact | None:
         return Contact("email", _clean(m.group(0)))
     m = _LINKEDIN_RE.search(text)
     if m:
-        return Contact("linkedin", _clean(m.group(0)))
+        return Contact("linkedin", canonical_linkedin_url(_clean(m.group(0))))
     m = _HH_VACANCY_RE.search(text) or _HH_RE.search(text)
     if m:
         return Contact("hh", canonical_hh_url(_clean(m.group(0))))

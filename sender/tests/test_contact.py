@@ -95,8 +95,11 @@ _GOLDEN = [
     ("john@gmail.com", "email", "john@gmail.com"),
     # Ordering: the handle rule is second of six, so a later handle beats an earlier email.
     ("пиши boss@acme.com или @ivan_hr", "telegram", "@ivan_hr"),
-    ("профиль https://linkedin.com/in/ivan", "linkedin", "https://linkedin.com/in/ivan"),
-    ("см. (linkedin.com/in/abc).", "linkedin", "linkedin.com/in/abc"),
+    ("профиль https://linkedin.com/in/ivan", "linkedin", "https://www.linkedin.com/in/ivan"),
+    # Trailing punctuation trimmed AND the missing scheme put back: the target is
+    # what the fetcher will be handed, and `^https?://` is what every url
+    # predicate downstream tests for.
+    ("см. (linkedin.com/in/abc).", "linkedin", "https://www.linkedin.com/in/abc"),
     # Regional domain folded onto hh.ru (the saved session is hh.ru-only), tracking dropped.
     ("откликнуться https://astana.hh.kz/vacancy/135297431?from=share_ios",
      "hh", "https://hh.ru/vacancy/135297431"),
@@ -113,7 +116,7 @@ _GOLDEN = [
     ("Ищем разработчика @ Astana, откликайтесь на hh.ru/vacancy/12345",
      "hh", "https://hh.ru/vacancy/12345"),
     ("CV -> hr @ acme.com или https://linkedin.com/in/ivan",
-     "linkedin", "https://linkedin.com/in/ivan"),
+     "linkedin", "https://www.linkedin.com/in/ivan"),
     # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
     # Telegram target — it is an Instagram/Threads handle. The capture stops at the
     # dot, so taking the match stored "@maria": a real, unrelated user who was never
@@ -147,3 +150,19 @@ def test_golden_parity_vectors():
         if actual != expected:
             drift.append(f"  {text!r}\n    expected {expected}\n    got      {actual}")
     assert not drift, "detect_contact drifted from the golden vectors:\n" + "\n".join(drift)
+
+
+# --- a LinkedIn link shared without its scheme -------------------------------
+# Mirrors the intake's regression. Here it bites on the other side: a thread that
+# says «откликнуться linkedin.com/jobs/view/…» resolves to a target the sender
+# then has to open, and a scheme-less string is not a URL any http client accepts.
+def test_a_scheme_less_linkedin_link_is_canonicalised():
+    assert detect_contact(
+        "linkedin.com/jobs/view/senior-fullstack-engineer-at-x-flow-4455783459"
+    ).target == (
+        "https://www.linkedin.com/jobs/view/senior-fullstack-engineer-at-x-flow-4455783459")
+
+
+def test_a_scheme_that_is_already_there_is_left_alone():
+    assert detect_contact("https://www.linkedin.com/in/ivan").target == \
+        "https://www.linkedin.com/in/ivan"
