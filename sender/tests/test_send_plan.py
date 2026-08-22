@@ -403,7 +403,15 @@ def test_an_invite_without_a_note_is_not_worth_a_pause():
 
 
 def test_nothing_sent_means_nothing_to_wait_out():
-    for result in (SendResult(ok=False, rate_limited=True),
-                   SendResult(ok=False, manual=True),
+    for result in (SendResult(ok=False, manual=True),
                    SendResult(ok=False, error="boom")):
         assert pause_after(result) is False, result
+
+
+def test_a_platform_limit_is_the_one_failure_worth_waiting_out():
+    """Единственный исход, где мы ждём после НЕотправленного.
+
+    С 2026-08-22 прогон не бросает площадку на первом лимите, а пробует
+    следующего. Без паузы эти попытки ушли бы очередью подряд — машинным
+    паттерном, и притом когда площадка уже показала спам-флаг."""
+    assert pause_after(SendResult(ok=False, rate_limited=True)) is True

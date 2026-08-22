@@ -8,6 +8,7 @@ send/edit/skip per lead; AUTO_SEND=true sends automatically — except leads hel
 for a human by send_plan.hold_reason, which get `manual` instead of a send.
 Per-platform daily limits and anti-ban delays apply.
 """
+from collections import Counter
 import random
 import time
 from dataclasses import replace
@@ -45,11 +46,7 @@ from app.domain.outreach_history import (
     normalize_address,
 )
 from app.domain.lead import (
-    STATUS_FAILED,
-    STATUS_INVITED,
-    STATUS_MANUAL,
-    STATUS_SENT,
-    STATUS_SKIPPED,
+    STATUS_FAILED, STATUS_INVITED, STATUS_MANUAL, STATUS_NEW, STATUS_SENT, STATUS_SKIPPED,
 )
 from app.infrastructure.channels.registry import build_channel
 from app.infrastructure.cv_loader import load_cv_text, load_text_file
@@ -356,7 +353,11 @@ def run() -> None:
     print(f"Новых лидов: {len(leads)}. Режим: {mode}.")
 
     sent_per_platform: dict[str, int] = {}
-    rate_limited: set[str] = set()       # platforms that rate-limited us this run
+    # Сколько лидов площадка отказалась принять из-за лимита. Раньше это было
+    # множество-выключатель («площадка выбыла»); теперь прогон идёт дальше, и
+    # счётчик нужен только чтобы сказать в конце, сколько людей ждут следующего
+    # раза — иначе про них знает только «Заметка» в таблице.
+    rate_limited: Counter[str] = Counter()
     quit_requested = False
     gen_failures = 0                     # consecutive message-generation failures
 
@@ -370,11 +371,16 @@ def run() -> None:
                 break
             platform = lead.platform
 
-            if platform in rate_limited:
-                # Platform threw us off earlier this run (rate-limit) — leave its
-                # remaining leads `new` (write no status) so the next run retries them,
-                # matching the old grouped loop that `break`ed and left them unmarked.
-                continue
+            # Раньше здесь стоял guard: первый же лимит площадки выбрасывал все её
+            # оставшиеся лиды из прогона. По прямому решению владельца аккаунта
+            # (2026-08-22, повторено дважды) прогон идёт до конца и пробует
+            # КАЖДЫЙ лид: лимит записывается в «Заметку», статус остаётся `new`,
+            # и следующий прогон берёт этих же людей снова.
+            #
+            # Цена решения названа и принята: запросы продолжают уходить под
+            # активным спам-флагом Telegram, а это то, что превращает суточное
+            # ограничение в постоянный бан. Пауза между попытками поэтому
+            # сохраняется — см. pause_after.
 
             reason = skip_reason(lead, _KNOWN)
             if reason is not None:
@@ -436,16 +442,6 @@ def run() -> None:
                     status, note = hold
                     repo.mark_status(lead, status, note=note)
                     print(f"✋ Лид #{lead.lead_id}: {note}")
-                    continue
-
-                if platform in rate_limited:
-                    # Re-tested after resolving: the check at the top of the loop
-                    # saw `threads`, and this lead is now telegram/email/hh. In a
-                    # loop built around ban avoidance, a resolved lead must not be
-                    # the one thing that walks past the guard. No status written —
-                    # same as the guard above, it retries next run.
-                    print(f"⏭  Лид #{lead.lead_id}: платформа '{platform}' "
-                          "ограничила нас в этом прогоне — оставляю на следующий.")
                     continue
 
                 gated = dm_fallback_reason(
@@ -640,18 +636,19 @@ def run() -> None:
                 repo.mark_status(lead, STATUS_MANUAL, note=result.error)
                 print(f"✋ Нужен ручной отклик [{platform}]: {result.error}")
             elif result.rate_limited:
-                # Статус НЕ пишем — ни `skipped`, ни `failed`. Ограничение это
-                # состояние площадки, а не брак лида: сообщение не ушло, а
-                # телеграмный спам-лимит («Too many requests») снимается сам за
-                # часы. Живой лид умирал молча, потому что `skipped` терминален
-                # (и вообще запрещён), а `failed` врал бы про причину.
-                # Оставляем `new` — ровно то, что докстрока skip_reason уже
-                # обещает и что получают остальные лиды этой площадки на
-                # guard'е в начале цикла.
-                rate_limited.add(platform)
-                print(f"🛑 Платформа '{platform}' ограничила нас ({result.error or 'rate-limited'}) "
-                      f"— лид #{lead.lead_id} и остальные её лиды оставляю "
-                      "на следующий прогон ('new').")
+                # Статус остаётся `new` — ровно поэтому следующий прогон возьмёт
+                # этого человека снова. Но заметка теперь ПИШЕТСЯ: раньше строка
+                # молчала, и по таблице нельзя было отличить лид, до которого не
+                # дошли руки, от лида, которому площадка отказала.
+                #
+                # `new` пишется явно, а не «оставляется»: mark_status с этим
+                # статусом ничего не меняет в колонке статуса, зато кладёт
+                # заметку тем же вызовом.
+                rate_limited[platform] += 1
+                repo.mark_status(lead, STATUS_NEW,
+                                 note=result.error or "rate-limited")
+                print(f"🛑 Лимит площадки '{platform}' ({result.error or 'rate-limited'}) "
+                      f"— лид #{lead.lead_id} остаётся 'new', пробую следующего.")
             else:
                 repo.mark_status(lead, STATUS_FAILED, note=result.error)
                 print(f"❌ Ошибка отправки: {result.error}")
@@ -668,6 +665,10 @@ def run() -> None:
 
     total = sum(sent_per_platform.values())
     print(f"\nГотово. Отправлено за сессию: {total}. По платформам: {sent_per_platform}")
+    if rate_limited:
+        held = sum(rate_limited.values())
+        print(f"🛑 Уперлись в лимит на {held} лид(ах): {dict(rate_limited)}. "
+              "Все они остались 'new' — следующий прогон возьмёт их снова.")
 
 
 def run_worker():
@@ -683,7 +684,7 @@ def run_worker():
     from app.application.run_search import run_search
     from app.application.worker_tick import worker_tick
     from app.domain.search_request import SEARCH_PLATFORMS, SearchRequest, platforms_for
-    from app.infrastructure.candidates_repo import CandidatesRepo
+    from app.infrastructure.search_leads_repo import SearchLeadsRepo
     from app.infrastructure.control_repo import ControlRepo
     from app.infrastructure.search.registry import build_searcher
 
@@ -695,7 +696,9 @@ def run_worker():
     ctrl_ws = book.worksheet(config.CONTROL_TAB)
 
     control = ControlRepo(ctrl_ws)
-    candidates = CandidatesRepo(cand_ws, main_ws, config.CANDIDATES_PENDING_CAP)
+    # Порядок аргументов обратный прежнему и это не опечатка: писать теперь надо
+    # в ОСНОВНУЮ вкладку, а «Кандидаты» остались источником памяти для дедупа.
+    candidates = SearchLeadsRepo(main_ws, cand_ws, config.CANDIDATES_PENDING_CAP)
     searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS}
 
     def run_one(req):
@@ -744,14 +747,14 @@ def run_search_once(platforms):
     from google.oauth2.service_account import Credentials
 
     from app.application.run_search import run_search
-    from app.infrastructure.candidates_repo import CandidatesRepo
+    from app.infrastructure.search_leads_repo import SearchLeadsRepo
     from app.infrastructure.search.registry import build_searcher
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
     book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
-    candidates = CandidatesRepo(
-        book.worksheet(config.CANDIDATES_TAB), book.worksheet(config.SHEET_TAB),
+    candidates = SearchLeadsRepo(
+        book.worksheet(config.SHEET_TAB), book.worksheet(config.CANDIDATES_TAB),
         config.CANDIDATES_PENDING_CAP)
     if "hh" in platforms and not Path(config.HH_STATE_PATH).exists():
         # Manual run: log in interactively now instead of failing with a hint.
