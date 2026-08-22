@@ -44,5 +44,7 @@ notice_period: "2 недели"
 custom_answers:
   "how did you hear about us": "LinkedIn"
   "telegram handle": "@ivanov"
-  "years of experience": "5"
+  # НЕ задавай здесь «years of experience»: custom_answers проверяются РАНЬШЕ
+  # правила про опыт, так что ключ отсюда отменит min_experience_years и в
+  # выпадающем списке диапазонов ответить будет нечем.
   "why do you want to work": ""

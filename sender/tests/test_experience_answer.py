@@ -71,3 +71,27 @@ def test_a_zero_floor_leaves_the_question_to_the_model():
     got = map_field(_field("Years of experience"),
                     ApplyProfile(min_experience_years=0), "/cv.pdf")
     assert got.value != "0"
+
+
+# --- формулировки, где технология стоит МЕЖДУ «годами» и «опытом» ------------
+# «без разницы питон или js» — просьба владельца профиля 2026-08-22. Прежний
+# шаблон требовал, чтобы слова стояли вплотную («years of experience»,
+# «years experience»), поэтому вопрос, в который вписали название стека, мимо
+# него проходил и обязательное поле снова утаскивало заявку в manual.
+# Промежуток ограничен 20 символами, а вся подпись — _MAX_LABEL_CHARS: это
+# по-прежнему короткий вопрос про число, а не просьба рассказать об опыте.
+def test_the_stack_may_sit_between_the_words():
+    for label in ("Years of Python experience",
+                  "Years of JavaScript experience",
+                  "Experience with React (years)",
+                  "Опыт Python (лет)"):
+        got = map_field(_field(label), PROFILE, "/cv.pdf")
+        assert got.value == "3", label
+        assert got.source == "profile", label
+
+
+def test_prose_about_experience_is_still_left_to_the_model():
+    """Расширение не должно превращать просьбу рассказать в подстановку числа."""
+    got = map_field(_field("Расскажите об опыте работы в распределённых командах "
+                           "и о том, что было сложнее всего"), PROFILE, "/cv.pdf")
+    assert got.value != "3"
