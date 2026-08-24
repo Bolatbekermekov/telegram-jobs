@@ -5,6 +5,7 @@ infrastructure/vacancy_fetcher.py so this stays testable on saved HTML.
 """
 import html as _html
 import re
+from urllib.parse import urlparse as _urlparse
 
 from app.domain.contact import canonical_linkedin_url
 
@@ -22,6 +23,7 @@ from app.domain.contact import canonical_linkedin_url
 # and the left boundary keeps the host from matching inside an email address.
 _KNOWN_HOST = (r"(?:[\w-]+\.)*(?:linkedin\.com|lnkd\.in|t\.me|telegram\.me|"
                r"hh\.(?:ru|kz|uz|by|kg|az|tj)|wellfound\.com|angel\.co|"
+               r"remocate\.app|remoteok\.com|"
                r"threads\.(?:com|net))")
 _URL_RE = re.compile(rf"https?://\S+|(?<![\w@.-]){_KNOWN_HOST}/\S*", re.IGNORECASE)
 _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -204,7 +206,8 @@ def is_threads_post_url(url: str) -> bool:
 
 def is_fetchable_vacancy_url(url: str) -> bool:
     return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
-            or is_linkedin_post_url(url) or is_threads_post_url(url))
+            or is_linkedin_post_url(url) or is_threads_post_url(url)
+            or is_aggregator_job_url(url) or is_remoteok_job_url(url))
 
 
 def pick_vacancy_url(text: str) -> str:
@@ -368,3 +371,94 @@ def extract_threads_post(html: str, max_chars: int = 5000) -> str:
     # the post's bullet points), don't collapse whitespace.
     text = _html.unescape(m.group(1)).strip()
     return text[:max_chars]
+
+
+# --- агрегаторы вакансий -----------------------------------------------------
+# Площадки, которые не нанимают сами, а ведут на сайт работодателя. Замер живьём
+# 2026-08-22 на remocate.app: JSON-LD нет, og-тегов нет, meta description нет —
+# только `<title>` вида «Software Engineering Intern (Winter) at Datadog», текст
+# после снятия тегов начинается прямо с заголовка, а среди восьми внешних хостов
+# страницы семь это шум (CDN Webflow, шрифты Google, соцсети и поддомены самого
+# агрегатора) и ровно один — настоящий адрес отклика.
+#
+# Правило узкое, /jobs/<слаг>: главная и блог вакансиями не являются.
+_AGGREGATOR_JOB_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?remocate\.app/jobs/[\w%-]+", re.IGNORECASE)
+# RemoteOK держится отдельно от них НЕ по недосмотру: у него в sender'е свой
+# канал — с переходом через /l/<id> и распознаванием платной стены, — и общий
+# путь для агрегаторов это потерял бы.
+_REMOTEOK_JOB_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?remoteok\.com/remote-jobs/[\w%-]+", re.IGNORECASE)
+
+
+def is_aggregator_job_url(url: str) -> bool:
+    return bool(_AGGREGATOR_JOB_RE.match((url or "").strip()))
+
+
+def is_remoteok_job_url(url: str) -> bool:
+    return bool(_REMOTEOK_JOB_RE.match((url or "").strip()))
+
+
+_SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style)[^>]*>.*?</\1>")
+_ANY_TAG_RE = re.compile(r"(?s)<[^>]+>")
+_HREF_RE = re.compile(r'href="(https?://[^"]+)"', re.IGNORECASE)
+# Где кончается ОДНА вакансия и начинается лента чужих. Замер: «Apply for this
+# job» стоит на 3894-м символе из 298607, и всё после него — карточки других
+# компаний. Без обреза в бриф уезжает чужая вакансия, и письмо пишется по ней.
+_VACANCY_END_MARKERS = ("Apply for this job", "Apply now", "Subscribe")
+# Хвост длиннее этого не нужен даже без маркера: письмо пишется по сути, а не по
+# всей странице, и лишнее только размывает бриф.
+_VACANCY_TEXT_CAP = 4000
+# Хосты, которые на странице агрегатора не могут быть работодателем.
+_NOISE_HOSTS = (
+    "googleapis.com", "gstatic.com", "google.com", "googletagmanager.com",
+    "website-files.com", "cloudfront.net", "twitter.com", "x.com",
+    "facebook.com", "instagram.com", "linkedin.com", "youtube.com",
+    "t.me", "telegram.me",
+)
+
+
+def extract_aggregator_vacancy(html_text) -> str:
+    """Текст одной вакансии со страницы агрегатора."""
+    text = _SCRIPT_STYLE_RE.sub(" ", str(html_text or ""))
+    text = _ANY_TAG_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", _html.unescape(text)).strip()
+    if not text:
+        return ""
+    cut = len(text)
+    for marker in _VACANCY_END_MARKERS:
+        # Со сдвигом: маркер может стоять и в шапке (кнопка «Apply» дублируется
+        # сверху), а обрезать по нему всю вакансию значит отдать пустой бриф.
+        found = text.find(marker, 200)
+        if found != -1:
+            cut = min(cut, found)
+    return text[:min(cut, _VACANCY_TEXT_CAP)].strip()
+
+
+def _brand_of(page_url: str) -> str:
+    """«www.remocate.app» -> «remocate». Нужен, чтобы отсечь поддомены сервисов
+    САМОГО агрегатора: его касса и статус-страница живут на чужих доменах
+    (lemonsqueezy, betteruptime), но имя агрегатора в хосте несут."""
+    host = _urlparse(str(page_url or "")).netloc.lower().split(":")[0]
+    parts = [p for p in host.split(".") if p and p != "www"]
+    return parts[-2] if len(parts) >= 2 else (parts[0] if parts else "")
+
+
+def aggregator_apply_url(html_text, page_url: str) -> str:
+    """Настоящий адрес отклика со страницы агрегатора, или "" если он не один.
+
+    Несколько кандидатов — это не повод выбирать: тот же принцип, что у точки
+    входа Easy Apply, где угадывание между похожими контролами уводило прогон в
+    чужую вакансию. Пусто здесь означает «пусть человек посмотрит сам», и это
+    честнее, чем отклик не туда.
+    """
+    brand = _brand_of(page_url)
+    by_host: dict = {}
+    for href in _HREF_RE.findall(str(html_text or "")):
+        host = _urlparse(href).netloc.lower()
+        if not host or (brand and brand in host):
+            continue
+        if any(host == n or host.endswith("." + n) for n in _NOISE_HOSTS):
+            continue
+        by_host.setdefault(host, href)
+    return next(iter(by_host.values())) if len(by_host) == 1 else ""

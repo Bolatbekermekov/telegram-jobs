@@ -35,8 +35,10 @@ and a datacenter IP that any of these sites may throttle, so every failure retur
 from app.domain.vacancy_text import (  # noqa: F401 — re-exported, see above
     extract_external_url, extract_hh_vacancy, extract_linkedin_post,
     extract_linkedin_vacancy, extract_threads_post, expand_short_links,
-    is_fetchable_vacancy_url, is_hh_vacancy_url, is_linkedin_job_url,
-    is_linkedin_post_url, is_lnkd_in_url, is_threads_post_url, iter_urls,
+    aggregator_apply_url, extract_aggregator_vacancy,
+    is_aggregator_job_url, is_fetchable_vacancy_url, is_hh_vacancy_url,
+    is_linkedin_job_url, is_linkedin_post_url, is_lnkd_in_url,
+    is_remoteok_job_url, is_threads_post_url, iter_urls,
     pick_vacancy_url, strip_tracking_params,
 )
 
@@ -151,6 +153,12 @@ def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
     elif is_threads_post_url(url):
         extract = extract_threads_post
         ua = _CLIENT_UA          # a browser UA gets an empty JS shell here
+    elif is_aggregator_job_url(url) or is_remoteok_job_url(url):
+        # Доска вакансий: страница публичная, логина не просит, но структуры в
+        # ней нет — ни JSON-LD, ни og-тегов, ни meta description (замер живьём
+        # 2026-08-22 на remocate.app). Поэтому текст снимается тегами, а лишнее
+        # обрезается по маркеру конца вакансии — см. extract_aggregator_vacancy.
+        extract = extract_aggregator_vacancy
     else:
         return ""
     try:

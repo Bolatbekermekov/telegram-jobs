@@ -2,6 +2,7 @@
 from app.application.answer_log import AnswerLog, wrap_answerer
 from app.application.hh_questions import canonicalize_answers
 from app.infrastructure.channels.email_channel import EmailChannel
+from app.infrastructure.channels.external import ExternalChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
 from app.infrastructure.channels.remoteok import RemoteOKChannel
@@ -99,6 +100,14 @@ def build_channel(platform: str, config):
         log = AnswerLog()
         return _with_answer_log(RemoteOKChannel(
             config.REMOTEOK_STATE_PATH, headless=config.BROWSER_HEADLESS,
+            external_apply_deps=_external_apply_deps(config, log)), log)
+    if platform == "external":
+        # Агрегатор вакансий: своей формы у площадки нет, отклик живёт на сайте
+        # работодателя. Сессия не нужна — страницы публичные, поэтому и своего
+        # state_path у канала нет, в отличие от RemoteOK и Wellfound.
+        log = AnswerLog()
+        return _with_answer_log(ExternalChannel(
+            headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.

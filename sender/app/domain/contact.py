@@ -126,6 +126,27 @@ def canonical_linkedin_url(url: str) -> str:
     return _LINKEDIN_APEX_RE.sub("https://www.linkedin.com/", url, count=1)
 
 
+# --- агрегаторы вакансий и RemoteOK ------------------------------------------
+# Пост со ссылкой на доску вакансий раньше терялся целиком: ни одно правило выше
+# такую ссылку не узнавало, detect_contact отвечал None, и бот говорил
+# «Не нашёл контакт», ничего не сохранив. Проверено живьём 2026-08-22 на трёх
+# формах сообщения — голая ссылка, пост без контакта, пост с @ником.
+#
+# RemoteOK держится ОТДЕЛЬНОЙ площадкой, а не в общем `external`, потому что у
+# него в sender'е свой канал: переход через /l/<id> со страницы вакансии (без
+# Referer этот путь отвечает 302 обратно) и распознавание платной Premium-стены.
+# Общий путь для агрегаторов это потерял бы.
+_AGGREGATOR_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?remocate\.app/jobs/[\w%-]+\S*", re.IGNORECASE)
+_REMOTEOK_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?remoteok\.com/remote-jobs/[\w%-]+\S*", re.IGNORECASE)
+
+
+def _with_scheme(url: str) -> str:
+    """Схема обязательна: без неё это не адрес, который откроет браузер."""
+    return url if _SCHEME_RE.match(url) else f"https://{url}"
+
+
 def detect_contact(text: str) -> Contact | None:
     m = _TME_RE.search(text)
     if m:
@@ -171,4 +192,10 @@ def detect_contact(text: str) -> Contact | None:
     m = _WELLFOUND_RE.search(text)
     if m:
         return Contact("wellfound", _clean(m.group(0)))
+    m = _AGGREGATOR_RE.search(text)
+    if m:
+        return Contact("external", _with_scheme(_clean(m.group(0))))
+    m = _REMOTEOK_RE.search(text)
+    if m:
+        return Contact("remoteok", _with_scheme(_clean(m.group(0))))
     return None
