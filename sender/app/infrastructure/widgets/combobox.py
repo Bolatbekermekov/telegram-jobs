@@ -50,13 +50,18 @@ _POLL_MS = 200
 # Сколько ждать список, который рисуется без ввода (статический). Замер: ~400 мс.
 _OPEN_BUDGET_MS = 1500
 # Сколько ждать ответ сервера после ввода. Замер на N26: до 2.7 с; берём с запасом.
-_TYPED_BUDGET_MS = 4500
+_TYPED_BUDGET_MS = 3500
+# Сколько список должен не меняться, чтобы счесть его окончательным. Пустой так
+# не считается: у N26 меню «Location (City)» стоит пустым до 2.5 секунды, пока
+# идёт запрос, и «пусто уже полсекунды» там значит только «ещё не пришло».
+_SETTLE_MS = 600
 # Ожидания самих действий. Ждать по 30 секунд (умолчание Playwright) незачем:
 # цена ошибки тут — одно поле, а не прогон.
 _CLICK_TIMEOUT_MS = 4000
 _ACT_TIMEOUT_MS = 2000
-# Общий потолок на поле. Четыре запроса подряд по 4.5 с в него не влезут — и не
-# должны: анкета с двумя десятками выпадающих полей иначе растянется на минуты.
+# Общий потолок на поле: четыре запроса подряд по 3.5 с в него не влезут — и не
+# должны, иначе анкета с двумя десятками выпадающих полей растянется на минуты.
+# Замер живьём 2026-08-24: попадание стоит 0.1–2.6 с, промах — до 9 с.
 TOTAL_TIMEOUT_MS = 15000
 
 _HELPERS = r"""
@@ -267,6 +272,30 @@ def combobox_value(page, locator) -> str:
     return _held(_state(locator))
 
 
+def combobox_options(page, locator, *, timeout_ms: int = _OPEN_BUDGET_MS) -> list:
+    """Что поле предлагает, если его просто открыть. «[]» — прочитать не вышло.
+
+    Нужна вызывающей стороне, чтобы было ЧЕМ отвечать. Скрапер формы видит
+    react-select обычным `input[type=text]` и приносит `options: []`, поэтому
+    модель отвечает на такой вопрос вслепую — и мимо: на живой форме N26 вопрос
+    про GDPR предлагает единственный вариант «I Acknowledge», а на ответ «Yes»
+    ни один вариант не похож (замер 2026-08-24). Поле при этом остаётся
+    нетронутым: список открывается и закрывается обратно.
+    """
+    box = locator.first
+    try:
+        _open(page, box)
+        # Пустой ответ не похож ни на один вариант, поэтому `_pick` здесь только
+        # смотрит: нажать ему нечего.
+        _, options, _ = _pick(page, box, "", time.monotonic() + timeout_ms / 1000,
+                              timeout_ms, False, None)
+        return options or []
+    except Exception:  # noqa: BLE001 — поля может уже не быть
+        return []
+    finally:
+        _cleanup(page, box, clear=False)
+
+
 def fill_combobox(page, locator, value: str, *,
                   timeout_ms: int = TOTAL_TIMEOUT_MS) -> bool:
     """Выбрать `value` в выпадающем поле. True — только если выбор ПОДТВЕРЖДЁН.
@@ -290,7 +319,7 @@ def fill_combobox(page, locator, value: str, *,
     except Exception:  # noqa: BLE001 — чужой виджет не должен ронять заполнение
         ok = False
     finally:
-        _cleanup(page, box, ok)
+        _cleanup(page, box, clear=not ok)
     return ok
 
 
@@ -300,19 +329,53 @@ def _choose(page, box, value: str, deadline: float) -> bool:
     # открывать меню и выбирать заново.
     if _rank(_held(before), value) in (0, 1):
         return True
-    box.click(timeout=_ACT_TIMEOUT_MS)
+    _open(page, box)
+    seen, whole = None, None
     for key in [None] + _keys(value):
-        if key is not None and not _typed(box, key):
+        typed = key is not None
+        if typed and not _typed(box, key):
             continue
-        budget = _OPEN_BUDGET_MS if key is None else _TYPED_BUDGET_MS
-        picked = _pick(page, box, value, deadline, budget)
+        picked, seen, settled = _pick(
+            page, box, value, deadline,
+            _TYPED_BUDGET_MS if typed else _OPEN_BUDGET_MS, typed, seen)
         if picked:
             # Вариант нажат: либо форма его приняла, либо это уже не наш случай —
             # жать наугад следующий значит записать в анкету не тот ответ.
             return _confirm(box, before, picked)
+        if not typed:
+            whole = seen if settled else None
+        elif settled and whole and set(seen) <= set(whole):
+            # Список только сужается — значит фильтр местный, и весь набор мы уже
+            # видели при открытии. Совпадения в нём не было, а более короткий
+            # запрос ничего нового не покажет.
+            break
         if time.monotonic() >= deadline:
             break
     return False
+
+
+def _open(page, box) -> None:
+    """Раскрыть список — а не переключить его.
+
+    Клик по УЖЕ открытому react-select закрывает меню. Замер 2026-08-24: прочитав
+    варианты «Degree» и сразу нажав поле, чтобы ответить, мы получали закрытый
+    список, ноль вариантов и «не смог заполнить» на ровном месте. Поэтому сначала
+    смотрим, открыт ли он, а второй клик делаем, только если первого не хватило.
+    """
+    if _is_open(page, box):
+        return
+    box.click(timeout=_ACT_TIMEOUT_MS)
+    if not _is_open(page, box):
+        box.click(timeout=_ACT_TIMEOUT_MS)
+
+
+def _is_open(page, box) -> bool:
+    if _state(box).get("expanded"):
+        return True
+    try:
+        return bool(box.evaluate(_fn(_MENU_JS), timeout=_ACT_TIMEOUT_MS))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _typed(box, key: str) -> bool:
@@ -330,16 +393,26 @@ def _typed(box, key: str) -> bool:
         return False
 
 
-def _pick(page, box, value: str, deadline: float, budget_ms: int) -> str:
-    """Дождаться подходящего варианта и нажать его. «» — не дождались.
+def _pick(page, box, value: str, deadline: float, budget_ms: int,
+          typed: bool, was):
+    """Дождаться подходящего варианта и нажать его.
 
-    Ждём не время, а появление ВАРИАНТА: пока ответ сервера в пути, в меню висят
-    варианты прошлого запроса, и «первый попавшийся» — это «3iL Limoges» вместо
-    нужного вуза.
+    Возвращает (текст нажатого варианта, последний виденный список, окончателен
+    ли он). Ждём не время, а появление ВАРИАНТА: пока ответ сервера в пути, в
+    меню висят варианты прошлого запроса, и «первый попавшийся» — это «3iL
+    Limoges» вместо нужного вуза.
+
+    Окончательным список считается, когда он не пуст, отличается от того, что
+    висел до нашего запроса (то есть виджет на запрос уже ответил), и с тех пор
+    не менялся. Дожидаться в такой ситуации нечего — совпадения в нём нет.
     """
     end = min(time.monotonic() + budget_ms / 1000, deadline)
+    last, since = None, time.monotonic()
     while True:
         options = box.evaluate(_fn(_MENU_JS), timeout=_ACT_TIMEOUT_MS)
+        now = time.monotonic()
+        if options != last:
+            last, since = options, now
         idx = _best(options, value)
         if idx is not None:
             option = page.locator(_OPTION_SEL).nth(idx)
@@ -347,9 +420,12 @@ def _pick(page, box, value: str, deadline: float, budget_ms: int) -> str:
             # указывает уже на другой вариант, и жать его нельзя.
             if _fold(option.inner_text(timeout=_ACT_TIMEOUT_MS)) == _fold(options[idx]):
                 option.click(timeout=_CLICK_TIMEOUT_MS)
-                return options[idx]
-        if time.monotonic() >= end:
-            return ""
+                return options[idx], options, False
+        answered = options != was if typed else True
+        if options and answered and now - since >= _SETTLE_MS / 1000:
+            return "", options, True
+        if now >= end:
+            return "", options, False
         _pause(page, _POLL_MS)
 
 
@@ -377,13 +453,24 @@ def _confirm(box, before, option: str) -> bool:
     return val == opt or val in opt or opt in val or _rank(shown, option) is not None
 
 
-def _cleanup(page, box, success: bool) -> None:
-    """Убрать за собой: снять пометку меню, а после неудачи — закрыть список и
-    очистить поле, чтобы форма осталась такой, какой мы её нашли."""
+def _cleanup(page, box, clear: bool) -> None:
+    """Убрать за собой: закрыть список, снять пометку меню и, после неудачи,
+    очистить поле — чтобы форма осталась такой, какой мы её нашли.
+
+    Закрываем расфокусировкой, а не Escape: react-select с `escapeClearsValue`
+    понимает Escape при закрытом меню как «стереть выбор» (кнопка «Clear
+    selections» у полей Greenhouse есть), и на уже заполненном поле это стёрло бы
+    ответ. А закрывать надо обязательно: открытое меню накрывает соседние
+    вопросы, и клик по следующему до него не доходит — замер 2026-08-24, после
+    чтения вариантов «Degree*» поле «End date month*» не открывалось вовсе.
+    """
     try:
-        if not success:
-            box.press("Escape", timeout=_ACT_TIMEOUT_MS)
+        if clear:
             box.fill("", timeout=_ACT_TIMEOUT_MS)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        box.blur(timeout=_ACT_TIMEOUT_MS)
     except Exception:  # noqa: BLE001
         pass
     try:

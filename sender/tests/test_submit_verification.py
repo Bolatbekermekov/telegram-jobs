@@ -118,16 +118,33 @@ def test_the_word_apply_alone_is_not_a_confirmation():
 
 # --- typeaheads -------------------------------------------------------------
 
-def test_a_combobox_is_typed_into_and_its_suggestion_picked():
+# Как ИМЕННО набирается запрос и выбирается подсказка — забота
+# `widgets/combobox.py`, и проверяется она там: на копии разметки react-select и
+# в настоящем браузере. Прежние тесты пиновали здесь набор и клик по общему
+# селектору подсказок — и пережить это не могли: замер 2026-08-24 показал, что
+# такой селектор ловит на форме Greenhouse 254 варианта, из которых 244 — скрытый
+# список стран телефонного виджета, и клик уходил в невидимую «Afghanistan».
+# Здесь остаётся то, за что отвечает `fill_fields`: какое значение он несёт
+# виджету и что делает с отказом.
+
+def _spy_combobox(monkeypatch, answer=True):
+    calls = []
+
+    def fake(page, locator, value, **kw):
+        calls.append(value)
+        return answer
+
+    monkeypatch.setattr(ea, "_fill_combobox", fake)
+    return calls
+
+
+def test_a_combobox_gets_its_value_through_the_widget(monkeypatch):
     field = FieldObs(tag="input", type="text", label="Location (city)",
                      required=True, combobox=True, ref="0")
-    page = _Page(fields=[field], counts={ea.SEL_SUGGESTION: 8})
-    plan = build_plan(PageObservation(fields=[field]), PROFILE, "cv.pdf")
-
-    ea.fill_fields(page, plan)
-
-    assert page.typed['[data-af="0"]'] == ["Astana"]     # keystrokes opened the list
-    assert ea.SEL_SUGGESTION in page.clicks              # and one was chosen
+    calls = _spy_combobox(monkeypatch)
+    ea.fill_fields(_Page(fields=[field]),
+                   build_plan(PageObservation(fields=[field]), PROFILE, "cv.pdf"))
+    assert calls == ["Astana"]
 
 
 def test_a_plain_text_field_is_still_filled_not_typed():
@@ -141,14 +158,27 @@ def test_a_plain_text_field_is_still_filled_not_typed():
     assert '[data-af="0"]' not in page.typed
 
 
-def test_a_combobox_with_no_suggestions_keeps_the_typed_text():
+def test_a_combobox_that_offered_nothing_fitting_stops_a_required_field(monkeypatch):
+    """Раньше набранный текст просто оставался в поле. Для типа, который
+    принимает ТОЛЬКО свои варианты, это отправка мусора: форма либо отвергнет
+    её, либо запишет не то. Замер 2026-08-24: `Bachelors Degree` даёт у Datadog
+    ноль вариантов, а `Bachelor` — «Bachelor's Degree»; промах здесь обычное
+    дело. Виджет в таком случае оставляет поле пустым, а обязательное поле
+    честно уходит в ручной отклик."""
     field = FieldObs(tag="input", type="text", label="Location (city)",
                      required=True, combobox=True, ref="0")
-    page = _Page(fields=[field], counts={ea.SEL_SUGGESTION: 0})
-    ea.fill_fields(page, build_plan(PageObservation(fields=[field]), PROFILE, "cv.pdf"))
+    _spy_combobox(monkeypatch, answer=False)
+    with pytest.raises(ManualApplyRequired, match="не выбрался вариант"):
+        ea.fill_fields(_Page(fields=[field]),
+                       build_plan(PageObservation(fields=[field]), PROFILE, "cv.pdf"))
 
-    assert page.typed['[data-af="0"]'] == ["Astana"]
-    assert ea.SEL_SUGGESTION not in page.clicks
+
+def test_a_combobox_the_form_did_not_require_is_skipped_quietly(monkeypatch):
+    field = FieldObs(tag="input", type="text", label="Location (city)",
+                     required=False, combobox=True, ref="0")
+    _spy_combobox(monkeypatch, answer=False)
+    ea.fill_fields(_Page(fields=[field]),
+                   build_plan(PageObservation(fields=[field]), PROFILE, "cv.pdf"))
 
 
 def test_the_pressed_button_vanishing_counts_as_submitted():

@@ -11,11 +11,14 @@ from app.application.apply_guard import (
     host_or_vendor_allowed, leaked_secrets, vendor_behind,
 )
 from app.application.auto_apply import (
-    COVER_LETTER_RE, answer_ai_fields, build_plan,
+    COVER_LETTER_RE, _match_choice, answer_ai_fields, build_plan,
 )
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
 from app.infrastructure.widgets.choice import pick_choice as _pick_choice
+from app.infrastructure.widgets.combobox import (
+    _best, combobox_options as _combobox_options, fill_combobox as _fill_combobox,
+)
 from app.infrastructure.widgets.file_upload import attach_file as _attach_file
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
@@ -250,7 +253,6 @@ def scrape_form(page) -> PageObservation:
     return _build_observation(page.evaluate(_SCRAPE_JS))
 
 
-SEL_SUGGESTION = "[role=option], [role=listbox] li"
 # How long an ATS needs to finish re-rendering around a file input after upload.
 _FILE_SETTLE_MS = 2000
 
@@ -263,31 +265,6 @@ _AFFIRMATIVE = frozenset({"true", "yes", "on", "1", "y", "да", "checked"})
 
 def _is_affirmative(value: str) -> bool:
     return (value or "").strip().lower() in _AFFIRMATIVE
-
-
-def _fill_typeahead(page, box, value: str) -> None:
-    """Answer a typeahead by picking from its own list, not by typing at it.
-
-    `.fill()` writes the value straight into the DOM without keystrokes, so the
-    suggestion list never opens and the control keeps no chosen item — LinkedIn
-    answers that with "Please enter a valid answer" and refuses the step (lead
-    126, measured live 2026-07-29: «Location (city)» is `role=combobox`,
-    `aria-autocomplete=list`, and typing "Astana" offered eight suggestions).
-    Typing character by character is what opens the list.
-
-    If nothing is offered, the typed text stays: some comboboxes do accept free
-    text, and where they don't the form says so and the caller reports that.
-    """
-    box.click(timeout=8000)
-    box.fill("", timeout=8000)
-    box.type(value, delay=120)
-    try:
-        page.wait_for_timeout(1500)
-    except Exception:  # noqa: BLE001 — fake page has no wait_for_timeout
-        pass
-    options = page.locator(SEL_SUGGESTION)
-    if options.count() > 0:
-        options.first.click(timeout=4000)
 
 
 def _relocate(page, field):
@@ -438,7 +415,22 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                             f"{where}: не поставилась галочка "
                             f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.combobox and a.value:
-                _fill_typeahead(page, loc.first, a.value)
+                # Прежний путь искал подсказки ПО ВСЕЙ СТРАНИЦЕ, а на каждой
+                # форме Greenhouse рядом с «Phone» висит intl-tel-input со
+                # скрытым списком 244 стран. Замер 2026-08-24: на странице 254
+                # вариантов, первый — невидимая «Afghanistan», клик уходил туда,
+                # ждал видимости 4 секунды и падал. Общий except выдавал ровно
+                # «не смог заполнить обязательное поле» — так умерли N26 на
+                # «Location (City)*» и Datadog на «School*».
+                # Виджет ищет список только по `aria-controls` СВОЕГО поля и
+                # ждёт не время, а появление подходящего варианта: серверные
+                # подсказки приходят через 1–3 секунды, а до тех пор в меню
+                # висят ответы на прошлый запрос.
+                if not _fill_combobox(page, loc, a.value) and a.field.required:
+                    raise ManualApplyRequired(
+                        f"{where}: не выбрался вариант «{a.value[:40]}» в "
+                        f"обязательном поле «{a.field.label or a.field.name}», "
+                        "нужен ручной отклик")
             elif a.value:
                 text = a.value
                 if a.field.type == "number":
@@ -633,6 +625,97 @@ def _wants_cover_letter_file(obs) -> bool:
                for f in obs.fields)
 
 
+# Длиннее этого список — уже не словарь поля, а СТРАНИЦА ответа сервера. Замер
+# 2026-08-25: «School*» у Datadog отдаёт по открытию ровно 100 вузов по алфавиту
+# от «3iL Limoges», остальные приходят по мере ввода; «Location (City)*» у N26 —
+# ноль, там тоже ищет сервер. У настоящих словарей на тех же формах 1–30
+# вариантов, и только «Country*» — 244, но на него отвечает профиль.
+#
+# Чего стоит спутать одно с другим: приняв сотню за словарь, мы отдаём её модели
+# закрытым списком, а ответ на вопрос с вариантами клампится в индекс — «не
+# знаю» там нет. Живой прогон 2026-08-25: выпускнику Astana IT University в
+# анкету Datadog вписалось «Al-Farabi Kazakh National University». Ошибка в
+# другую сторону дешёвая: вопрос остаётся свободным, модель отвечает по резюме,
+# вариант ищет виджет, а не найдя — поле честно уходит в ручной отклик.
+_VOCABULARY_LIMIT = 100
+
+
+def _load_combobox_options(page, plan) -> None:
+    """Достать варианты выпадающих вопросов и переспросить то, что мимо них.
+
+    Скрапер приносит у combobox `options: []` — react-select держит варианты в
+    попапе, и в DOM до открытия их нет. Отсюда две беды, обе замерены на живых
+    формах, обе кончаются пустым обязательным полем:
+
+    * модель отвечает вслепую, а поле принимает только своё — у N26 вопрос про
+      GDPR берёт ровно «I Acknowledge», у Datadog аттестация — ровно «Yes»;
+    * ответ ИЗ ПРОФИЛЯ мимо списка ничем не лучше. Прогон 2026-08-25: «Where are
+      you currently based?*» получил «Astana, Kazakhstan», а список предлагает
+      «Berlin / Vienna / Barcelona / Other»; «Start date month*» получил «1
+      month» из срока выхода, а там названия месяцев. Оба поля остались пустыми,
+      и обе формы ушли в ручной отклик, будучи заполненными на девять десятых.
+
+    Поэтому список читается для КАЖДОГО выпадающего поля, а не только для тех,
+    что идут к модели, и не подошедший к нему готовый ответ отправляется к ней
+    же — теперь уже с вариантами перед глазами.
+
+    Цена — одно открытие меню на поле, 0,65–1,74 с по замеру 2026-08-25 (N26:
+    7,1 с на девять полей, Datadog: 16,5 с на двадцать пять, Profitap и
+    BlueThrone: 0 с, выпадающих полей у них нет). Поэтому меню открывается
+    только там, где без него не обойтись: варианты ещё не известны, поле
+    выпадающее, и его вообще кто-то собирается заполнять.
+
+    Само поле при чтении не заполняется: `combobox_options` только раскрывает
+    список и закрывает его обратно, ничего не набирая.
+    """
+    for a in plan.actions:
+        f = a.field
+        # Необязательное поле без ответа из профиля и без задания модели
+        # останется пустым в любом случае — на форме Datadog это, например,
+        # «Are you Hispanic/Latino?». Открывать его меню незачем.
+        if not f.combobox or f.options or not (a.needs_ai or a.value):
+            continue
+        try:
+            options = list(
+                _combobox_options(page, page.locator(f'[data-af="{f.ref}"]')))
+        except Exception:  # noqa: BLE001 — без списка всё как было
+            continue
+        # Страницу сервера за словарь не выдаём: вопрос с вариантами клампится в
+        # индекс, «не знаю» в таком ответе нет, и модель выбрала бы чужой вуз
+        # из первой сотни по алфавиту. Свободным вопросом он отвечается по
+        # резюме, а нужный вариант ищет уже виджет — он умеет печатать и ждать
+        # ответа сервера. Пустой список — та же история, только явнее.
+        if not options or len(options) >= _VOCABULARY_LIMIT:
+            continue
+        f.options = options
+        # Совпадение проверяет ТОТ ЖЕ `_best`, которым виджет будет выбирать
+        # вариант. Готовый `_option_index_for` из auto_apply здесь не годится:
+        # он ищет вхождение в обе стороны без границы слова, и на живом списке
+        # месяцев ответ «No» считает ноябрём (проверено 2026-08-25) — поле
+        # осталось бы с ответом, который виджет всё равно не выберет. Решать
+        # должна одна функция, иначе проверка и нажатие расходятся.
+        if not a.value or _best(options, a.value) is not None:
+            continue
+        # «Prefer not to say» — не догадка профиля, а решение не отвечать, и в
+        # чужом словаре оно называется иначе: у Datadog это «Decline To Self
+        # Identify», «I don't wish to answer», «I do not want to answer».
+        # Спрашивать про такое модель значит просить её ответить по существу —
+        # резюме она читала, и имя в нём есть. Выбираем то же, что выбрал бы
+        # map_field, знай он варианты при разборе формы.
+        if a.source == "eeo":
+            idx = _match_choice(options, "prefer not", "decline", "not to say")
+            a.choice_index = len(options) - 1 if idx is None else idx
+            a.value = options[a.choice_index]
+            continue
+        # Готовый ответ, которого нет в списке, — это пустое поле. Пусть его
+        # выберет модель: варианты у неё теперь есть, а профиль про чужой
+        # словарь знать не обязан.
+        a.value = ""
+        a.choice_index = None
+        a.needs_ai = True
+        a.source = "ai"
+
+
 def _hop_to_embedded_form(page, obs, route):
     """Последняя попытка перед ручным откликом: перейти на форму вендора.
 
@@ -718,6 +801,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         from app.infrastructure.cover_letter_pdf import render_cover_letter_pdf
         cover_letter = render_cover_letter_pdf(content.body)
     plan = build_plan(obs, profile, cv_path, cover_letter_path=cover_letter)
+    _load_combobox_options(page, plan)
     answer_ai_fields(plan, answerer, vacancy_context or content.body)
     missing = plan.unmapped_required()
     if missing:
