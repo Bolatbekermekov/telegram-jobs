@@ -63,6 +63,21 @@ class FakePage:
         return FakeLocator(self, sel)
 
 
+# Прикрепление файла живёт в `widgets/file_upload.py` и проверяется там — на
+# настоящей разметке и в настоящем браузере (Dropzone у Teamtailor удаляет вход
+# из DOM, и доказательство приходится искать в отправляемых полях). Здесь
+# страница фейковая: ни DOM, ни виджета у неё нет, а проверяются решения
+# `fill_fields` — на каком поле он зовёт прикрепление и что делает с отказом.
+@pytest.fixture(autouse=True)
+def _stub_attach_file(monkeypatch):
+    def fake(page, locator, path, **kw):
+        if locator.count() == 0:
+            return False
+        locator.first.set_input_files(path)
+        return True
+    monkeypatch.setattr(ea, "_attach_file", fake)
+
+
 def _obs_form():
     return PageObservation(url="https://boards.greenhouse.io/x/jobs/1", fields=[
         FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),

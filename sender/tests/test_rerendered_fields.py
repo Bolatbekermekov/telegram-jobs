@@ -17,6 +17,21 @@ from app.infrastructure.channels import external_apply as ea
 
 PROFILE = ApplyProfile(full_name="Bolatbek Yermekov", email="a@b.com")
 
+# Прикрепление файла живёт в `widgets/file_upload.py` и проверяется там — на
+# настоящей разметке и в настоящем браузере (Dropzone у Teamtailor удаляет вход
+# из DOM, и доказательство приходится искать в отправляемых полях). Здесь
+# страница фейковая: ни DOM, ни виджета у неё нет, а проверяются решения
+# `fill_fields` — на каком поле он зовёт прикрепление и что делает с отказом.
+@pytest.fixture(autouse=True)
+def _stub_attach_file(monkeypatch):
+    def fake(page, locator, path, **kw):
+        if locator.count() == 0:
+            return False
+        locator.first.set_input_files(path)
+        return bool(page.files.get(locator.sel, 0))
+    monkeypatch.setattr(ea, "_attach_file", fake)
+
+
 DECOY = FieldObs(tag="input", type="file", label="", required=False, ref="0")
 RESUME = FieldObs(tag="input", type="file", label="Resume", required=True, ref="3")
 NAME = FieldObs(tag="input", type="text", label="Name", required=True, ref="1")
@@ -85,12 +100,19 @@ class _Page:
 
 
 def test_a_required_field_that_lost_its_tag_is_found_again():
+    """Резюме доезжает до СВОЕГО поля, даже когда форма перерисовалась.
+
+    Проверка «а был ли повторный поиск» отсюда ушла вместе с самим поиском: его
+    делает `widgets/file_upload.py`, и делает не по нашему локатору, а по
+    приметам входа — у Teamtailor узла с этим id в DOM нет вовсе те 800 мс, пока
+    файл летит в хранилище. Там это и закреплено. Здесь остаётся то, за что
+    отвечает `fill_fields`: на какое поле уходит какой файл."""
     page = _Page([DECOY, NAME, RESUME])
     ea.fill_fields(page, build_plan(PageObservation(fields=[DECOY, NAME, RESUME]),
                                     PROFILE, "cv.pdf"))
 
     assert ('[data-af="3"]', "cv.pdf") in page.uploads      # the real resume
-    assert page.scrapes > 0                                  # it took a re-scrape
+    assert not any(sel == '[data-af="0"]' for sel, _ in page.uploads)
 
 
 def test_the_resume_is_verified_on_a_freshly_found_element():

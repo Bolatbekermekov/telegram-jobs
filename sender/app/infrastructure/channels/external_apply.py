@@ -16,6 +16,7 @@ from app.application.auto_apply import (
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
 from app.infrastructure.widgets.choice import pick_choice as _pick_choice
+from app.infrastructure.widgets.file_upload import attach_file as _attach_file
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -389,26 +390,19 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
         # (never submit a partial form); an optional one is just skipped.
         try:
             if a.is_file and a.value:
-                loc.first.set_input_files(a.value, timeout=8000)
-                # Let the upload land before touching anything else. An ATS
-                # re-renders the form around a file input, and without this pause
-                # the NEXT field is looked up mid-swap.
-                _pause(page, _FILE_SETTLE_MS)
-                if a.field.required:
-                    # Verify on a FRESHLY located element, never on the handle we
-                    # just used: measured on Ashby (2026-07-29) the file lands on
-                    # the node React is about to discard, so the old handle happily
-                    # reports 1 file while the live input holds none — and the
-                    # application goes out without the resume it requires.
-                    live = _relocate(page, a.field) or loc
-                    if _attached_count(live) == 0:
-                        live.first.set_input_files(a.value, timeout=8000)
-                        _pause(page, _FILE_SETTLE_MS)
-                        live = _relocate(page, a.field) or live
-                    if _attached_count(live) == 0:
-                        raise ManualApplyRequired(
-                            f"{where}: резюме не прикрепилось к обязательному полю "
-                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
+                # Установка файла, ожидание и повторная попытка — внутри виджета.
+                # Здесь их больше нет намеренно: прежняя проверка читала
+                # `el.files.length`, а Teamtailor (Dropzone.js) забирает FileList
+                # и УДАЛЯЕТ вход из DOM, так что счётчик там ноль ВСЕГДА — даже
+                # когда файл уже улетел в хранилище работодателя с ответом 201.
+                # Замер 2026-08-24 на вакансии BlueThrone: лид #419 объявлялся
+                # непрошедшим при готовой к отправке форме, а перед этим резюме
+                # успевало загрузиться ДВАЖДЫ — вторая копия от «повторной
+                # попытки». Чем прикрепление доказывается теперь, см. виджет.
+                if not _attach_file(page, loc, a.value) and a.field.required:
+                    raise ManualApplyRequired(
+                        f"{where}: резюме не прикрепилось к обязательному полю "
+                        f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.tag == "select" and a.choice_index is not None:
                 loc.first.select_option(index=a.choice_index, timeout=8000)
             elif (a.field.type in ("radio", "checkbox")

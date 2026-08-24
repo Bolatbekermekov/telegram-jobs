@@ -12,7 +12,7 @@
             загрузка ещё идёт
     t+227   POST /uploads/presigned_data → 200, следом POST в S3 → 201
     t+818   на превью встают классы dz-success dz-complete, у него
-            data-…-upload-preview-url-value = https://…s3…/tmpuploads/<uuid>/probe_cv.pdf,
+            data-…-upload-preview-url-value = https://…s3…/tmpuploads/<uuid>/cv.pdf,
             и ровно эта ссылка лежит в ОТПРАВЛЯЕМОМ поле
             <input type=text name="candidate[resume_remote_url]">;
             input[type=file] возвращается в DOM новым, пустым и уже без required
@@ -102,8 +102,12 @@ _STATE_JS = r"""(fp) => {
     || (fp.name && e.name && e.name === fp.name);
   let block = document.querySelector('[' + fp.blockAttr + '="' + fp.token + '"]');
   const inBlock = block ? [...block.querySelectorAll('input[type=file]')] : [];
+  // Место среди файловых входов — примета последней очереди и только пока блок
+  // не размечен: у безымянного входа (на живой форме такой третий, видео-ответ)
+  // других примет нет, но стоит нашему входу пропасть из DOM на время загрузки,
+  // как тот же индекс укажет на СОСЕДНЮЮ загрузку.
   const el = inBlock.find(match) || all.find(match) || inBlock[0]
-          || (fp.idx >= 0 && fp.idx < all.length ? all[fp.idx] : null);
+          || (!block && fp.idx >= 0 && fp.idx < all.length ? all[fp.idx] : null);
   if (!block && el) {
     for (let n = el.parentElement, i = 0; n && i < 6; n = n.parentElement, i++) {
       if (n.tagName === 'BODY' || n.tagName === 'HTML') break;
