@@ -4,7 +4,12 @@ These don't test that injections are detected — they can't be. They test that 
 successful injection still can't reach a submit on an unknown host, and can't
 carry the candidate's contact details out through a free-text answer.
 """
-from app.application.apply_guard import ALLOWED_APPLY_HOSTS, host_allowed, leaked_secrets
+import pytest
+
+from app.application.apply_guard import (
+    ALLOWED_APPLY_HOSTS, cname_targets, host_allowed, host_or_vendor_allowed,
+    leaked_secrets, vendor_behind,
+)
 from app.domain.apply_profile import ApplyProfile
 
 
@@ -124,3 +129,187 @@ def test_company_own_page_is_still_rejected():
 def test_join_com_is_allowed():
     """join.com hosts the apply flow itself (live probe case 1)."""
     assert host_allowed("https://join.com/companies/lemvos/16426802-internship")
+
+
+# --- вендор за собственным доменом компании (замеры 2026-08-24) -------------
+#
+# Подставной резолвер вместо сети: цепочки ниже сняты живьём `dig +short` и
+# https://dns.google/resolve в тот же день, так что тест проверяет разбор ровно
+# тех ответов, которые приходят в проде.
+
+def _chain(*targets):
+    """Резолвер, отдающий заранее снятую цепочку CNAME."""
+    def resolve(host):
+        return targets
+    return resolve
+
+
+class _ResolverCalled(BaseException):
+    """Намеренно не Exception: проверка глушит любой сбой резолвера и уходит в
+    ручной отклик, так что обычное исключение она бы съела и тест «прошёл» бы,
+    не заметив лишнего похода в сеть."""
+
+
+def _explodes(host):
+    raise _ResolverCalled(f"DNS-запрос для {host} не должен был случиться")
+
+
+def test_recruitee_behind_a_company_domain_is_allowed():
+    """Живой прогон 2026-08-24 увёл jobs.profitap.com в ручной отклик «незнакомый
+    сайт», хотя jobs.profitap.com CNAME secure.recruitee.com — форму рисует
+    Recruitee, который в ALLOWED_APPLY_HOSTS с самого начала."""
+    assert host_or_vendor_allowed(
+        "https://jobs.profitap.com/o/qa-engineer-3",
+        resolve=_chain("secure.recruitee.com"))
+
+
+def test_teamtailor_behind_a_company_domain_is_allowed():
+    """Тот же прогон, careers.bluethrone.io. Путь /jobs/<7-значный id>-<слаг>
+    читался как Greenhouse — а CNAME ведёт в ext.teamtailor.com. Тест ловит
+    попытку опознавать вендора по форме URL вместо цепочки CNAME."""
+    assert host_or_vendor_allowed(
+        "https://careers.bluethrone.io/jobs/8175038-senior-backend-engineer-golang",
+        resolve=_chain("ext.teamtailor.com", "ext.teamtailor.com.c.section.io",
+                       "3bbnb6yydwv4hm5t2ebiebv6ffmlet6a.e.ns1.sectionedge.com",
+                       "lmn-stk-k1.ep.section.io"))
+
+
+def test_a_per_tenant_vendor_subdomain_counts_as_the_vendor():
+    """careers.voi.com CNAME 2zx972fqcl81m.ext.teamtailor.com — Teamtailor выдаёт
+    части клиентов персональный хост. Точное сравнение с ext.teamtailor.com
+    такую цепочку бы не узнало."""
+    assert host_or_vendor_allowed(
+        "https://careers.voi.com/jobs/1",
+        resolve=_chain("2zx972fqcl81m.ext.teamtailor.com", "teamtailor.map.fastly.net"))
+
+
+def test_a_vendor_we_do_not_know_stays_manual():
+    """karriere.nect.com CNAME nect.career.softgarden.de (замерено 2026-08-24).
+    softgarden не в списке — его вёрстку мы не разбирали, и делегирование домена
+    вендору само по себе не повод заполнять форму."""
+    assert not host_or_vendor_allowed(
+        "https://karriere.nect.com/vacancies/1",
+        resolve=_chain("nect.career.softgarden.de"))
+
+
+def test_a_cname_target_that_only_looks_like_a_vendor_is_rejected():
+    """Форма реального сбоя: у nect.com в зоне лежит битый CNAME на
+    nect.career.softgarden.de.nect.com — имя вендора внутри чужого домена.
+    Поиск подстрокой пропустил бы и злоумышленника с secure.recruitee.com.evil.tld."""
+    assert not host_or_vendor_allowed(
+        "https://careers.evil.tld/o/qa-engineer",
+        resolve=_chain("secure.recruitee.com.evil.tld"))
+
+
+def test_a_cdn_hop_named_after_the_vendor_is_not_the_vendor():
+    """ext.teamtailor.com.c.section.io — настоящий хоп из цепочки Teamtailor, но
+    живёт он под section.io. Без этого хопа цепочка в вендора не заходит, и
+    засчитывать её нельзя: иначе чужой CDN с таким же именем хоста пройдёт."""
+    assert not host_or_vendor_allowed(
+        "https://careers.evil.tld/jobs/1",
+        resolve=_chain("ext.teamtailor.com.c.section.io", "lmn-stk-k1.ep.section.io"))
+
+
+def test_a_company_page_without_a_cname_stays_manual():
+    """ddrive.tech отдаёт вакансию со своего сервера — заполнять её вслепую
+    ровно то, от чего защищает список."""
+    assert not host_or_vendor_allowed(
+        "https://www.ddrive.tech/team/junior-software-developer", resolve=_chain())
+
+
+def test_a_dns_failure_keeps_the_apply_manual():
+    """Не дозвонились до резолвера — это «не доказано», а не «разрешено»."""
+    def boom(host):
+        raise TimeoutError("DoH не ответил")
+
+    assert not host_or_vendor_allowed(
+        "https://jobs.profitap.com/o/qa-engineer-3", resolve=boom)
+
+
+def test_a_listed_ats_host_never_waits_on_dns():
+    """Хост из списка обязан проходить без сети: иначе упавший резолвер уронит в
+    ручной отклик и greenhouse.io, который и так разрешён."""
+    assert host_or_vendor_allowed(
+        "https://boards.greenhouse.io/acme/jobs/123", resolve=_explodes)
+
+
+def test_a_garbage_url_never_reaches_the_resolver():
+    for url in ("", "not-a-url", "https://", "mailto:hr@acme.com"):
+        assert not host_or_vendor_allowed(url, resolve=_explodes), url
+
+
+def test_the_chain_is_matched_case_insensitively_and_without_the_root_dot():
+    """dns.google отдаёт цель с финальной точкой («secure.recruitee.com.»), а
+    регистр в DNS незначащий. Без нормализации живой ответ не совпадёт."""
+    assert host_or_vendor_allowed(
+        "https://jobs.profitap.com/o/qa-engineer-3",
+        resolve=_chain("Secure.Recruitee.COM."))
+
+
+def test_a_lookalike_host_is_not_rescued_by_its_own_dns():
+    """boards.greenhouse.io.evil.tld отбивает host_allowed. Свою зону
+    злоумышленник пишет сам, так что проверка CNAME не должна давать второй шанс
+    ничему, что не заходит в домен вендора."""
+    assert not host_or_vendor_allowed(
+        "https://boards.greenhouse.io.evil.tld/apply",
+        resolve=_chain("origin.evil.tld"))
+
+
+def test_vendor_behind_names_the_vendor_for_the_log():
+    """Оператору в «ушло автоматом» нужно видеть, ЧЬЮ форму мы сочли знакомой."""
+    assert vendor_behind("https://jobs.profitap.com/o/qa-engineer-3",
+                         resolve=_chain("secure.recruitee.com")) == "recruitee.com"
+    assert vendor_behind("https://careers.random-startup.xyz/apply",
+                         resolve=_chain()) is None
+
+
+# --- разбор ответа dns.google ----------------------------------------------
+# Полезные нагрузки ниже сняты живьём 2026-08-24, сеть в тестах не нужна.
+
+def test_cname_targets_are_read_in_resolution_order():
+    payload = {"Status": 0, "Answer": [
+        {"name": "careers.bluethrone.io.", "type": 5, "data": "ext.teamtailor.com."},
+        {"name": "ext.teamtailor.com.", "type": 5, "data": "ext.teamtailor.com.c.section.io."},
+        {"name": "lmn-stk-k1.ep.section.io.", "type": 1, "data": "207.120.36.204"},
+    ]}
+    assert cname_targets(payload) == ("ext.teamtailor.com", "ext.teamtailor.com.c.section.io")
+
+
+def test_an_a_record_is_not_mistaken_for_a_cname():
+    """type 1 — это IP. Приняв его за имя, мы бы сравнивали адрес со списком хостов."""
+    payload = {"Status": 0, "Answer": [
+        {"name": "jobs.channable.com.", "type": 1, "data": "35.242.209.60"}]}
+    assert cname_targets(payload) == ()
+
+
+def test_a_cname_in_a_failed_lookup_is_not_a_chain():
+    """Снято живьём с career.nect.com 2026-08-24: Status 3 (NXDOMAIN), а запись
+    CNAME в Answer всё равно лежит — у nect.com в зоне опечатка, цель никуда не
+    разрешается. Имя, которое не разрешилось, не отдавало ту страницу, что мы
+    только что открыли, так что доказательством такая цепочка быть не может.
+    Тест ловит чтение Answer без проверки Status."""
+    broken = {"Status": 3, "Answer": [
+        {"name": "career.nect.com.", "type": 5, "TTL": 60,
+         "data": "nect.career.softgarden.de.nect.com."}]}
+    assert cname_targets(broken) == ()
+    # То же, но цель — настоящий вендор: иначе тест прошёл бы просто потому, что
+    # softgarden не в списке, и дыру в проверке Status не заметил бы.
+    broken["Answer"][0]["data"] = "secure.recruitee.com."
+    assert cname_targets(broken) == ()
+    assert cname_targets({"Status": 2}) == ()
+
+
+def test_a_shape_we_did_not_expect_yields_no_chain():
+    """Резолвер сменил формат — падать посреди отклика нельзя, уходим в ручной."""
+    for payload in (None, {}, {"Status": 0, "Answer": "нет"}, {"Status": 0, "Answer": [None]}):
+        assert cname_targets(payload) == (), payload
+
+
+@pytest.mark.live
+def test_the_two_hosts_from_the_2026_08_24_run_resolve_into_their_vendors():
+    """Сеть настоящая: страховка от того, что компания съедет с вендора или
+    вендор сменит хост для клиентских доменов, и правило тихо перестанет работать."""
+    assert vendor_behind("https://jobs.profitap.com/o/qa-engineer-3") == "recruitee.com"
+    assert vendor_behind(
+        "https://careers.bluethrone.io/jobs/8175038-senior-backend-engineer-golang"
+    ) == "teamtailor.com"

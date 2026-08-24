@@ -49,21 +49,148 @@ def _registrable(host: str) -> str:
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
-def host_allowed(url: str, allowed=ALLOWED_APPLY_HOSTS) -> bool:
-    """True when `url`'s host is an ATS we auto-fill.
+def _host_of(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    return (urlsplit(url).hostname or "").lower().strip(".")
+
+
+def _allowed_entry(host: str, allowed=ALLOWED_APPLY_HOSTS) -> str | None:
+    """The allowlist entry `host` matches, or None.
 
     Matches the host itself, its registrable domain, and any subdomain of an
     allowed entry (`eu.myworkdayjobs.com`), so vendors that shard by region or
-    customer work without listing every host.
+    customer work without listing every host. Matching is on label boundaries,
+    never on substrings: `greenhouse.io.evil.tld` is not greenhouse.io.
     """
-    from urllib.parse import urlsplit
-
-    host = (urlsplit(url).hostname or "").lower().strip(".")
+    host = (host or "").lower().strip(".")
     if not host:
-        return False
-    if host in allowed or _registrable(host) in allowed:
-        return True
-    return any(host.endswith("." + a) for a in allowed)
+        return None
+    if host in allowed:
+        return host
+    if _registrable(host) in allowed:
+        return _registrable(host)
+    return next((a for a in allowed if host.endswith("." + a)), None)
+
+
+def host_allowed(url: str, allowed=ALLOWED_APPLY_HOSTS) -> bool:
+    """True when `url`'s host is an ATS we auto-fill."""
+    return _allowed_entry(_host_of(url), allowed) is not None
+
+
+# --- вендор за собственным доменом компании ---------------------------------
+#
+# Замерено живьём 2026-08-24: два отклика ушли в ручной режим с «незнакомый
+# сайт», хотя движок под ними был из списка выше:
+#   jobs.profitap.com/o/qa-engineer-3          -> Recruitee
+#   careers.bluethrone.io/jobs/8175038-...     -> Teamtailor
+# Второй показателен: путь /jobs/<7-значный id>-<слаг> читался как Greenhouse, а
+# это Teamtailor. Опознавать вендора по форме URL — гадание, и оно ошиблось.
+#
+# По вёрстке вендор виден сразу (у profitap 15 ссылок на careers.recruiteecdn.com
+# и «atsHost»:«recruitee.com», у bluethrone 21 скрипт с assets-aws.teamtailor-cdn
+# .com), но разметку целиком пишет тот, от кого мы защищаемся: строку
+# `<script src="https://assets-aws.teamtailor-cdn.com/...">` любой сайт положит
+# к себе за секунду. Признак из страницы не доказывает ничего о странице.
+# Сертификат тоже пусто: у всех замеренных хостов это обычный Let's Encrypt с
+# единственным SAN на сам домен компании, имени вендора там нет.
+#
+# Доказывает делегирование в DNS: jobs.profitap.com CNAME secure.recruitee.com.
+# Кто ставит такой CNAME, тот отдаёт хост вендору целиком — запрос уезжает на
+# сервер Recruitee, и своей вёрстки владелец домена там уже не покажет. Границу
+# доверия это не двигает: страница, отрисованная Recruitee по адресу
+# jobs.profitap.com, ровно то же самое, что company.recruitee.com, который
+# разрешён с самого начала — вёрстка формы вендорская, текст вакансии клиентский.
+#
+# Чего проверка НЕ ловит, и это осознанно: рассинхрон DNS (нам отдали CNAME, а
+# браузеру — свой A-запис) и вендоров, которые заводят клиентские домены не на
+# своём имени. У Greenhouse это in.saascustomdomains.com, у Ashby своих доменов
+# нет вовсе (docs.ashbyhq.com, проверено 2026-08-24) — такие остаются ручными.
+# Любая неудача (нет ответа, таймаут, чужой вендор) означает ручной отклик.
+_DOH_URL = "https://dns.google/resolve"
+_DOH_TIMEOUT_S = 4.0
+# socket.gethostbyname_ex не годится: 2026-08-24 для careers.bluethrone.io он
+# цепочку вернул, а для jobs.profitap.com отдал только сам хост — системный
+# резолвер CNAME схлопывает. Пропущенная цепочка читалась бы как «не вендор».
+
+# Один прогон берёт с площадки несколько вакансий подряд, и хост у них общий.
+# Кладём только непустые цепочки: закешировать разовый сбой сети значит держать
+# площадку в ручном режиме до конца процесса.
+_CHAIN_CACHE: dict[str, tuple[str, ...]] = {}
+
+
+def cname_targets(payload) -> tuple[str, ...]:
+    """Цели CNAME из ответа dns.google, в порядке разрешения.
+
+    Формат живого ответа (снят 2026-08-24): {"Status": 0, "Answer": [{"name":
+    "jobs.profitap.com.", "type": 5, "data": "secure.recruitee.com."}, ...]},
+    где type 5 — CNAME, а type 1 — уже адрес. Всё, что не разобралось, — пустая
+    цепочка: «не доказали» лучше, чем догадка о формате.
+    """
+    if not isinstance(payload, dict) or payload.get("Status") != 0:
+        return ()
+    answer = payload.get("Answer")
+    if not isinstance(answer, list):
+        return ()
+    targets = []
+    for rec in answer:
+        if not isinstance(rec, dict) or rec.get("type") != 5:
+            continue
+        target = str(rec.get("data") or "").lower().strip(".")
+        if target:
+            targets.append(target)
+    return tuple(targets)
+
+
+def _cname_chain(host: str) -> tuple[str, ...]:
+    if host in _CHAIN_CACHE:
+        return _CHAIN_CACHE[host]
+    import httpx
+
+    try:
+        resp = httpx.get(_DOH_URL, params={"name": host, "type": "A"},
+                         timeout=_DOH_TIMEOUT_S)
+        resp.raise_for_status()
+        chain = cname_targets(resp.json())
+    except Exception:  # noqa: BLE001 — вендор не доказан, значит ручной отклик
+        return ()
+    if chain:
+        _CHAIN_CACHE[host] = chain
+    return chain
+
+
+def vendor_behind(url: str, allowed=ALLOWED_APPLY_HOSTS, resolve=None) -> str | None:
+    """Вендор из `allowed`, которому делегирован хост `url`, или None.
+
+    Цепочку CNAME проверяем целиком: у Teamtailor клиентский домен идёт через
+    ext.teamtailor.com и дальше в section.io, а части клиентов вендор выдаёт
+    личный хост (careers.voi.com -> 2zx972fqcl81m.ext.teamtailor.com). Хопы
+    после вендорского выбирает уже зона вендора, так что попасть в неё чужой
+    записью нельзя. Сравнение — тем же `_allowed_entry`, по границам меток:
+    в живой цепочке есть ext.teamtailor.com.c.section.io, и это section.io.
+    """
+    host = _host_of(url)
+    if not host:
+        return None
+    try:
+        chain = (resolve or _cname_chain)(host)
+    except Exception:  # noqa: BLE001 — резолвер упал: вендора не доказали
+        return None
+    for target in chain or ():
+        vendor = _allowed_entry(target, allowed)
+        if vendor:
+            return vendor
+    return None
+
+
+def host_or_vendor_allowed(url: str, allowed=ALLOWED_APPLY_HOSTS,
+                           resolve=None) -> bool:
+    """`host_allowed`, а если хост не в списке — тот же список по цепочке CNAME.
+
+    Порядок важен: у разрешённого хоста DNS не спрашиваем вовсе, иначе упавший
+    резолвер уводил бы в ручной отклик и boards.greenhouse.io.
+    """
+    return host_allowed(url, allowed) or vendor_behind(url, allowed, resolve) is not None
 
 
 def _digits(s: str) -> str:

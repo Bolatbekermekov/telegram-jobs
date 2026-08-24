@@ -7,7 +7,7 @@ Automating third-party ATS violates their ToS and risks bans (accepted by user).
 import re
 from urllib.parse import unquote, urlsplit
 
-from app.application.apply_guard import host_allowed, leaked_secrets
+from app.application.apply_guard import host_or_vendor_allowed, leaked_secrets
 from app.application.auto_apply import (
     COVER_LETTER_RE, answer_ai_fields, build_plan,
 )
@@ -662,7 +662,12 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     # filling anything. Only a form we are about to fill and submit needs the host
     # to be one we recognise: the page supplies the labels that reach the model and
     # receives whatever it answers.
-    if not host_allowed(obs.url):
+    # Не только хост, но и вендор за ним: компания вешает ATS на свой домен, и
+    # `jobs.profitap.com` это Recruitee, а `careers.bluethrone.io` — Teamtailor,
+    # оба из списка (замер 2026-08-24, оба ушли в ручной отклик). Доказывает это
+    # делегирование в DNS, а не вёрстка — см. apply_guard. Сетевой запрос уходит
+    # ТОЛЬКО когда хост не в списке; на greenhouse и linkedin он бесплатный.
+    if not host_or_vendor_allowed(obs.url):
         raise ManualApplyRequired(f"незнакомый сайт, заполни вручную: {obs.url}")
 
     # Сопроводительное письмо файлом. Собирается ИЗ УЖЕ НАПИСАННОГО письма, то
