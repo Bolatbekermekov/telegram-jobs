@@ -48,7 +48,20 @@ _SCRAPE_JS = r"""() => {
   // (measured live 2026-07-29). Playwright sets files on a hidden input fine, so
   // visibility must not decide whether we can see it. `type=hidden` is still
   // excluded above — that is a different thing from a visually hidden file input.
-  const usable = e => e.type === 'file' ? !e.disabled : isVisible(e);
+  // `aria-hidden` — то, чем страница сама говорит «это не поле для человека».
+  // Новая форма Greenhouse рисует каждый выпадающий вопрос ПАРОЙ: настоящий
+  // role=combobox с подписью и второй, безымянный вход
+  // `<input required tabindex="-1" aria-hidden="true" class="…requiredInput">`,
+  // существующий только чтобы браузер ругался на пустой выбор. Замер 2026-08-24
+  // на вакансиях N26 и Datadog: 26 «полей» вместо 13 вопросов, у каждого второго
+  // подпись пустая — и именно они попадали в «не заполнены обязательные поля»,
+  // срывая отправку уже готовой анкеты.
+  // Проверяется НЕ пустая подпись: пустая бывает и у настоящего поля, а
+  // aria-hidden ставит сам вендор и означает ровно то, что нам нужно.
+  // Файл — исключение, как и в isVisible ниже: почти каждый ATS прячет реальный
+  // input[type=file] за своей кнопкой, и заявка без резюме этим уже кончалась.
+  const usable = e => e.type === 'file' ? !e.disabled
+    : (e.getAttribute('aria-hidden') !== 'true' && isVisible(e));
   const controls = [...document.querySelectorAll('input,select,textarea')]
     .filter(e => !['hidden','submit','button','reset','image'].includes(e.type) && usable(e));
   // Radios only mean anything as a group: one question, several buttons. Emitted
@@ -56,8 +69,14 @@ _SCRAPE_JS = r"""() => {
   // required group came back as "Please make a selection" (measured live on
   // 2026-07-29, job 4434515311). One entry per `name`, options = the buttons'
   // labels, and the question taken from the surrounding fieldset/group.
-  const radioGroup = e => [...document.querySelectorAll('input[type=radio]')]
+  // Одна группа = один вопрос. Для радиокнопок это было всегда; чекбоксы Lever
+  // задают вопрос с НЕСКОЛЬКИМИ ответами тем же приёмом — общий `name`, — а
+  // читались поштучно: замер 2026-08-24 на вакансии CoinsPaid дал «React 16 or
+  // earlier», «React 17+», «React 18+» как три отдельных обязательных поля, у
+  // каждого вместо вопроса стоял его же вариант. Ответить на такое нечем.
+  const sameGroup = e => [...document.querySelectorAll('input[type=' + e.type + ']')]
     .filter(r => r.name === e.name);
+  const radioGroup = sameGroup;
   // The question a radio group asks, and the text of each button — read from the
   // block that wraps the whole group when the markup gives us nothing else.
   // Ashby ties no <label> to its radios: every button in every group shares one
@@ -122,17 +141,23 @@ _SCRAPE_JS = r"""() => {
     }
     return own;
   };
-  const seenRadio = new Set();
+  const seenGroup = new Set();
   const fields = [];
   controls.forEach((e, i) => {
     e.setAttribute('data-af', String(i));
-    if (e.type === 'radio' && e.name) {
-      if (seenRadio.has(e.name)) return;
-      seenRadio.add(e.name);
-      const g = radioGroup(e);
+    // Радиокнопка — вопрос по построению, даже одинокая. Чекбокс одинокий — это
+    // согласие, у которого подпись и есть вопрос («Acme has my consent…»), и
+    // сгруппировать его значило бы подменить вопрос ответом «Yes»; поэтому для
+    // чекбоксов группа начинается с двух.
+    if (e.name && (e.type === 'radio'
+                   || (e.type === 'checkbox' && sameGroup(e).length > 1))) {
+      const key = e.type + '|' + e.name;
+      if (seenGroup.has(key)) return;
+      seenGroup.add(key);
+      const g = sameGroup(e);
       const picked = g.find(r => r.checked);
       fields.push({
-        tag: 'input', type: 'radio', label: groupLabel(e), name: e.name,
+        tag: 'input', type: e.type, label: groupLabel(e), name: e.name,
         required: g.some(r => r.required || r.getAttribute('aria-required')==='true'),
         options: groupOptions(e),
         value: picked ? labelFor(picked) : '',
@@ -383,13 +408,15 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                             f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.tag == "select" and a.choice_index is not None:
                 loc.first.select_option(index=a.choice_index, timeout=8000)
-            elif a.field.type == "radio" and a.choice_index is not None:
+            elif (a.field.type in ("radio", "checkbox")
+                  and a.choice_index is not None):
                 # The plan holds one action per GROUP, addressed by the first
                 # button's ref; the answer is which button of that group to press.
                 # Located by name rather than by ref so the index means the same
                 # thing it meant when the group was scraped — falling back to the
                 # ref when the name doesn't survive as a selector.
-                group = page.locator(f'input[type=radio][name="{a.field.name}"]')
+                group = page.locator(
+                    f'input[type={a.field.type}][name="{a.field.name}"]')
                 target = (group.nth(a.choice_index)
                           if group.count() > a.choice_index else loc.first)
                 # force=True: the real radio is hidden behind a styled label on

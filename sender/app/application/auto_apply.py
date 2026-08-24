@@ -231,7 +231,14 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     if re.search(r"relocat", low):
         return _yes_no(f, profile.open_to_relocation)
 
-    if f.type == "checkbox":
+    # ОДИНОЧНАЯ галочка — утверждение («I agree to the privacy policy»), и здесь
+    # решается только, соглашаться ли. Группа чекбоксов под одним `name` — это
+    # ВОПРОС с вариантами, её разбирает правило ниже вместе с радиокнопками:
+    # замер 2026-08-24 на CoinsPaid показал, что без этого «Which versions of
+    # React have you worked with?» уходил в `unmapped` и держал отправку уже
+    # заполненной формы. Отличает их наличие вариантов: скрапер собирает группу
+    # только начиная с двух элементов.
+    if f.type == "checkbox" and not f.options:
         if re.search(r"agree|consent|privacy|terms|policy|gdpr|authori", low):
             return FillAction(field=f, value="true", source="profile")
         return FillAction(field=f, value="", source="unmapped")
@@ -298,6 +305,12 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
                 if not val:
                     # Recognised field (linkedin/website/salary/…) but no profile
                     # value: leave it empty rather than dumping AI prose into it.
+                    # Пока оно необязательное. Обязательное отдаём модели: у неё
+                    # в руках резюме и профиль, так что ответ берётся из них, а
+                    # не выдумывается, — и это лучше, чем потерять всю заявку
+                    # из-за одной строки, которой не оказалось в apply_profile.
+                    if f.required:
+                        return FillAction(field=f, needs_ai=True, source="ai")
                     return FillAction(field=f, source="unmapped")
                 if f.options:
                     # A dropdown takes an option, not typed text — .fill() on a
@@ -333,11 +346,30 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # A `select` still needs the required flag. That is the control the language
     # picker turned out to be, and answering optional ones cost the account its
     # interface language; the distinction is what keeps both lessons.
-    if f.options and (f.required or f.type == "radio"):
+    # Группа чекбоксов приравнена к радиогруппе по тому же основанию: несколько
+    # подписанных ответов на один вопрос внутри формы отклика — это вопрос, кто
+    # бы там ни забыл проставить `required`.
+    if f.options and (f.required or f.type in ("radio", "checkbox")):
         return FillAction(field=f, needs_ai=True, source="ai")
 
-    # A plain short input we don't recognise: leave it empty rather than AI-filling
-    # prose into a name/url/id-type box. If required, the plan flags it -> manual.
+    # Незнакомое короткое поле. ОБЯЗАТЕЛЬНОЕ отдаём модели: прогон по Remocate
+    # 2026-08-24 показал цену прежнего решения — три формы (Datadog, N26,
+    # CoinsPaid) открылись, письмо было написано, браузер поднят, а отправку
+    # сорвало одно поле вроде «Please indicate your notice period in months» или
+    # «Which is your preferred working location?», под которое в профиле просто
+    # нет строки. Спросить модель дешевле, чем потерять заявку, и безопаснее, чем
+    # кажется: у неё в руках резюме, профиль и текст вакансии.
+    #
+    # НЕОБЯЗАТЕЛЬНОЕ по-прежнему не трогаем, и это не осторожность ради
+    # осторожности: отправку оно не блокирует, то есть заполнять его нечего ради,
+    # а цена ошибки измерена — ответ на чужой необязательный виджет (переключатель
+    # языка интерфейса в LinkedIn) увёз весь аккаунт на арабский 2026-07-29.
+    #
+    # «Спросили модель» не равно «заполнили»: если ответа не будет,
+    # `unmapped_required` так же удержит отправку, и полупустая анкета
+    # работодателю не уйдёт.
+    if f.required:
+        return FillAction(field=f, needs_ai=True, source="ai")
     return FillAction(field=f, source="unmapped")
 
 

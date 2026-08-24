@@ -171,3 +171,73 @@ def test_custom_answer_key_matches_whole_words_only():
     miss = map_field(FieldObs(tag="input", type="text", ref="1",
                               label="What was your manager's salaryband"), prof, "C:/cv.pdf")
     assert miss.value != "по договорённости"
+
+
+# --- обязательное поле не бросаем: спрашиваем модель --------------------------
+# Прогон по Remocate 2026-08-24: три формы открылись (Datadog, N26, CoinsPaid) и
+# ни одна не отправилась — «не заполнены обязательные поля». Часть полей чинится
+# в скрапере (см. test_scrape_form.py), но остаток это вопросы работодателя, под
+# которые в профиле просто нет строки: «Please indicate your notice period»,
+# «Which is your preferred working location?», «Are you able to provide
+# professional references?». Раньше такие возвращались `unmapped`, и одно
+# обязательное поле утаскивало в ручной отклик всю уже написанную заявку.
+#
+# ОБЯЗАТЕЛЬНОЕ — и только оно. Необязательное поле отправку не блокирует, то есть
+# заполнять его нечего ради, а цена ошибки известна: на LinkedIn модель однажды
+# ответила на НЕОБЯЗАТЕЛЬНЫЙ выпадающий список — переключатель языка интерфейса
+# аккаунта — и весь аккаунт уехал на арабский (2026-07-29). Правило ниже эту
+# границу сохраняет.
+
+def test_required_unknown_field_goes_to_the_model():
+    a = _m("Internal reference number", required=True)
+    assert a.needs_ai is True and a.source == "ai"
+
+
+def test_optional_unknown_field_is_still_left_alone():
+    """Та самая граница: цена ответа на чужой необязательный виджет — аккаунт."""
+    a = _m("Internal reference number")
+    assert a.needs_ai is False and a.source == "unmapped"
+
+
+def test_required_recognised_field_without_a_profile_value_goes_to_the_model():
+    """«Personal website» узнан правилом, но в профиле его нет. Пока поле
+    необязательное — оставляем пустым; как только обязательное, спрашиваем
+    модель: у неё в руках резюме, а альтернатива — потерять всю заявку."""
+    assert _m("Personal website", type="url").source == "unmapped"
+    assert _m("Personal website", type="url", required=True).needs_ai is True
+
+
+def test_the_model_still_has_to_answer_for_the_form_to_go_out():
+    """Спросить модель — не то же, что заполнить. Если ответа нет, обязательное
+    поле по-прежнему держит отправку: полупустая анкета работодателю не уходит."""
+    obs = PageObservation(fields=[
+        FieldObs(tag="input", type="text", label="Unknown mandatory code",
+                 required=True),
+    ])
+    plan = build_plan(obs, PROF, CV)
+    assert plan.actions[0].needs_ai is True
+    assert "Unknown mandatory code" in plan.unmapped_required()
+    assert plan.ready_to_submit() is False
+
+
+def test_a_checkbox_group_is_answered_like_a_radio_group():
+    """Правило `if f.type == "checkbox"` писалось, когда чекбокс был всегда
+    одиночным — согласием. Группа под одним `name` это ВОПРОС с вариантами
+    («Which versions of React have you worked with?»), и уходить в `unmapped` ей
+    неоткуда: замер 2026-08-24 на CoinsPaid — три таких вопроса держали отправку
+    уже заполненной формы."""
+    a = _m("Which versions of React have you worked with?", type="checkbox",
+           required=True, options=["React 17+", "React 18+", "No experience"])
+    assert a.needs_ai is True and a.source == "ai"
+
+
+def test_a_lone_consent_checkbox_is_still_ticked_from_the_profile():
+    a = _m("I agree to the privacy policy", type="checkbox", required=True)
+    assert a.value == "true" and a.source == "profile"
+
+
+def test_a_lone_unrecognised_checkbox_is_not_ticked_by_a_guess():
+    """Одиночная галочка без вариантов — утверждение, а не вопрос. Поставить её
+    «на всякий случай» значит согласиться за человека неизвестно с чем."""
+    a = _m("Subscribe me to the newsletter", type="checkbox")
+    assert a.value == "" and a.source == "unmapped"
