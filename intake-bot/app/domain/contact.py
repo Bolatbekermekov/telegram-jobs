@@ -147,10 +147,13 @@ def canonical_linkedin_url(url: str) -> str:
 # «Не нашёл контакт», ничего не сохранив. Проверено живьём 2026-08-22 на трёх
 # формах сообщения — голая ссылка, пост без контакта, пост с @ником.
 #
-# RemoteOK держится ОТДЕЛЬНОЙ площадкой, а не в общем `external`, потому что у
+# RemoteOK держится ОТДЕЛЬНОЙ площадкой, а не на площадке Remocate, потому что у
 # него в sender'е свой канал: переход через /l/<id> со страницы вакансии (без
 # Referer этот путь отвечает 302 обратно) и распознавание платной Premium-стены.
 # Общий путь для агрегаторов это потерял бы.
+# Площадка называется по агрегатору: имя попадает в таблицу, и «external»
+# там не сообщало ни откуда вакансия, ни есть ли под неё автоматизация.
+# Драйвер в отправителе общий на все агрегаторы — различает их имя.
 _AGGREGATOR_RE = re.compile(
     r"(?:https?://)?(?:www\.)?remocate\.app/jobs/[\w%-]+\S*", re.IGNORECASE)
 _REMOTEOK_RE = re.compile(
@@ -279,7 +282,7 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
         return Contact("wellfound", _clean(m.group(0)))
     m = _AGGREGATOR_RE.search(text)
     if m:
-        return Contact("external", _with_scheme(_clean(m.group(0))))
+        return Contact("remocate", _with_scheme(_clean(m.group(0))))
     m = _REMOTEOK_RE.search(text)
     if m:
         return Contact("remoteok", _with_scheme(_clean(m.group(0))))

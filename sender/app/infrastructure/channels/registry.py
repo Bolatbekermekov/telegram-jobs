@@ -101,13 +101,15 @@ def build_channel(platform: str, config):
         return _with_answer_log(RemoteOKChannel(
             config.REMOTEOK_STATE_PATH, headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
-    if platform == "external":
+    if platform == "remocate":
         # Агрегатор вакансий: своей формы у площадки нет, отклик живёт на сайте
         # работодателя. Сессия не нужна — страницы публичные, поэтому и своего
         # state_path у канала нет, в отличие от RemoteOK и Wellfound.
+        # Имя площадки — имя агрегатора: драйвер общий, но в таблице должно быть
+        # видно, откуда вакансия. Следующий агрегатор — ещё одна такая ветка.
         log = AnswerLog()
         return _with_answer_log(ExternalChannel(
-            headless=config.BROWSER_HEADLESS,
+            name=platform, headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.

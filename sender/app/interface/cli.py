@@ -60,7 +60,7 @@ from app.infrastructure.vacancy_fetcher import (
 # Platforms the send loop can build a channel for. A platform missing here is a
 # per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
 _KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads",
-          "remoteok", "external"}
+          "remoteok", "remocate"}
 
 # Longer than the intake bot's 8s. That budget exists because the bot answers a
 # Telegram webhook from a serverless function; here a human is watching a terminal

@@ -77,22 +77,25 @@ def test_a_remoteok_job_link_is_recognised():
 
 
 # --- контакт и маршрут -------------------------------------------------------
+# Площадка называется по агрегатору, а не «external»: имя видно в таблице, и
+# «external» там не сообщало ни откуда вакансия, ни есть ли под неё
+# автоматизация. Драйвер в отправителе при этом общий на все агрегаторы.
 
 def test_a_bare_link_now_becomes_a_lead():
     """Именно то, что раньше отвечало «Не нашёл контакт»."""
-    assert detect_contact(JOB) == Contact("external", JOB)
+    assert detect_contact(JOB) == Contact("remocate", JOB)
 
 
 def test_the_post_around_the_link_does_not_break_detection():
     text = ("Software Engineering Intern (Winter) в Datadog: " + JOB +
             "\n\nПомогают с релокацией (США). Зарплата в валюте.\n"
             "При отклике укажите, что нашли вакансию на Remocate.")
-    assert detect_contact(text) == Contact("external", JOB)
+    assert detect_contact(text) == Contact("remocate", JOB)
 
 
 def test_remoteok_keeps_its_own_platform():
     """У RemoteOK свой канал — с переходом через /l/<id> и распознаванием
-    платной стены. Отправлять его в общий `external` значит это потерять."""
+    платной стены. Отправлять его на площадку Remocate значит это потерять."""
     url = "https://remoteok.com/remote-jobs/1091234-backend-acme"
     assert detect_contact(url) == Contact("remoteok", url)
 

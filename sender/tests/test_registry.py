@@ -61,3 +61,25 @@ def test_build_remoteok_channel_uses_its_own_browser_and_the_apply_deps():
 def test_unknown_platform_raises():
     with pytest.raises(ValueError):
         build_channel("myspace", _Cfg())
+
+
+def test_build_remocate_channel_by_the_aggregator_name():
+    """Площадка называется по агрегатору, а не «external».
+
+    Имя площадки видно в таблице, и «external» там ничего не сообщало: по нему
+    не понять ни откуда вакансия, ни есть ли под неё автоматизация — а она есть.
+    Драйвер при этом остаётся общим: следующий агрегатор добавляется одной
+    строкой в реестре и своим именем, а не переиспользованием чужого.
+    """
+    from app.infrastructure.channels.external import ExternalChannel
+    ch = build_channel("remocate", _Cfg())
+    inner = getattr(ch, "_channel", ch)      # обёртка журнала ответов
+    assert isinstance(inner, ExternalChannel)
+    assert inner.name == "remocate"
+
+
+def test_the_old_external_name_is_gone():
+    """Старое имя не должно молча продолжать работать: иначе в таблице появятся
+    обе подписи разом и дедупликация перестанет узнавать свои же лиды."""
+    with pytest.raises(Exception):
+        build_channel("external", _Cfg())

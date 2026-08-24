@@ -1,4 +1,4 @@
-"""Канал `external`: довести браузер от агрегатора вакансий до формы работодателя.
+"""Канал агрегатора вакансий: довести браузер от него до формы работодателя.
 
 Агрегатор не нанимает сам — он ведёт на сайт компании. Своей логики заполнения
 здесь нет и быть не должно: то, что лежит за ссылкой, уже разбирает
@@ -25,11 +25,20 @@ _SETTLE_MS = 2500
 
 
 class ExternalChannel:
-    name = "external"
+    """Драйвер общий, имя площадки — своё у каждого агрегатора.
+
+    Имя видно в таблице, и «external» там ничего не сообщало: по нему не понять
+    ни откуда вакансия, ни есть ли под неё автоматизация. Поэтому имя приходит
+    снаружи и называет агрегатор — сегодня это `remocate`, а следующий добавится
+    одной строкой в реестре, со своим именем и своим правилом в `contact.py`.
+    """
+
     body_limit = None
     needs_subject = False
 
-    def __init__(self, headless: bool = True, external_apply_deps=None):
+    def __init__(self, name: str = "remocate", headless: bool = True,
+                 external_apply_deps=None):
+        self.name = name
         self._headless = headless
         self._ext = external_apply_deps or {"enabled": False, "fn": None}
         self._pw = None
