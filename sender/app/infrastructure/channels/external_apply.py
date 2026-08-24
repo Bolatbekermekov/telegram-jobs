@@ -15,6 +15,7 @@ from app.application.auto_apply import (
 )
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
+from app.infrastructure.widgets.choice import pick_choice as _pick_choice
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -412,32 +413,36 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 loc.first.select_option(index=a.choice_index, timeout=8000)
             elif (a.field.type in ("radio", "checkbox")
                   and a.choice_index is not None):
-                # The plan holds one action per GROUP, addressed by the first
-                # button's ref; the answer is which button of that group to press.
-                # Located by name rather than by ref so the index means the same
-                # thing it meant when the group was scraped — falling back to the
-                # ref when the name doesn't survive as a selector.
-                group = page.locator(
-                    f'input[type={a.field.type}][name="{a.field.name}"]')
-                target = (group.nth(a.choice_index)
-                          if group.count() > a.choice_index else loc.first)
-                # force=True: the real radio is hidden behind a styled label on
-                # LinkedIn (and on most ATS themes), and Playwright will not act
-                # on an invisible control without it. Nothing is guessed here —
-                # the element was found by name and index, only its visibility
-                # is being overridden.
-                target.check(force=True, timeout=8000)
+                # План хранит одно действие на ГРУППУ и номер выбранного
+                # варианта; группу и номер разбирает сам виджет — он считает их
+                # ровно так же, как скрапер, иначе номер укажет на чужую кнопку.
+                #
+                # `check(force=True)` жил здесь и ронял прогон: на живой форме
+                # Recruitee кнопка спрятана как `clip:rect(0,0,0,0)` размером
+                # 1×1, и в HEADED Chrome клик до неё не доходит — «Clicking the
+                # checkbox did not change its state». В headless тот же вызов
+                # проходит, поэтому тесты молчали, а прогон (BROWSER_HEADLESS по
+                # умолчанию false) падал на лиде #418.
+                if not _pick_choice(page, loc, value=a.value,
+                                    index=a.choice_index):
+                    if a.field.required:
+                        raise ManualApplyRequired(
+                            f"{where}: не выбрался вариант "
+                            f"«{a.value or a.choice_index}» в обязательном поле "
+                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
+                    continue
             elif a.field.type in ("checkbox", "radio"):
                 if _is_affirmative(a.value):
-                    # force=True for the same reason as the radio group above: the
-                    # real box is hidden behind a styled label. Without it `check`
-                    # times out, and on an OPTIONAL field that exception is
-                    # swallowed — which is how «I consent» stayed unticked while
-                    # the form answered "Select checkbox to proceed" and the step
-                    # never advanced (lead 126, measured live 2026-07-29). LinkedIn
-                    # marks that box `required=false` in the DOM and demands it
-                    # anyway, so nothing upstream flagged it either.
-                    loc.first.check(force=True, timeout=8000)
+                    # Одиночное согласие прячут тем же приёмом, и мимо той же
+                    # ямы: «I consent» оставалось непоставленным, форма отвечала
+                    # "Select checkbox to proceed", и шаг не продвигался (лид
+                    # 126, замер 2026-07-29). LinkedIn помечает эту галочку
+                    # `required=false` и требует всё равно, поэтому отказ здесь
+                    # виден только по самой форме — молчать о нём нельзя.
+                    if not _pick_choice(page, loc, index=0):
+                        raise ManualApplyRequired(
+                            f"{where}: не поставилась галочка "
+                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.combobox and a.value:
                 _fill_typeahead(page, loc.first, a.value)
             elif a.value:

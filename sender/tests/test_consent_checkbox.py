@@ -188,7 +188,15 @@ def test_a_negative_answer_leaves_the_box_unticked():
     assert pg.checked == []
 
 
-def test_an_affirmative_answer_still_ticks_the_box():
-    pg = _Page()
-    ea.fill_fields(pg, _relocation_plan(True))
-    assert pg.checked == ['[data-af="3"]']
+def test_an_affirmative_answer_still_ticks_the_box(monkeypatch):
+    """Галочку ставит виджет `widgets/choice.py`, а не `check(force=True)`:
+    прежний способ в HEADED Chrome до спрятанной кнопки не доходил (замер на
+    живой форме Recruitee, лид #418). Здесь проверяется решение `fill_fields` —
+    что при утвердительном ответе он вообще зовёт виджет; как тот нажимает,
+    закреплено в tests/test_choice_widget.py."""
+    called = []
+    monkeypatch.setattr(ea, "_pick_choice",
+                        lambda page, loc, value="", index=None:
+                        called.append(index) or True)
+    ea.fill_fields(_Page(), _relocation_plan(True))
+    assert called == [0]

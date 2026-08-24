@@ -6,7 +6,12 @@ selection". Measured live on 2026-07-29, LinkedIn job 4434515311: «Are you
 comfortable working in an onsite setting?» was exactly that, and it was the last
 thing between the walk and the submit button.
 """
-from app.application.auto_apply import build_plan, map_field
+import pytest
+
+from app.application.auto_apply import (
+    ApplyPlan, FillAction, build_plan, map_field,
+)
+from app.domain.channel import ManualApplyRequired
 from app.domain.apply_profile import ApplyProfile
 from app.domain.page_observation import FieldObs, PageObservation
 from app.infrastructure.channels import external_apply as ea
@@ -82,30 +87,55 @@ def test_an_already_checked_group_counts_as_answered():
                       PROFILE, "cv.pdf").unmapped_required() == []
 
 
-def test_the_chosen_button_is_pressed_by_index_within_its_group():
-    page = _Page()
-    ea.fill_fields(page, _plan_with(1))          # "No"
+# Как ИМЕННО нажимается кнопка — забота виджета `widgets/choice.py`: он находит
+# группу тем же способом, что и скрапер, и пробует нативный клик, метку и
+# `check(force=True)` по очереди. Прежние тесты проверяли здесь селектор, номер и
+# флаг force — это была проверка механики, и она пережила саму механику: на живой
+# форме Recruitee `check(force=True)` в HEADED Chrome до спрятанной кнопки не
+# доходит (лид #418), хотя в headless проходит. Уроки про номер внутри группы, про
+# запасной путь по ref и про спрятанную кнопку теперь закреплены в
+# `tests/test_choice_widget.py`, на настоящей разметке и в настоящем браузере.
+# Здесь остаётся то, за что отвечает `fill_fields`: с каким ответом он зовёт
+# виджет и что делает с отказом.
 
-    (sel, idx, force), = page.checked
-    assert sel == 'input[type=radio][name="onsite-urn:li:fsu_easyApplyFormElement"]'
-    assert idx == 1
-    assert force is True          # the real radio is hidden behind a styled label
+def _spy_choice(monkeypatch):
+    calls = []
+
+    def fake(page, locator, value="", index=None):
+        calls.append({"value": value, "index": index})
+        return True
+
+    monkeypatch.setattr(ea, "_pick_choice", fake)
+    return calls
 
 
-def test_the_first_option_is_pressed_when_chosen():
-    page = _Page()
-    ea.fill_fields(page, _plan_with(0))
-    assert page.checked[0][1] == 0
+def test_the_chosen_option_is_handed_to_the_widget(monkeypatch):
+    calls = _spy_choice(monkeypatch)
+    ea.fill_fields(_Page(), _plan_with(1))          # "No"
+    assert calls == [{"value": "No", "index": 1}]
 
 
-def test_a_group_the_name_selector_cannot_find_falls_back_to_the_ref():
-    """A name that doesn't survive as a selector must not lose the answer."""
-    page = _Page(group_size=0)
-    ea.fill_fields(page, _plan_with(1))
+def test_the_first_option_is_handed_over_the_same_way(monkeypatch):
+    calls = _spy_choice(monkeypatch)
+    ea.fill_fields(_Page(), _plan_with(0))
+    assert calls == [{"value": "Yes", "index": 0}]
 
-    (sel, _idx, force), = page.checked
-    assert sel == '[data-af="4"]'
-    assert force is True
+
+def test_a_refused_required_choice_becomes_a_manual_apply(monkeypatch):
+    """Виджет отвечает False, а не исключением. Молча пройти мимо нельзя:
+    обязательный вопрос без ответа — это форма, которая не отправится, и лучше
+    узнать об этом здесь, чем по «ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА» после сабмита."""
+    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    with pytest.raises(ManualApplyRequired, match="не выбрался вариант"):
+        ea.fill_fields(_Page(), _plan_with(1))
+
+
+def test_a_refused_optional_choice_is_skipped(monkeypatch):
+    optional = FieldObs(tag="input", type="radio", name="q", label="Newsletter?",
+                        required=False, options=["Yes", "No"], ref="9")
+    plan = ApplyPlan(actions=[FillAction(field=optional, choice_index=1, value="No")])
+    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    ea.fill_fields(_Page(), plan)          # не бросает
 
 
 def test_a_yes_no_profile_question_still_answers_without_the_model():
@@ -119,22 +149,28 @@ def test_a_yes_no_profile_question_still_answers_without_the_model():
 
 # --- checkboxes hidden behind styled labels ---------------------------------
 
-def test_a_consent_checkbox_is_ticked_with_force():
-    """«I consent» on LinkedIn is `required=false` in the DOM and demanded anyway.
-    Without force the check times out, and on an optional field that exception is
-    swallowed — the box stayed empty, the form said "Select checkbox to proceed",
-    and the step never advanced (lead 126)."""
+def test_a_consent_checkbox_goes_through_the_widget_too(monkeypatch):
+    """«I consent» на LinkedIn помечена `required=false` и требуется всё равно:
+    галочка оставалась пустой, форма отвечала "Select checkbox to proceed", и шаг
+    не продвигался (лид 126). Прячут её тем же приёмом, что и кнопки Recruitee,
+    поэтому и ставится она тем же виджетом, а его отказ виден вслух."""
     consent = FieldObs(tag="input", type="checkbox", name="c", label="I consent",
                        required=False, ref="7")
-    page = _Page()
+    calls = _spy_choice(monkeypatch)
     plan = build_plan(PageObservation(fields=[consent]), PROFILE, "cv.pdf")
     assert plan.actions[0].value == "true"          # recognised as consent
 
-    ea.fill_fields(page, plan)
+    ea.fill_fields(_Page(), plan)
+    assert calls == [{"value": "", "index": 0}]
 
-    (sel, _idx, force), = page.checked
-    assert sel == '[data-af="7"]'
-    assert force is True
+
+def test_a_consent_the_widget_could_not_tick_is_not_passed_over(monkeypatch):
+    consent = FieldObs(tag="input", type="checkbox", name="c", label="I consent",
+                       required=False, ref="7")
+    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    plan = build_plan(PageObservation(fields=[consent]), PROFILE, "cv.pdf")
+    with pytest.raises(ManualApplyRequired, match="не поставилась галочка"):
+        ea.fill_fields(_Page(), plan)
 
 
 def test_an_unrelated_checkbox_is_left_alone():
