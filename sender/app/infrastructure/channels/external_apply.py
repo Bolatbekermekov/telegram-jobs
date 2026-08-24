@@ -12,8 +12,12 @@ from app.application.auto_apply import (
     COVER_LETTER_RE, answer_ai_fields, build_plan,
 )
 from app.application.classify_apply import classify, known_ats_iframe
+from app.domain.ats_embed import greenhouse_embed_url
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
+
+# Сколько ждать на форме вендора после перехода: она рисуется скриптом.
+_EMBED_SETTLE_MS = 3000
 
 # Broad submit selector, RU + EN, across ATS themes.
 SEL_SUBMIT = (
@@ -571,12 +575,43 @@ def _wants_cover_letter_file(obs) -> bool:
                for f in obs.fields)
 
 
+def _hop_to_embedded_form(page, obs, route):
+    """Последняя попытка перед ручным откликом: перейти на форму вендора.
+
+    Careers-страница компании ставит у себя скрипт ATS, а форму он подтягивает
+    отдельным запросом — и иногда в DOM её так и не вставляет. Замер 2026-08-24
+    на вакансии Datadog из Remocate: ноль полей, ноль iframe, ни одной кнопки
+    «Apply», то есть `_reveal_apply_form` кликать нечего и маршрут выходит NONE.
+    При этом страница сама ходит за формой на job-boards.greenhouse.io, а тот же
+    адрес открытым текстом отдаёт 60 полей и загрузку файла.
+
+    Стоит последней: сначала пробуем то, что уже работает, и только на пустой
+    странице тратим ещё одну навигацию. Возвращает прежние (obs, route), если
+    адрес не собрался или переход ничего не дал — тогда всё идёт как раньше, в
+    ручной отклик.
+    """
+    try:
+        url = greenhouse_embed_url(page.content(), page.url)
+    except Exception:  # noqa: BLE001 — не смогли прочитать страницу, не повод падать
+        return obs, route
+    if not url:
+        return obs, route
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(_EMBED_SETTLE_MS)
+        return scrape_until_ready(page)
+    except Exception:  # noqa: BLE001 — переход не удался: остаёмся на прежнем ответе
+        return obs, route
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
     obs, route = scrape_until_ready(page)
     if route is Route.NONE and _reveal_apply_form(page):
         obs, route = scrape_until_ready(page)   # form opened in a modal / next step
+    if route is Route.NONE:
+        obs, route = _hop_to_embedded_form(page, obs, route)
 
     if route is Route.EMAIL:
         _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
