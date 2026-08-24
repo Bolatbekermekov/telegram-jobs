@@ -4,6 +4,11 @@ Priority order: telegram > email > linkedin > hh > wellfound > threads. The firs
 rule that matches wins. Platform detection is rule-based on purpose: it decides
 where the message is later sent, so it must not depend on an LLM guess.
 
+The one thing the rules cannot decide from the text is whether a telegram target
+is a PERSON or a CHANNEL — the two are the same string shape — so that single
+question is asked of Telegram itself through the optional `telegram_writable`
+oracle. A refused target yields to the next candidate, not to the next rule.
+
 Threads is deliberately last: a recruiter who drops a thread link next to their own
 @nick or e-mail is reachable there directly, and a direct channel beats a public
 post. Only the post author's own handle is exempt (see detect_contact).
@@ -157,7 +162,35 @@ def _with_scheme(url: str) -> str:
     return url if _SCHEME_RE.match(url) else f"https://{url}"
 
 
-def detect_contact(text: str) -> Contact | None:
+def _writable(target: str, ask) -> bool:
+    """Можно ли вообще писать по этому телеграм-адресу.
+
+    Форма ника ничего не говорит: «@simbirsoft_dev» и «@ivan_hr» неразличимы как
+    строки, а первый — канал, куда отправка отвечает «You can't write in this
+    chat». Знает об этом только сам Telegram, поэтому вопрос задаётся наружу, а
+    правило остаётся чистым: без `ask` эта функция всегда отвечает «да» и
+    маршрутизация ровно та же, что была.
+
+    Отказ засчитывается ТОЛЬКО на явное False. «Не знаю» (None) и сломанный
+    оракул — в пользу лида: Bot API отвечает «chat not found» и живому человеку,
+    и несуществующему нику, так что молчание не доказывает ничего, а недоступный
+    Telegram не повод выбросить контакт.
+    """
+    if ask is None:
+        return True
+    try:
+        return ask(target) is not False
+    except Exception:  # noqa: BLE001 — см. докстроку: лид дороже маршрутизации
+        return True
+
+
+def detect_contact(text: str, telegram_writable=None) -> Contact | None:
+    """(площадка, адрес) из текста вакансии, или None.
+
+    `telegram_writable(target) -> bool | None` — необязательный оракул «это
+    человек, а не канал/группа», см. `_writable`. Живьём его подключает
+    `api/webhook.py` через Bot API; тесты и все чистые вызовы обходятся без него.
+    """
     # The Threads link is located up front, but only to protect its author handle:
     # "вакансия от @lnkrnchk <threads link>" would otherwise match _HANDLE_RE and
     # be stored as a Telegram contact, and the send loop would DM a user that does
@@ -170,9 +203,14 @@ def detect_contact(text: str) -> Contact | None:
     threads_url = canonical_threads_url(_clean(tm.group(0))) if tm else ""
     author = threads_author(threads_url).lower()
 
-    m = _TME_RE.search(text)
-    if m:
-        return Contact("telegram", _clean(m.group(0)))
+    # Каждая ссылка, а не только первая: подпись канала-агрегатора («IT Jobs в
+    # Telegram | VK | Max» со ссылкой на себя) стоит в КОНЦЕ поста и всё равно
+    # выигрывала у почты работодателя, потому что telegram — первое правило.
+    # Отклонённая ссылка передаёт очередь следующей, а не всему правилу сразу.
+    for m in _TME_RE.finditer(text):
+        target = _clean(m.group(0))
+        if _writable(target, telegram_writable):
+            return Contact("telegram", target)
     for m in _HANDLE_RE.finditer(text):
         # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
         # Telegram target — it is an Instagram/Threads handle. _HANDLE_RE captures
@@ -198,6 +236,17 @@ def detect_contact(text: str) -> Contact | None:
         handle = _ASCII_HANDLE_RE.match(text, m.start(1)).group(0).rstrip(".")
         if "." in handle:
             continue
+        # Кириллица внутри ника — тот же класс доказуемой подделки, что и точка.
+        # Telegram сам назвал спецификацию, когда лид #289 упал: «it must match
+        # r"[a-zA-Z][\w\d]{3,30}[a-zA-Z\d]"». В посте стояло «@andrеinikolenko» с
+        # кириллической «е» посередине, а настоящий «@andreinikolenko» латиницей —
+        # двумя строками ниже; `\w` в Python матчит кириллицу, поэтому побеждала
+        # подделка. Сравнение ASCII-головы с полным захватом ловит любую примесь.
+        #
+        # Отказ, а не обрезка до головы: у #289 голова — «andr», живой чужой ник.
+        # Ровно причина, по которой «@maria.hr» не превращается в «@maria».
+        if handle != m.group(1):
+            continue
         # What is left is an UNDOTTED author, who is a valid Telegram shape and would
         # otherwise be DMed at a handle that does not exist there. Compared on the
         # handle head rather than on the capture, and that is load-bearing in both
@@ -206,7 +255,13 @@ def detect_contact(text: str) -> Contact | None:
         # different person and a real contact.
         if author and handle.lower() == author[1:]:
             continue
-        return Contact("telegram", "@" + m.group(1))
+        # Ник канала — тоже законный ник, и лид #87 держал сразу два подряд
+        # («Подписаться на наши каналы / @best_itjob / @it_rab»), поэтому
+        # проверка стоит внутри цикла: отказ уступает очередь следующему нику, а
+        # если человеческого нет — почте ниже.
+        target = "@" + m.group(1)
+        if _writable(target, telegram_writable):
+            return Contact("telegram", target)
     m = _EMAIL_RE.search(text)
     if m:
         # `_clean` like every sibling rule: _EMAIL_RE's tail class `[\w.-]+` eats the

@@ -4,6 +4,7 @@ Flow: Telegram POSTs an update -> extract lead via OpenAI -> append to Google Sh
 -> reply to the user with what was saved.
 """
 import sys
+import time
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -19,6 +20,9 @@ from app.domain.contact import detect_contact  # noqa: E402
 from app.domain.telegram_message import message_text  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
+from app.infrastructure.telegram_chat import (  # noqa: E402
+    is_writable_telegram_target,
+)
 from app.infrastructure.vacancy_fetcher import (  # noqa: E402
     fetch_vacancy_text, resolve_lnkd_in,
 )
@@ -45,9 +49,54 @@ def _build_repo() -> SheetsRepo:
     )
 
 
+# Сколько всего секунд одно сообщение может потратить на вопрос «человек или
+# канал». Бюджет ОБЩИЙ на сообщение, а не на вопрос: дайджест умеет перечислить
+# десяток ников подряд, и десять таймаутов подряд убьют функцию целиком — Telegram
+# повторит вебхук, и лид задвоится. Исчерпанный бюджет = «не знаю» = в пользу
+# лида, то есть худшее, что бывает, — прежняя маршрутизация.
+_ORACLE_BUDGET_SECONDS = 3.0
+
+
+def _telegram_oracle():
+    """Оракул «человек или канал» с общим бюджетом на одно сообщение.
+
+    Тот же бот и тот же токен, которым отвечаем пользователю — отдельных прав не
+    нужно. Бюджет живёт здесь, а не в правиле: правило чистое и про время ничего
+    не знает, а вот эта функция знает, что крутится в serverless с ~10 секундами
+    на всё. Та же логика, по которой `extract_lead` решает, можно ли позволить
+    себе чтение страницы.
+    """
+    deadline = time.monotonic() + _ORACLE_BUDGET_SECONDS
+
+    def ask(target: str):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return None
+        return is_writable_telegram_target(
+            target, config.TELEGRAM_BOT_TOKEN, timeout=min(3.0, left))
+
+    return ask
+
+
+def _detector(oracle):
+    """`detect_contact`, которому есть у кого спросить «человек или канал».
+
+    Оракул передаётся снаружи, а не заводится внутри, потому что бюджет один на
+    ВЕСЬ разбор сообщения, а разборов бывает несколько: текст сообщения, потом
+    текст LinkedIn-поста, потом до двух развёрнутых `lnkd.in`. Свой бюджет на
+    каждый — это те же 3 секунды, умноженные на четыре, то есть ровно тот
+    таймаут функции, от которого бюджет и защищает.
+
+    Кэш `getChat` при этом общий на контейнер: подпись агрегатора повторяется из
+    поста в пост, и тёплый контейнер спрашивает про неё один раз за всё время.
+    """
+    return lambda text: detect_contact(text, telegram_writable=oracle)
+
+
 def _build_use_case() -> ExtractLeadFromText:
     summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
-    return ExtractLeadFromText(detect_contact, summarizer, _build_repo(),
+    return ExtractLeadFromText(_detector(_telegram_oracle()), summarizer,
+                               _build_repo(),
                                fetcher=fetch_vacancy_text,
                                resolve_link=resolve_lnkd_in)
 
@@ -206,7 +255,8 @@ async def telegram_webhook(
         _reply(
             chat_id,
             "⚠️ Не нашёл контакт. Пришли вакансию с одним из: @ник, t.me-ссылка, "
-            "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads.",
+            "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads / "
+            "Remocate / RemoteOK.",
         )
     except Exception as exc:  # noqa: BLE001
         _reply(chat_id, f"❌ Ошибка при сохранении: {exc}")

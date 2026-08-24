@@ -12,6 +12,11 @@ what lets a threads lead be sent through the existing Telegram/email channel.
 There is deliberately NO `threads` rule here: by the time this runs the lead is
 already threads, and the question is only what it should become instead.
 
+Единственное, чего форма текста не решает, — человек это или канал: строки
+неразличимы. Этот один вопрос уходит наружу, в необязательный оракул
+`telegram_writable`; отказанный адрес уступает очередь следующему кандидату, а
+не следующему правилу.
+
 Priority order: telegram > email > linkedin > hh > wellfound. Rule-based on
 purpose: it decides where the message is sent, so it must not be an LLM guess.
 """
@@ -147,10 +152,36 @@ def _with_scheme(url: str) -> str:
     return url if _SCHEME_RE.match(url) else f"https://{url}"
 
 
-def detect_contact(text: str) -> Contact | None:
-    m = _TME_RE.search(text)
-    if m:
-        return Contact("telegram", _clean(m.group(0)))
+def _writable(target: str, ask) -> bool:
+    """Можно ли вообще писать по этому телеграм-адресу. Копия интейковой.
+
+    Форма ника ничего не говорит: «@simbirsoft_dev» и «@ivan_hr» неразличимы как
+    строки, а первый — канал, куда Telethon отвечает «You can't write in this
+    chat». Отказ засчитывается только на явное False; «не знаю» и сломанный
+    оракул — в пользу лида.
+    """
+    if ask is None:
+        return True
+    try:
+        return ask(target) is not False
+    except Exception:  # noqa: BLE001 — лид дороже идеальной маршрутизации
+        return True
+
+
+def detect_contact(text: str, telegram_writable=None) -> Contact | None:
+    """(площадка, адрес) из текста треда, или None.
+
+    `telegram_writable(target) -> bool | None` — тот же необязательный оракул
+    «человек, а не канал», что и у интейка; здесь его подключает резолвер тредов
+    (`application/resolve_threads.py`).
+    """
+    # Каждая ссылка, а не только первая: подпись канала-агрегатора стоит в КОНЦЕ
+    # поста и всё равно выигрывала у почты работодателя. Отклонённая ссылка
+    # передаёт очередь следующей, а не всему правилу сразу.
+    for m in _TME_RE.finditer(text):
+        target = _clean(m.group(0))
+        if _writable(target, telegram_writable):
+            return Contact("telegram", target)
     for m in _HANDLE_RE.finditer(text):
         # A Telegram username cannot contain a dot, so "@maria.hr" is provably not a
         # Telegram target — it is an Instagram/Threads handle. _HANDLE_RE captures
@@ -176,7 +207,21 @@ def detect_contact(text: str) -> Contact | None:
         handle = _ASCII_HANDLE_RE.match(text, m.start(1)).group(0).rstrip(".")
         if "." in handle:
             continue
-        return Contact("telegram", "@" + m.group(1))
+        # Кириллица внутри ника — тот же класс доказуемой подделки, что и точка.
+        # Telegram сам назвал спецификацию, когда лид #289 упал: «it must match
+        # r"[a-zA-Z][\w\d]{3,30}[a-zA-Z\d]"». `\w` в Python матчит кириллицу,
+        # поэтому «@andrеinikolenko» с кириллической «е» побеждал настоящий
+        # «@andreinikolenko» строкой ниже. Сравнение ASCII-головы с полным
+        # захватом ловит любую примесь. Отказ, а не обрезка: голова «andr» —
+        # живой чужой ник, ровно как «@maria» из «@maria.hr».
+        if handle != m.group(1):
+            continue
+        # Ник канала — тоже законный ник, и подписи идут парами («@best_itjob /
+        # @it_rab»), поэтому проверка внутри цикла: отказ уступает очередь
+        # следующему нику, а если человеческого нет — почте ниже.
+        target = "@" + m.group(1)
+        if _writable(target, telegram_writable):
+            return Contact("telegram", target)
     m = _EMAIL_RE.search(text)
     if m:
         # `_clean` like every sibling rule: _EMAIL_RE's tail class `[\w.-]+` eats the

@@ -404,7 +404,9 @@ def run() -> None:
                 # resolving changes lead.platform, and opening first would raise a
                 # Threads browser for a lead that should go out over Telegram.
                 from app.application.resolve_threads_lead import resolve_threads_lead
+                from app.domain.contact import detect_contact
                 from app.infrastructure.openai_contact import OpenAIContactDetector
+                from app.infrastructure.telegram_chat import is_writable_telegram_target
                 from app.infrastructure.threads_session import has_valid_session
                 from app.infrastructure.threads_thread import render_thread
                 print("Читаю тред Threads...")
@@ -412,6 +414,13 @@ def run() -> None:
                 lead, review = resolve_threads_lead(
                     lead, repo,
                     render=lambda u: render_thread(u, headless=config.BROWSER_HEADLESS),
+                    # Тред тоже подписывают каналом («ещё вакансии тут: @…»), а он
+                    # такой же законный ник, как человеческий. Спрашиваем Telegram —
+                    # тем же ботом, которым интейк спрашивает на своей стороне.
+                    detect=lambda text: detect_contact(
+                        text,
+                        telegram_writable=lambda t: is_writable_telegram_target(
+                            t, config.TELEGRAM_BOT_TOKEN)),
                     # The writing model, not the cheap one: once per lead, and a
                     # wrong answer is a message to the wrong person.
                     llm=OpenAIContactDetector(
