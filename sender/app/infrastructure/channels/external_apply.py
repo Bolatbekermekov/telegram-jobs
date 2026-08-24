@@ -12,6 +12,7 @@ from app.application.apply_guard import (
 )
 from app.application.auto_apply import (
     COVER_LETTER_RE, _match_choice, answer_ai_fields, build_plan,
+    field_is_required as _required,
 )
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
@@ -356,7 +357,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
             # not the page.
             loc = _relocate(page, a.field)
             if loc is None or loc.count() == 0:
-                if a.field.required:
+                if _required(a.field):
                     raise ManualApplyRequired(
                         f"{where}: обязательное поле "
                         f"«{a.field.label or a.field.name}» исчезло со страницы "
@@ -365,6 +366,12 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
         # Bound every fill so a stray/invisible control can never hang 30s or crash
         # the whole fill. If a REQUIRED field can't be filled, bail to a manual apply
         # (never submit a partial form); an optional one is just skipped.
+        # `_required`, а не `a.field.required`: разметка про обязательность врёт.
+        # У Teamtailor атрибут стоит у одного поля из девятнадцати, у Zalando и
+        # Personio — ни у одного, а обязательность написана словами в подписи
+        # (замер 2026-08-25, 144 поля). Решение «прерывать или пропустить» должно
+        # читать то же, что читает `unmapped_required`, иначе заполнение молча
+        # пройдёт мимо поля, которое эта проверка потом сочтёт обязательным.
         try:
             if a.is_file and a.value:
                 # Установка файла, ожидание и повторная попытка — внутри виджета.
@@ -376,7 +383,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 # непрошедшим при готовой к отправке форме, а перед этим резюме
                 # успевало загрузиться ДВАЖДЫ — вторая копия от «повторной
                 # попытки». Чем прикрепление доказывается теперь, см. виджет.
-                if not _attach_file(page, loc, a.value) and a.field.required:
+                if not _attach_file(page, loc, a.value) and _required(a.field):
                     raise ManualApplyRequired(
                         f"{where}: резюме не прикрепилось к обязательному полю "
                         f"«{a.field.label or a.field.name}», нужен ручной отклик")
@@ -396,7 +403,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 # умолчанию false) падал на лиде #418.
                 if not _pick_choice(page, loc, value=a.value,
                                     index=a.choice_index):
-                    if a.field.required:
+                    if _required(a.field):
                         raise ManualApplyRequired(
                             f"{where}: не выбрался вариант "
                             f"«{a.value or a.choice_index}» в обязательном поле "
@@ -426,7 +433,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 # ждёт не время, а появление подходящего варианта: серверные
                 # подсказки приходят через 1–3 секунды, а до тех пор в меню
                 # висят ответы на прошлый запрос.
-                if not _fill_combobox(page, loc, a.value) and a.field.required:
+                if not _fill_combobox(page, loc, a.value) and _required(a.field):
                     raise ManualApplyRequired(
                         f"{where}: не выбрался вариант «{a.value[:40]}» в "
                         f"обязательном поле «{a.field.label or a.field.name}», "
@@ -435,7 +442,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 text = a.value
                 if a.field.type == "number":
                     text = numeric_only(text)
-                    if not text and a.field.required:
+                    if not text and _required(a.field):
                         raise ManualApplyRequired(
                             f"{where}: в числовое поле "
                             f"«{a.field.label or a.field.name}» нечего вписать "
@@ -448,7 +455,7 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
             # the human at the wrong thing.
             raise
         except Exception:  # noqa: BLE001 — hidden/odd widget must not hang or crash the fill
-            if a.field.required:
+            if _required(a.field):
                 raise ManualApplyRequired(
                     f"{where}: не смог заполнить обязательное поле "
                     f"«{a.field.label or a.field.name}», нужен ручной отклик")
