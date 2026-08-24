@@ -56,3 +56,36 @@ def greenhouse_embed_url(html: str, page_url: str) -> str:
 
     return ("https://job-boards.greenhouse.io/embed/job_app"
             f"?for={board.group(1)}&token={jid.group(1)}")
+
+
+# Куда вендор кладёт саму форму относительно страницы вакансии. Замерено живьём
+# 2026-08-24: у Teamtailor `careers.bluethrone.io/jobs/8175038-…` это страница
+# ВАКАНСИИ (полей нет вовсе, а кнопка подписана «Join us» и под селектор
+# раскрытия не попадает), форма — на `…/applications/new`, 19 полей. У Recruitee
+# `jobs.profitap.com/o/<слаг>` — то же самое, форма на `/o/<слаг>/c/new`.
+#
+# Только вендоры, чей путь измерен. Догадка тут стоит дорого: чужой адрес — это
+# отклик не на ту вакансию, а такое уже случалось.
+_VENDOR_APPLY_PATH = {
+    "teamtailor.com": "applications/new",
+    "recruitee.com": "c/new",
+}
+
+
+def vendor_apply_url(page_url: str, vendor: str | None) -> str:
+    """Адрес формы отклика рядом со страницей вакансии, или "".
+
+    `vendor` — имя из белого списка, доказанное делегированием в DNS
+    (`apply_guard.vendor_behind`), а не вычитанное из вёрстки: вёрстку пишет сам
+    сайт. Поэтому функция вендора не определяет, а только знает, куда у него
+    ходить.
+    """
+    tail = _VENDOR_APPLY_PATH.get((vendor or "").lower())
+    if not tail:
+        return ""
+    base = (page_url or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/" + tail):
+        return ""      # уже на форме: иначе ходили бы по кругу
+    return f"{base}/{tail}"

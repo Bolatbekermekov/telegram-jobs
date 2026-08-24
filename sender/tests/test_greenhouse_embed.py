@@ -157,3 +157,40 @@ def test_a_short_number_in_the_path_is_not_a_job_id():
     """Иначе `/careers/2024/backend` превратится в отклик на чужую вакансию."""
     html = EMBED_SCRIPT
     assert greenhouse_embed_url(html, "https://acme.com/careers/2024/backend") == ""
+
+
+# --- форма вендора на соседнем адресе ----------------------------------------
+# Замер 2026-08-24 на `careers.bluethrone.io/jobs/8175038-senior-backend-engineer
+# -golang` (Teamtailor): на самой странице вакансии полей нет, кнопки «Apply»
+# тоже — она подписана «Join us», под `_REVEAL_SEL` не попадает. Настоящая форма
+# лежит на `<адрес вакансии>/applications/new` и даёт 19 полей.
+# То же у Recruitee: `jobs.profitap.com/o/<слаг>` — страница вакансии, форма на
+# `/o/<слаг>/c/new`.
+from app.domain.ats_embed import vendor_apply_url                        # noqa: E402
+
+
+def test_teamtailor_form_lives_next_to_the_job():
+    assert vendor_apply_url(
+        "https://careers.bluethrone.io/jobs/8175038-senior-backend-engineer-golang",
+        "teamtailor.com",
+    ) == ("https://careers.bluethrone.io/jobs/"
+          "8175038-senior-backend-engineer-golang/applications/new")
+
+
+def test_recruitee_form_lives_next_to_the_job():
+    assert vendor_apply_url("https://jobs.profitap.com/o/qa-engineer-3",
+                            "recruitee.com") == \
+        "https://jobs.profitap.com/o/qa-engineer-3/c/new"
+
+
+def test_a_vendor_without_a_known_apply_path_gets_nothing():
+    """Гадать нельзя: чужой адрес это отклик не на ту вакансию."""
+    assert vendor_apply_url("https://boards.greenhouse.io/acme/jobs/1",
+                            "greenhouse.io") == ""
+    assert vendor_apply_url("https://x.test/jobs/1", None) == ""
+
+
+def test_we_do_not_walk_onto_the_form_we_are_already_on():
+    assert vendor_apply_url(
+        "https://careers.bluethrone.io/jobs/8175038-x/applications/new",
+        "teamtailor.com") == ""

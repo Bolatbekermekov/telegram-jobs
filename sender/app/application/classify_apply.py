@@ -31,18 +31,89 @@ def is_real_field(f: FieldObs) -> bool:
 
 
 def looks_like_apply_form(real_fields: list[FieldObs], file_inputs: int) -> bool:
-    # A real application form has a resume upload OR several apply-type fields. A
-    # lone email box (e.g. a "get this job by email" / subscribe field on a job-
-    # board listing page, like join.com's "Apply later") is NOT an application form.
-    if file_inputs > 0:
-        return True
+    """Форма отклика — это загрузка резюме И хотя бы одно поле о человеке.
+
+    Загрузка сама по себе формой не считается, и это не придирка. Скрапер берёт
+    `input[type=file]` даже невидимым — иначе резюме не приложится ни на одном
+    ATS, они все прячут настоящий вход за своей кнопкой. Значит страница
+    ВАКАНСИИ, где форма лежит в скрытом блоке или вовсе на соседнем адресе,
+    показывала только эти входы и объявлялась формой.
+    Замерено 2026-08-24: `jobs.zalando.com/en/jobs/2723788-…` держит форму в
+    `<div id="apply" class="… hidden">`, а Recruitee у `jobs.profitap.com/o/
+    qa-engineer-3` — на `/o/<слаг>/c/new`.
+
+    Цена ошибки выше, чем ручной отклик: обязательных незаполненных полей нет
+    (полей нет вовсе), CV прикрепляется, `SEL_SUBMIT` находит на странице кнопку
+    «Apply», жмёт её, страница уходит на настоящую форму — и проверка отправки
+    засчитывает эту навигацию как поданную заявку. Работодатель не получил
+    ничего, а лид помечен `sent`. Не объявив форму, мы вместо этого доходим до
+    `_reveal_apply_form`, который эту кнопку нажмёт и перечитает уже форму.
+
+    Без загрузки нужны два поля: одинокая коробка «получать вакансии на почту»
+    на странице списка (join.com «Apply later») формой не является.
+    """
     hits = 0
     for f in real_fields:
+        if f.type == "file":
+            continue          # загрузка считается отдельно, ниже
         if f.type in ("email", "tel"):
             hits += 1
         elif f.tag in ("input", "textarea") and _APPLY_HINT_RE.search(f"{f.label} {f.name}"):
             hits += 1
+    # Счётчик и список полей — два независимых наблюдения одной страницы, и
+    # снимок может нести только одно из них. Берём любое: пропустить загрузку
+    # значит потребовать два поля там, где хватает одного, и отправить настоящую
+    # форму в ручной отклик.
+    uploads = file_inputs or sum(1 for f in real_fields if f.type == "file")
+    if uploads > 0:
+        return hits >= 1
     return hits >= 2
+
+
+# Домены, зарезервированные RFC 2606 под примеры и тесты. Адрес в такой зоне —
+# доказуемо не адрес: `mailto:your-friend@example.com` это кнопка «поделиться
+# вакансией с другом», где получателя вписывает человек (Zalando, 2026-08-24).
+_PLACEHOLDER_DOMAIN_RE = re.compile(
+    r"(^|\.)(example\.(com|net|org)|(example|invalid|test|localhost))$", re.I)
+
+# Ролевые ящики, которые заведомо не про наём. Список узкий намеренно: обычная
+# почта компании через отклики и работает — так ушёл лид #380 (info@m-tex.pro),
+# — поэтому здесь только то, что доказуемо занято другим. Замер: на странице
+# вакансии Zalando после клика «Apply» единственным адресом остаётся
+# datenschutz@zalando.de из уведомления о защите данных.
+_NOT_HIRING_MAILBOX_RE = re.compile(
+    r"^(privacy|datenschutz|dpo|gdpr|legal|compliance|security|abuse|postmaster|"
+    r"webmaster|noreply|no-reply|donotreply|do-not-reply|press|media|investor)$",
+    re.I)
+
+
+def has_mailto_address(href: str) -> bool:
+    """Годится ли `mailto:` как адрес отклика.
+
+    Три способа промахнуться, все замерены на живых страницах 2026-08-24:
+
+    * адреса нет вовсе — `mailto:?subject=Check out this job`, кнопка
+      «поделиться» у Teamtailor (careers.bluethrone.io). Она была на странице
+      единственной, маршрут выходил EMAIL, разбор адреса возвращал пустое, и
+      отклик умирал с «не разобрал адрес» вместо поиска формы;
+    * адрес-пример — `your-friend@example.com` у Zalando, та же кнопка
+      «поделиться», но с заполненным для наглядности получателем;
+    * адрес не про наём — `datenschutz@zalando.de` из уведомления о защите
+      данных, единственный оставшийся на странице после раскрытия формы.
+
+    В двух последних случаях «собачка» на месте, и без этой проверки заявка
+    уходила бы в несуществующий ящик или офицеру по приватности. Ручной отклик
+    там честнее любой отправки.
+    """
+    head = (href or "")[len("mailto:"):].split("?", 1)[0].strip().strip("<>")
+    if head.count("@") != 1:
+        return False
+    local, _, domain = head.partition("@")
+    if not local or not domain:
+        return False
+    if _PLACEHOLDER_DOMAIN_RE.search(domain):
+        return False
+    return not _NOT_HIRING_MAILBOX_RE.match(local)
 
 
 def known_ats_iframe(iframes: list[str]) -> str | None:
@@ -65,6 +136,6 @@ def classify(obs: PageObservation) -> Route:
         return Route.FORM
     if known_ats_iframe(obs.iframes):
         return Route.IFRAME_ATS
-    if obs.mailto_links:
+    if any(has_mailto_address(h) for h in obs.mailto_links):
         return Route.EMAIL
     return Route.NONE

@@ -7,12 +7,14 @@ Automating third-party ATS violates their ToS and risks bans (accepted by user).
 import re
 from urllib.parse import unquote, urlsplit
 
-from app.application.apply_guard import host_or_vendor_allowed, leaked_secrets
+from app.application.apply_guard import (
+    host_or_vendor_allowed, leaked_secrets, vendor_behind,
+)
 from app.application.auto_apply import (
     COVER_LETTER_RE, answer_ai_fields, build_plan,
 )
 from app.application.classify_apply import classify, known_ats_iframe
-from app.domain.ats_embed import greenhouse_embed_url
+from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -621,6 +623,14 @@ def _hop_to_embedded_form(page, obs, route):
         url = greenhouse_embed_url(page.content(), page.url)
     except Exception:  # noqa: BLE001 — не смогли прочитать страницу, не повод падать
         return obs, route
+    if not url:
+        # Вендор кладёт форму рядом со страницей вакансии: у Teamtailor это
+        # `…/applications/new`, у Recruitee `…/c/new`. Кто вендор — решает
+        # делегирование в DNS, а не вёрстка, поэтому спрашиваем apply_guard.
+        # Замер 2026-08-24: у careers.bluethrone.io кнопка подписана «Join us»,
+        # под селектор раскрытия не попадает, и без этого перехода форма из 19
+        # полей оставалась недостижимой.
+        url = vendor_apply_url(page.url, vendor_behind(page.url))
     if not url:
         return obs, route
     try:
