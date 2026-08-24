@@ -73,6 +73,16 @@ SEL_CHAT_NEWTAB_BTN = "[data-qa='chatik-open-in-new-tab-button']"
 SEL_CHAT_MSG = "textarea[data-qa='chatik-new-message-text']:visible"
 SEL_CHAT_FILE_INPUT = "input[data-qa='upload-file-input']"
 SEL_CHAT_SEND_ENABLED = "button[data-qa='chatik-do-send-message']:not([disabled])"
+# Чат вакансии по своей воле НЕ открывается: на странице отклика, где переписка
+# ещё не завязалась, поля сообщения нет вовсе, а внизу написано «Chat will be
+# available after the employer sends you an invitation» (замер 2026-08-24,
+# hh.ru/chat/5569971942 против 5569995463, где переписка идёт и поле есть).
+#
+# Зато hh предлагает штатный путь: «Add a cover letter» — приложить письмо к уже
+# поданному отклику. По клику появляются и поле сообщения (тот же
+# `chatik-new-message-text`), и поле файла, и кнопка отправки. Для вакансий с
+# откликом в один клик это ЕДИНСТВЕННЫЙ способ доставить письмо и резюме.
+SEL_CHAT_ADD_LETTER = "a[data-qa='chatik-chat-message-applicant-action']"
 
 
 def collect_questions(page) -> list:
@@ -178,13 +188,47 @@ def _neutralize_cookie_banner(page) -> None:
         pass
 
 
+
+def _click_via_dom(locator) -> None:
+    """Нативный el.click() вместо клика по координатам.
+
+    Клику Playwright нужна точка попадания, и любой элемент поверх кнопки его
+    съедает. Именно так пропали 16 сопроводительных писем и 16 резюме подряд
+    (замер 2026-08-23/24): кнопка чата была видима, включена и стабильна, а
+    клик 30 секунд отваливался о фон модалки. Нативный клик хит-теста не
+    делает — тот же приём и по той же причине уже применён в канале LinkedIn.
+    """
+    locator.evaluate("el => el.click()")
+
+
+def _neutralize_modal_overlay(page) -> None:
+    """Погасить модалку, которую hh показывает СРАЗУ после отклика.
+
+    В логе Playwright она значилась как `<div data-qa="modal-overlay"> intercepts
+    pointer events`. Живёт ровно этот момент: на перезагруженной странице той же
+    вакансии (136487691, замер 2026-08-24) модалок ноль, а кнопок чата две и они
+    видимы — значит гасить её безопасно, кнопка лежит на самой странице, а не
+    внутри неё. Кнопки закрытия у модалки нет (`[data-qa*=close]` даёт 0),
+    поэтому глушим так же, как баннер кук: точечно, по pointer-events.
+    """
+    try:
+        page.evaluate(
+            "() => document.querySelectorAll(\"[data-qa='modal-overlay']\")"
+            ".forEach(el => { el.style.pointerEvents = 'none'; el.style.display = 'none'; })")
+    except Exception:  # noqa: BLE001 — модалки может не быть, это норма
+        pass
+
+
 def _chat_send(chat) -> None:
     """Send the composed chatik message. A disabled duplicate of the send button
     exists (global chat widget), so click only the enabled one; fall back to
     Enter (chatik: Enter = send)."""
     btn = chat.locator(SEL_CHAT_SEND_ENABLED)
     if btn.count() > 0:
-        btn.first.click()
+        # Нативный клик: превью приложенного файла и подсказки чата перекрывают
+        # кнопку, и клик по координатам отваливался по таймауту (замер
+        # 2026-08-24, чат 5569971942).
+        _click_via_dom(btn.first)
     else:
         chat.locator(SEL_CHAT_MSG).first.press("Enter")
 
@@ -200,11 +244,12 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
     the chat or its file input can't be found — the caller treats that as a
     warning, since the application itself already went through."""
     _neutralize_cookie_banner(page)
+    _neutralize_modal_overlay(page)
     opener = page.locator(SEL_CHAT_OPEN_BTN)
     if opener.count() == 0:
         _dump_chat_debug(page, debug_dir, "hh_chat_no_open_button")
         raise ChannelError("кнопка чата (open-vacancy-chat) не найдена")
-    opener.first.click()
+    _click_via_dom(opener.first)
     page.wait_for_timeout(4000)
 
     # Prefer the standalone chat tab (top-level composer, no iframe).
@@ -213,7 +258,13 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
     if newtab.count() > 0:
         try:
             with page.context.expect_page(timeout=10000) as pop:
-                newtab.first.click()
+                # Тоже нативным кликом: модалка отклика перекрывает и эту
+                # кнопку, а отдельная вкладка чата — единственный путь, где
+                # композер лежит на верхнем уровне. В самой странице он живёт
+                # внутри iframe, и `page.locator` его не видит (замер
+                # 2026-08-24: 11 фреймов, 9 chatik-элементов, textarea — во
+                # фрейме; во вкладке hh.ru/chat/<id> поле находится сразу).
+                _click_via_dom(newtab.first)
             chat = pop.value
             chat.wait_for_timeout(6000)
         except Exception:  # noqa: BLE001 — fall back to the in-page chat panel
@@ -225,14 +276,47 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
 
     # 1) Cover letter as a chat message — only when it wasn't already sent via
     #    the response form (e.g. one-click-apply vacancies pass it here).
+    revealed = False
     if letter:
         box = chat.locator(SEL_CHAT_MSG)
-        if box.count() > 0:
-            box.first.click()
-            box.first.fill(letter)
-            chat.wait_for_timeout(800)
-            _chat_send(chat)
+        if box.count() == 0:
+            # Поля нет — значит переписка ещё не открыта. Просим hh раскрыть
+            # композер штатной ссылкой «Add a cover letter»: она есть ровно
+            # тогда, когда к отклику письма ещё не приложено.
+            add = chat.locator(SEL_CHAT_ADD_LETTER)
+            if add.count() > 0:
+                _click_via_dom(add.first)
+                chat.wait_for_timeout(3000)
+                box = chat.locator(SEL_CHAT_MSG)
+                revealed = True
+        if box.count() == 0:
+            # Раньше здесь стояло `if box.count() > 0`, и отсутствие поля молча
+            # пропускало письмо: отклик засчитывался успешным, а работодателю не
+            # уходило ни строчки. Молчаливая потеря письма — худший исход, чем
+            # громкая: она не видна ни в таблице, ни в логе.
+            _dump_chat_debug(chat, debug_dir, "hh_chat_no_message_box")
+            raise ChannelError("поле сообщения в чате не найдено — письмо не отправлено")
+        # Виджет «Add a cover letter» ОДНОРАЗОВЫЙ: после отправки он исчезает
+        # вместе с полем файла, и второго захода не будет. Поэтому в раскрытом
+        # композере резюме прикладывается ДО текста, и всё уходит одной
+        # отправкой. Порядок проверен живьём 2026-08-24: после файла и текста
+        # кнопка отправки становится активной.
+        if revealed and attachment_path:
+            revealed_file = chat.locator(SEL_CHAT_FILE_INPUT)
+            if revealed_file.count() == 0:
+                _dump_chat_debug(chat, debug_dir, "hh_chat_no_file_input")
+                raise ChannelError("поле файла (upload-file-input) в чате не найдено")
+            revealed_file.last.set_input_files(attachment_path)
             chat.wait_for_timeout(2500)
+            attachment_path = None      # уже приложено, второй раз не нужно
+        # Без предварительного клика: `fill()` сам ставит фокус, а клику нужна
+        # точка попадания — и её съедает превью только что приложенного файла
+        # (замер 2026-08-24: click по textarea отваливался 30 с, тогда как
+        # fill на том же поле срабатывал сразу). Тот же урок, что в LinkedIn.
+        box.first.fill(letter)
+        chat.wait_for_timeout(800)
+        _chat_send(chat)
+        chat.wait_for_timeout(2500)
 
     # 2) The CV PDF via chatik's pre-rendered hidden file input (accepts pdf) —
     #    no "+" click, so no native OS picker can hang the run. Optional: with the

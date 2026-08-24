@@ -6,6 +6,7 @@ from app.infrastructure.channels.headhunter import (
     SEL_APPLY,
     SEL_CHAT_FILE_INPUT,
     SEL_CHAT_MSG,
+    SEL_CHAT_ADD_LETTER,
     SEL_CHAT_OPEN_BTN,
     SEL_CHAT_SEND_ENABLED,
     SEL_LETTER_INPUT,
@@ -29,8 +30,12 @@ class _FakePage:
     """
 
     def __init__(self, counts, url="https://hh.ru/vacancy/1", submit_sticks=False,
-                 body_text=""):
+                 body_text="", intercepted=()):
         self._counts = counts
+        # Селекторы, клик по которым съедает оверлей — ровно так вела себя
+        # модалка отклика 2026-08-23: элемент есть, видим и стабилен, а клик
+        # отваливается по таймауту.
+        self._intercepted = set(intercepted)
         self.url = url
         self.actions = []
         self._submitted = False
@@ -65,6 +70,10 @@ class _FakePage:
                 return self_inner
 
             def click(self_inner, timeout=None):
+                if selector in page._intercepted:
+                    raise TimeoutError(
+                        f"Locator.click: Timeout 30000ms exceeded ({selector}) — "
+                        "modal-overlay intercepts pointer events")
                 # Playwright raises when the element isn't there; the real submit
                 # click is bounded, so the fake must be able to fail the same way.
                 if page._counts.get(selector, 1) == 0:
@@ -85,6 +94,15 @@ class _FakePage:
 
             def press(self_inner, key):
                 page.actions.append(("press", selector, key))
+
+            def evaluate(self_inner, expr, timeout=None):
+                # Нативный el.click(): оверлей ему не мешает, хит-теста нет.
+                page.actions.append(("jsclick", selector))
+                # hh раскрывает композер только по ссылке «Add a cover letter»:
+                # до неё поля сообщения на странице чата нет вовсе.
+                if selector == SEL_CHAT_ADD_LETTER:
+                    page._counts[SEL_CHAT_MSG] = 1
+                    page._counts[SEL_CHAT_SEND_ENABLED] = 1
 
         return _Locator()
 
@@ -307,9 +325,9 @@ def test_channel_metadata():
 def test_attach_cv_via_chat_sends_file():
     page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_FILE_INPUT: 1, SEL_CHAT_SEND_ENABLED: 1})
     attach_cv_via_chat(page, "/cv/me.pdf")
-    assert ("click", SEL_CHAT_OPEN_BTN) in page.actions
+    assert ("jsclick", SEL_CHAT_OPEN_BTN) in page.actions
     assert ("set_input_files", SEL_CHAT_FILE_INPUT, "/cv/me.pdf") in page.actions
-    assert ("click", SEL_CHAT_SEND_ENABLED) in page.actions
+    assert ("jsclick", SEL_CHAT_SEND_ENABLED) in page.actions
 
 
 def test_attach_cv_via_chat_sends_letter_then_file():
@@ -426,7 +444,7 @@ def test_attach_cv_opens_the_chat_via_the_post_response_button():
     page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_FILE_INPUT: 1})
     attach_cv_via_chat(page, "C:/cv.pdf")
 
-    assert ("click", SEL_CHAT_OPEN_BTN) in page.actions
+    assert ("jsclick", SEL_CHAT_OPEN_BTN) in page.actions
     assert ("set_input_files", SEL_CHAT_FILE_INPUT, "C:/cv.pdf") in page.actions
 
 
@@ -571,3 +589,135 @@ def test_the_channel_passes_its_configured_wait_through():
 
     ch = HeadHunterChannel("/nonexistent", submit_timeout_ms=12_345)
     assert ch._submit_timeout_ms == 12_345
+
+
+# --- модалка, из-за которой 16 откликов ушли пустыми -------------------------
+# Замер 2026-08-23/24: два прогона подряд, 16 откликов на hh — и НИ ОДНОГО
+# сопроводительного письма и ни одного CV. Отклик у таких вакансий подаётся в
+# один клик (онлайн-резюме), а письмо и файл идут следом через чат вакансии.
+# Клик по кнопке чата отваливался по таймауту, и в логе Playwright стояло
+# `<div data-qa="modal-overlay"> intercepts pointer events`: сразу после отклика
+# hh показывает модалку, и её фон перехватывает клик.
+#
+# Модалка живёт ровно этот момент — на перезагруженной странице той же вакансии
+# (136487691, замер 2026-08-24) модалок ноль, а кнопок чата две и они видимы.
+# Кнопки закрытия у неё нет: `[data-qa*=close]` даёт 0.
+
+def test_the_letter_survives_a_modal_that_swallows_the_chat_click():
+    """Главная регрессия: письмо обязано дойти, даже когда клик перехвачен."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_SEND_ENABLED: 1},
+                     intercepted={SEL_CHAT_OPEN_BTN})
+
+    attach_cv_via_chat(page, None, None, letter="Здравствуйте")
+
+    assert ("jsclick", SEL_CHAT_OPEN_BTN) in page.actions, "чат не открыли"
+    assert ("fill", SEL_CHAT_MSG, "Здравствуйте") in page.actions
+
+
+def test_the_cv_survives_it_too():
+    """CV идёт тем же путём, и в тех же прогонах не дошёл ни разу."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_FILE_INPUT: 1,
+                      SEL_CHAT_SEND_ENABLED: 1},
+                     intercepted={SEL_CHAT_OPEN_BTN})
+
+    attach_cv_via_chat(page, "/cv/me.pdf", None)
+
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "/cv/me.pdf") in page.actions
+
+
+def test_the_chat_is_opened_without_a_hit_point():
+    """Нативный клик, а не клик по координатам: любой оверлей поверх кнопки
+    съедает второй. Тот же приём уже применён в канале LinkedIn."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_SEND_ENABLED: 1})
+
+    attach_cv_via_chat(page, None, None, letter="привет")
+
+    assert ("jsclick", SEL_CHAT_OPEN_BTN) in page.actions
+    assert ("click", SEL_CHAT_OPEN_BTN) not in page.actions
+
+
+def test_a_chat_that_never_opened_is_loud_not_silent():
+    """Раньше отсутствие поля сообщения просто пропускало письмо: отклик
+    считался успешным, а работодатель не получал ни строчки. Молчать нельзя."""
+    import pytest
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 0})
+
+    with pytest.raises(ChannelError, match="поле сообщения"):
+        attach_cv_via_chat(page, None, None, letter="Здравствуйте")
+
+
+# --- чат, в котором писать нельзя, пока не приложишь письмо к отклику --------
+# Замер 2026-08-24 на двух реальных чатах одного аккаунта:
+#   hh.ru/chat/5569995463 — переписка завязалась, поле сообщения есть;
+#   hh.ru/chat/5569971942 — поля нет вовсе, а внизу страницы написано
+#   «Chat will be available after the employer sends you an invitation».
+# То есть hh НЕ даёт писать работодателю по своей воле: чат открывается только
+# после его приглашения. Досылать письмо через переписку в общем случае нельзя.
+#
+# Но там же hh предлагает своё: «Add a cover letter» — ссылка
+# `a[data-qa='chatik-chat-message-applicant-action']` в виджете cover-letter.
+# По клику появляются и поле сообщения (тот же `chatik-new-message-text`), и
+# поле файла, и кнопка отправки. Это и есть штатный способ приложить письмо к
+# уже поданному отклику, и именно он нужен вакансиям с откликом в один клик.
+
+def test_a_chat_without_a_composer_uses_hhs_add_cover_letter_link():
+    """Главный случай для откликов в один клик: писать сразу нельзя, но письмо
+    к отклику приложить можно."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 0, SEL_CHAT_ADD_LETTER: 1})
+
+    attach_cv_via_chat(page, None, None, letter="Здравствуйте")
+
+    assert ("jsclick", SEL_CHAT_ADD_LETTER) in page.actions, "не нажали «Add a cover letter»"
+    assert ("fill", SEL_CHAT_MSG, "Здравствуйте") in page.actions
+
+
+def test_the_cv_rides_the_same_revealed_composer():
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 0, SEL_CHAT_ADD_LETTER: 1,
+                      SEL_CHAT_FILE_INPUT: 1})
+
+    attach_cv_via_chat(page, "/cv/me.pdf", None, letter="Здравствуйте")
+
+    assert ("set_input_files", SEL_CHAT_FILE_INPUT, "/cv/me.pdf") in page.actions
+
+
+def test_an_existing_composer_is_used_as_is():
+    """Где переписка уже идёт, ссылки нет — и трогать ничего не нужно."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 1, SEL_CHAT_SEND_ENABLED: 1})
+
+    attach_cv_via_chat(page, None, None, letter="привет")
+
+    assert ("jsclick", SEL_CHAT_ADD_LETTER) not in page.actions
+    assert ("fill", SEL_CHAT_MSG, "привет") in page.actions
+
+
+def test_no_composer_and_no_link_still_raises():
+    """Ни поля, ни ссылки — писать действительно некуда, и молчать об этом нельзя."""
+    import pytest
+
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 0, SEL_CHAT_ADD_LETTER: 0})
+
+    with pytest.raises(ChannelError, match="поле сообщения"):
+        attach_cv_via_chat(page, None, None, letter="Здравствуйте")
+
+
+def test_in_a_revealed_composer_the_cv_goes_before_the_text_and_both_ride_one_send():
+    """Виджет «Add a cover letter» одноразовый: после отправки он исчезает
+    вместе с полем файла. Замер 2026-08-24: код приложил письмо, отправил его —
+    и на следующем шаге поля файла уже не было, резюме не ушло. Значит файл
+    прикладывается ДО текста, а отправка одна."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1, SEL_CHAT_MSG: 0, SEL_CHAT_ADD_LETTER: 1,
+                      SEL_CHAT_FILE_INPUT: 1})
+
+    attach_cv_via_chat(page, "/cv/me.pdf", None, letter="Здравствуйте")
+
+    kinds = [a for a in page.actions
+             if a[0] in ("set_input_files", "fill", "click", "press")
+             and a[1] in (SEL_CHAT_FILE_INPUT, SEL_CHAT_MSG, SEL_CHAT_SEND_ENABLED)]
+    files = [i for i, a in enumerate(kinds) if a[0] == "set_input_files"]
+    fills = [i for i, a in enumerate(kinds) if a[0] == "fill"]
+    assert files and fills and files[0] < fills[0], "файл должен идти ДО текста"
+    sends = [a for a in page.actions
+             if a[:2] in (("jsclick", SEL_CHAT_SEND_ENABLED),)
+             or a[:2] == ("press", SEL_CHAT_MSG)]
+    assert len(sends) == 1, f"отправка должна быть одна, а их {len(sends)}"
