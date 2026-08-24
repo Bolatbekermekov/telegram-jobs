@@ -581,17 +581,47 @@ _GONE_RE = re.compile(
     re.I)
 
 
+# Состояние, объявленное ОТДЕЛЬНОЙ строкой. Сайт не всегда пишет «position
+# closed» — чаще рисует статус самостоятельным элементом, и в тексте страницы он
+# оказывается строкой сам по себе. Замер 2026-08-24: у Toughbyte это ровно
+# «Closed» при обычном заголовке вакансии и HTTP 200, у YouHodler — «404» при
+# заголовке «Not Found». Прежний шаблон требовал существительное перед
+# состоянием, поэтому оба прошли мимо и легли в таблицу как «форма не
+# распознана» — формально верно, а человека отправляет чинить несуществующее.
+#
+# Требование ЦЕЛОЙ строки здесь несущее: «closed» встречается и в живых
+# описаниях («closed-source SDK», «closed beta»), а «404» — в вакансиях про
+# обработку ошибок. Отдельной строкой оно стоит только когда это статус.
+_GONE_LINE_RE = re.compile(
+    r"^(404|not found|closed|position closed|job closed|expired|"
+    r"вакансия закрыта|закрыта|снята)$", re.I)
+
+
+def page_is_gone(title: str, text: str) -> bool:
+    """Снята ли вакансия / нет ли страницы — по заголовку и тексту страницы.
+
+    Отделено от Playwright, чтобы правило можно было проверить на снятых живьём
+    строках, а не только через браузер.
+    """
+    if _GONE_RE.search(f"{title} {text}"):
+        return True
+    if _GONE_LINE_RE.match((title or "").strip()):
+        return True
+    return any(_GONE_LINE_RE.match(line.strip())
+               for line in (text or "").splitlines())
+
+
 def _page_unavailable(page) -> bool:
-    text = ""
+    title = text = ""
     try:
-        text += (page.title() or "") + " "
+        title = page.title() or ""
     except Exception:  # noqa: BLE001
         pass
     try:
-        text += page.locator("body").inner_text(timeout=3000)[:4000]
+        text = page.locator("body").inner_text(timeout=3000)[:4000]
     except Exception:  # noqa: BLE001
         pass
-    return bool(_GONE_RE.search(text))
+    return page_is_gone(title, text)
 
 
 def _wants_cover_letter_file(obs) -> bool:
