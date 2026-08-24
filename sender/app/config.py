@@ -185,7 +185,11 @@ NOTIFY_CHAT_ID = os.environ.get("NOTIFY_CHAT_ID", "")
 LINKEDIN_PEOPLE_ENABLED = os.environ.get("LINKEDIN_PEOPLE_ENABLED", "false").lower() == "true"
 # LinkedIn level filter (f_E): 1=Internship, 2=Entry/Junior, 3=Associate/Junior+.
 # Empty = all levels. Recency f_TPR: r604800 = 7 days.
-LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3")
+# 4 (Mid-Senior) входит в значение по умолчанию намеренно: владелец профиля ищет
+# и Junior, и Middle в каждой сфере, а search_profile.txt отдельной строкой
+# говорит «Middle — ПОДХОДИТ». Без четвёрки Middle-вакансии не доходили бы даже
+# до скоринга, и щель открывалась бы молча при потере .env.
+LINKEDIN_EXPERIENCE = os.environ.get("LINKEDIN_EXPERIENCE", "1,2,3,4")
 LINKEDIN_POSTED_WITHIN = os.environ.get("LINKEDIN_POSTED_WITHIN", "r604800")
 # Формат работы (f_WT): 1=офис, 2=удалённо, 3=гибрид, пусто=любой. По умолчанию
 # ПУСТО. Раньше здесь стояла константа f_WT=2, которую нельзя было выключить, и
@@ -213,7 +217,18 @@ REMOTIVE_API_URL = os.environ.get(
 # AI relevance filtering of search results.
 RELEVANCE_ENABLED = os.environ.get("RELEVANCE_ENABLED", "true").lower() == "true"
 MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))
-MATCH_MAX_JOBS = int(os.environ.get("MATCH_MAX_JOBS", "30"))  # per platform per run
+# Сколько вакансий должно ДОЕХАТЬ до листа с одной площадки за прогон. Считает
+# прошедших порог, а не потраченные оценки: до 2026-08-22 слот тратился на
+# каждую оценку, и отвергнутые съедали бюджет целиком (замер: hh оценил 30,
+# отверг 25, добавил 5 — и на этом остановился).
+MATCH_MAX_JOBS = int(os.environ.get("MATCH_MAX_JOBS", "30"))
+# Предохранитель к нему: сколько максимум вакансий разрешено ОЦЕНИТЬ за прогон
+# на площадку. Нужен по цене — одна оценка это скачанное описание плюс вызов
+# модели (замерено ~19 с на LinkedIn, ~38 с на hh), поэтому площадка, где всё
+# ниже порога, без потолка сканировала бы всё найденное часами. 150 выбрано
+# осознанно: при сегодняшней доле проходящих (5 из 30 на hh) это даёт реальный
+# шанс набрать квоту, а в худшем случае стоит ~47 мин на LinkedIn и ~1,5 ч на hh.
+MATCH_SCAN_LIMIT = int(os.environ.get("MATCH_SCAN_LIMIT", "150"))
 SEARCH_PROFILE_PATH = os.environ.get(
     "SEARCH_PROFILE_PATH", str(_ROOT / "sender" / "search_profile.txt"))
 # Локальная память о вакансиях, которые скорер уже отверг: без неё каждый

@@ -3,15 +3,18 @@
 - Проектирование и построение AI-агентов
 - Full-Stack Developer (можно отдельно frontend или backend)
 - QA Engineer / QA Tester (ручное и автоматизированное тестирование, QA Automation)
+- Mobile Developer / React Native (кроссплатформенные приложения)
 
 Уровень: Intern / Internship / Junior / Junior+ / Middle. НЕ senior/lead/staff.
 
 Стек (что знаю и хочу применять):
-- Backend: Go, Node.js, Express, NestJS
+- Backend: Go (Gin), Node.js, Express, NestJS
 - Frontend: Vue.js, React, Next.js, Vite
-- Базы/инфра: PostgreSQL, MongoDB, Redis
-- AI: LLM-приложения, агенты, prompt engineering
+- Базы/инфра: PostgreSQL, MongoDB (Mongoose), Redis
+- AI: LLM-приложения, агенты, prompt engineering, LangChain, LangGraph,
+  RAG-сервисы (retrieval augmented generation), векторные базы
 - QA: функциональное/ручное тестирование, автотесты, баг-репорты
+- Mobile: React Native
 
 Формат работы: подходит ЛЮБОЙ — удалённо, гибрид или офис, в любой стране
 (UAE, USA, Europe и т.д.). Офис в другой стране НЕ является минусом: готов

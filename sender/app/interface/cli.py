@@ -174,6 +174,12 @@ def _relevance_args() -> dict:
         profile=load_text_file(config.SEARCH_PROFILE_PATH),
         threshold=config.MATCH_THRESHOLD,
         max_jobs=config.MATCH_MAX_JOBS,
+        scan_limit=config.MATCH_SCAN_LIMIT,
+        # Обрез потолком объявляется вслух: иначе он неотличим от «на площадке
+        # ничего не нашлось», хотя непросмотренное там осталось.
+        on_scan_limit=lambda scanned, kept: print(
+            f"   ⚠️ упёрлись в потолок оценок ({scanned}), набрано {kept} — "
+            "остальное осталось непросмотренным"),
     )
 
 

@@ -35,7 +35,8 @@ def _unique(candidates):
 
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
-               scored_out=None, on_platform_done=None) -> int:
+               scored_out=None, on_platform_done=None, scan_limit=None,
+               on_scan_limit=None) -> int:
     """`scored_out` — память о вакансиях, которые скорер уже отверг.
 
     Без неё отказник не сохранялся никуда (`known_urls()` читает только
@@ -67,7 +68,8 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                     scorer, profile, threshold, max_jobs,
                     # score_and_filter отдаёт кандидата, память хранит ссылку.
                     on_reject=(None if scored_out is None
-                               else lambda c: scored_out.add(c.url)))
+                               else lambda c: scored_out.add(c.url)),
+                    scan_limit=scan_limit, on_scan_limit=on_scan_limit)
             gained = candidates_repo.add_new(found)
             added += gained
         except Exception as exc:  # noqa: BLE001 — isolate per-platform failures
