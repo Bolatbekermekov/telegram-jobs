@@ -95,3 +95,42 @@ def test_prose_about_experience_is_still_left_to_the_model():
     got = map_field(_field("Расскажите об опыте работы в распределённых командах "
                            "и о том, что было сложнее всего"), PROFILE, "/cv.pdf")
     assert got.value != "3"
+
+
+# --- диапазон, внутрь которого попадает опыт ---------------------------------
+# Замер 2026-08-24 на живой форме BlueThrone (Teamtailor), вопрос «How many years
+# of production Go experience do you have?» с вариантами
+# ['No production Go experience', 'Under 2 years', '2-5 years', '5+ years'].
+# При трёх годах в профиле правило отвечало «5+ years»: оно брало первый вариант,
+# чья НИЖНЯЯ граница уже не меньше нужного, и проскакивало «2-5 years», внутри
+# которого тройка и лежит. Работодателю уходило заявление о пяти годах
+# production Go — это не «немного округлили», это неправда в анкете.
+
+def test_the_range_that_actually_contains_the_number_wins():
+    got = map_field(_field("How many years of production Go experience do you have?",
+                           options=["No production Go experience", "Under 2 years",
+                                    "2-5 years", "5+ years"]), PROFILE, "/cv.pdf")
+    assert got.value == "2-5 years"
+
+
+def test_an_upper_bound_option_is_read_as_a_range_from_zero():
+    """«Under 5 years» — это 0..4, а не «пять». Тот же вопрос на той же форме
+    отвечался верно только по случайности: первое число в строке было 5."""
+    got = map_field(_field("How many years of commercial backend experience?",
+                           options=["Under 5 years", "5-8 years", "8+ years"]),
+                    PROFILE, "/cv.pdf")
+    assert got.value == "Under 5 years"
+
+
+def test_no_experience_option_is_not_picked_for_a_real_number():
+    got = map_field(_field("Years of Kubernetes experience",
+                           options=["No experience", "1-3", "3-5"]),
+                    PROFILE, "/cv.pdf")
+    assert got.value in ("1-3", "3-5")
+
+
+def test_when_every_option_is_above_the_truth_we_take_the_lowest():
+    """Занизить — потерять шанс, завысить — соврать в анкете. Выбираем первое."""
+    got = map_field(_field("Years of experience", options=["5-8", "8+"]),
+                    PROFILE, "/cv.pdf")
+    assert got.value == "5-8"

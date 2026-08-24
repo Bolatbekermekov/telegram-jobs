@@ -152,28 +152,77 @@ _EXPERIENCE_RE = re.compile(
 _LEADING_NUMBER = re.compile(r"\d+")
 
 
+# Сколько лет обещает вариант списка. Читается именно ОТРЕЗОК, а не первое
+# попавшееся число: «Under 2 years» это 0..1, а не «два», и «2-5 years» это
+# 2..5, внутрь которого попадают три года — см. _experience_answer.
+_YEARS_RANGE_RE = re.compile(r"(\d+)\s*[-–—]\s*(\d+)")
+_YEARS_PLUS_RE = re.compile(
+    r"(\d+)\s*(?:\+|or more|and (?:more|above|up)|или больше|или более|и более)", re.I)
+_YEARS_UNDER_RE = re.compile(
+    r"(?:under|less than|below|fewer than|up to|<|до|менее|меньше)\s*(\d+)", re.I)
+_YEARS_NONE_RE = re.compile(r"\bno\b|\bnone\b|без опыта|нет опыта|не работал", re.I)
+_ANY_NUMBER_RE = re.compile(r"\d+")
+_YEARS_UNBOUNDED = 10 ** 6
+
+
+def _option_years_span(option) -> tuple[int, int] | None:
+    """(нижняя, верхняя) граница варианта в годах, или None если чисел нет."""
+    text = str(option)
+    m = _YEARS_RANGE_RE.search(text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = _YEARS_PLUS_RE.search(text)
+    if m:
+        return int(m.group(1)), _YEARS_UNBOUNDED
+    m = _YEARS_UNDER_RE.search(text)
+    if m:
+        return 0, max(0, int(m.group(1)) - 1)
+    m = _ANY_NUMBER_RE.search(text)
+    if m:
+        return int(m.group(0)), int(m.group(0))
+    if _YEARS_NONE_RE.search(text):
+        return 0, 0
+    return None
+
+
 def _experience_answer(f: FieldObs, years: int) -> FillAction:
     """Ответ на вопрос о годах опыта: число, а в списке — подходящий диапазон.
 
-    Списки почти всегда предлагают диапазоны («0-1», «1-3», «3-5», «5+»).
-    Берём первый, чьё НИЖНЕЕ значение уже не меньше нужного, иначе самый
-    старший из доступных: «0-1» это не то, что человек про себя говорит.
+    Вариант читается как ОТРЕЗОК лет, который он обещает, и выигрывает тот,
+    внутрь которого опыт попадает. Раньше бралcя первый вариант, чья нижняя
+    граница уже не меньше нужного, и этого хватало ровно до первого списка с
+    внутренними диапазонами: на живой форме BlueThrone 2026-08-24 вопрос «How
+    many years of production Go experience do you have?» с вариантами
+    ['No production Go experience', 'Under 2 years', '2-5 years', '5+ years']
+    при трёх годах в профиле получал ответ «5+ years» — правило проскакивало
+    «2-5 years», внутри которого тройка и лежит. Работодателю уходило заявление
+    о пяти годах production Go, и это не округление, а неправда в анкете.
+
+    На границе («1-3» и «3-5» при трёх годах оба подходят) берётся СТАРШИЙ: это
+    то, что человек про себя говорит, и обе формулировки одинаково правдивы.
+
+    Когда не подходит ни один: сначала ближайший снизу — занизить не страшно;
+    если и таких нет (весь список выше правды), берётся самый скромный вариант.
+    Занижение стоит шанса, завышение — вранья в анкете, и цена разная.
     """
-    if f.options:
-        best = None
-        for i, opt in enumerate(f.options):
-            m = _LEADING_NUMBER.search(str(opt))
-            low_bound = int(m.group(0)) if m else -1
-            if low_bound >= years:
-                best = i
-                break
-            if low_bound >= 0:
-                best = i          # запоминаем самый старший из тех, что ниже
-        if best is None:
+    if not f.options:
+        return FillAction(field=f, value=str(years), source="profile")
+
+    spans = [(i, _option_years_span(o)) for i, o in enumerate(f.options)]
+    inside = [i for i, s in spans if s and s[0] <= years <= s[1]]
+    if inside:
+        best = inside[-1]
+    else:
+        below = [(s[0], i) for i, s in spans if s and s[0] <= years]
+        known = [(s[0], i) for i, s in spans if s]
+        if below:
+            best = max(below)[1]
+        elif known:
+            best = min(known)[1]
+        else:
             best = len(f.options) - 1
-        return FillAction(field=f, choice_index=best, value=f.options[best],
-                          source="profile")
-    return FillAction(field=f, value=str(years), source="profile")
+    return FillAction(field=f, choice_index=best, value=f.options[best],
+                      source="profile")
 
 
 def _yes_no(f: FieldObs, yes: bool, source: str = "profile") -> FillAction:
