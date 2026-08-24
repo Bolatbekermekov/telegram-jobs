@@ -327,7 +327,7 @@ def _attached_count(loc) -> int:
         return -1
 
 
-def fill_fields(page, plan, where: str = "внешняя форма") -> None:
+def fill_fields(page, plan, where: str = "внешняя форма", profile=None) -> None:
     """Type every planned value into the page. Submits nothing.
 
     Split out of `fill_and_submit` so LinkedIn's multi-step Easy Apply can reuse
@@ -433,7 +433,9 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
                 # ждёт не время, а появление подходящего варианта: серверные
                 # подсказки приходят через 1–3 секунды, а до тех пор в меню
                 # висят ответы на прошлый запрос.
-                if not _fill_combobox(page, loc, a.value) and _required(a.field):
+                if (not _fill_combobox(page, loc, a.value)
+                        and not _pick_any_from_roster(page, loc, a.field, profile)
+                        and _required(a.field)):
                     raise ManualApplyRequired(
                         f"{where}: не выбрался вариант «{a.value[:40]}» в "
                         f"обязательном поле «{a.field.label or a.field.name}», "
@@ -462,8 +464,8 @@ def fill_fields(page, plan, where: str = "внешняя форма") -> None:
             continue
 
 
-def fill_and_submit(page, plan, dry_run: bool) -> None:
-    fill_fields(page, plan)
+def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
+    fill_fields(page, plan, profile=profile)
     if dry_run:
         return
     submit = page.locator(SEL_SUBMIT)
@@ -645,6 +647,127 @@ def _wants_cover_letter_file(obs) -> bool:
 # другую сторону дешёвая: вопрос остаётся свободным, модель отвечает по резюме,
 # вариант ищет виджет, а не найдя — поле честно уходит в ручной отклик.
 _VOCABULARY_LIMIT = 100
+
+
+# Поля-справочники: список готовых названий, из которого форма ждёт выбора, а не
+# сведения о самом кандидате. «employer», а не «employed» — намеренно: «Have you
+# previously been employed with…» это вопрос про кандидата с ответом да/нет, и
+# подменять его вариантом из списка нельзя.
+_ROSTER_LABEL_RE = re.compile(
+    r"school|universit|college|institut|education|alma mater|"
+    r"employer|\bcompany\b|organi[sz]ation|"
+    r"вуз|университет|учебн|образован|компани|работодател|организац",
+    re.IGNORECASE)
+
+
+# Регионы, которыми справочники подписывают вариант «моего тут нет». Замер
+# 2026-08-25 на Datadog: на запрос «Other» приходят ровно шесть — Africa, Asia
+# Pacific, Europe, Middle East, North America, South America. Виджет брал первый
+# подходящий, то есть Африку, и выпускник из Астаны получал в анкету не тот
+# континент. Формально это «вариант из списка», но верный лежит рядом.
+#
+# Список стран заведомо неполный и таким и задуман: он нужен, чтобы выбрать
+# ЛУЧШИЙ из уже предложенных формой вариантов, а не чтобы знать географию. Не
+# нашлось совпадения — берётся первый, как и было.
+_REGION_HINTS = (
+    ("asia pacific",
+     r"kazakh|казах|uzbek|узбек|kyrgyz|киргиз|tajik|china|кита|india|инди|japan|"
+     r"korea|коре|singapore|vietnam|thai|indonesia|malaysia|philippin|"
+     r"australia|австрал|new zealand|hong kong|taiwan|asia|азия|азиат"),
+    ("middle east",
+     r"emirat|эмират|\buae\b|saudi|катар|qatar|kuwait|bahrain|oman|israel|"
+     r"изра|jordan|lebanon|ливан"),
+    ("europe",
+     r"russia|росси|ukrain|укра|belarus|беларус|poland|польш|german|герман|"
+     r"france|франц|spain|испан|italy|итал|nether|serbia|серб|georgia|груз|"
+     r"armenia|армен|turkey|турц|portugal|португал|czech|чехи|sweden|norway|"
+     r"finland|denmark|austria|австри|switzerland|швейцар|ireland|greece|"
+     r"united kingdom|england|britain|британ|europe|европ"),
+    ("north america",
+     r"united states|\busa\b|\bu\.s\.|америк|canada|канад|mexico|мексик"),
+    ("south america",
+     r"brazil|бразил|argentin|аргентин|chile|чили|colomb|колумб|peru|перу|"
+     r"uruguay|уругва|bolivia|ecuador|paraguay"),
+    ("africa",
+     r"nigeria|нигери|kenya|кени|egypt|егип|south africa|ghana|morocco|марокк|"
+     r"tunisia|algeria|ethiopia|africa|африк"),
+)
+
+
+def _region_of(profile) -> str:
+    """Название региона для страны из профиля, или "" если не узнали."""
+    where = " ".join(str(getattr(profile, a, "") or "")
+                     for a in ("country", "city", "location")).lower()
+    if not where.strip():
+        return ""
+    for region, pattern in _REGION_HINTS:
+        if re.search(pattern, where, re.IGNORECASE):
+            return region
+    return ""
+
+
+def _roster_order(options, profile):
+    """Варианты справочника в порядке предпочтения.
+
+    Сначала «Other…» — форма держит его ровно для случая «моего тут нет», и это
+    единственный по-настоящему верный ответ. Внутри «Other…» первым идёт
+    подходящий регион. Всё остальное — после: это чужие названия, и брать их
+    стоит только когда своего варианта форма не предложила вовсе.
+    """
+    region = _region_of(profile)
+    other = [o for o in options if (o or "").strip().lower().startswith("other")]
+    rest = [o for o in options if o not in other]
+    if region:
+        fitting = [o for o in other if region in (o or "").lower()]
+        other = fitting + [o for o in other if o not in fitting]
+    return other + rest
+
+
+def _pick_any_from_roster(page, loc, field, profile=None) -> bool:
+    """Взять из справочника ЛЮБОЙ вариант, когда своего в нём нет.
+
+    Замер 2026-08-25 на форме Datadog (Greenhouse): «School*» ищет по серверу и
+    на «Astana IT University» отдаёт ноль вариантов — как и на «Nazarbayev», а на
+    «Kazakh» показывает семь чужих вузов. Нужного там нет и не будет: это
+    справочник Greenhouse, а не перечень всех вузов мира. Поле обязательное, и
+    из-за него не отправлялась вся заявка.
+
+    Решение владельца профиля (2026-08-25): в выпадающем списке про учёбу или
+    работодателя указывать любой вариант ИЗ СПИСКА, своё писать там, где поле
+    свободное. Свободных полей это правило поэтому не касается вовсе — туда
+    по-прежнему пишется настоящее значение.
+
+    Порядок не случайный. Сначала «Other»: форма держит его ровно для случаев
+    «моего тут нет», и это единственный по-настоящему верный ответ — у Datadog
+    в справочнике лежит «Other - Asia Pacific». Первый попавшийся вариант
+    берётся только когда «Other» списком не предложен.
+
+    Ограничено справочниками намеренно. Для вопроса про визу, зарплату или
+    готовность к переезду «любой вариант» — это неправда о себе, и там пустое
+    поле с ручным откликом остаётся правильным исходом.
+    """
+    if not _ROSTER_LABEL_RE.search(f"{field.label} {field.name}"):
+        return False
+    # Порядок попыток. Справочник ищет по СЕРВЕРУ, и просто раскрытое меню
+    # показывает первую сотню по алфавиту — у Datadog от «3iL Limoges», никаких
+    # «Other» там нет. Они приходят только в ответ на ввод, и на «Other» их
+    # шесть: Africa, Asia Pacific, Europe, Middle East, North America, South
+    # America (замер 2026-08-25). Поэтому сначала спрашиваем СВОЙ регион целиком
+    # — иначе вслепую набранное «Other» попадает в первый из шести, и выпускник
+    # из Астаны получает в анкету Африку.
+    region = _region_of(profile)
+    if region and _fill_combobox(page, loc, f"Other - {region.title()}"):
+        return True
+    if _fill_combobox(page, loc, "Other"):
+        return True
+    try:
+        options = _combobox_options(page, loc)
+    except Exception:  # noqa: BLE001 — список не прочитался, значит выбирать не из чего
+        return False
+    for option in _roster_order(options, profile):
+        if option and _fill_combobox(page, loc, option):
+            return True
+    return False
 
 
 def _load_combobox_options(page, plan) -> None:
@@ -834,7 +957,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
                 f"(поле «{a.field.label or a.field.name}») — проверь вручную: {obs.url}")
 
     submit_before = _submit_count(page)
-    fill_and_submit(page, plan, dry_run)
+    fill_and_submit(page, plan, dry_run, profile=profile)
     if dry_run:
         raise ManualApplyRequired(
             f"DRY_RUN: заполнено, НЕ отправлено — проверь вручную: {obs.url}")
