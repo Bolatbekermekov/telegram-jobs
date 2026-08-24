@@ -57,6 +57,105 @@ _PLACEHOLDER_OPTION_RE = re.compile(
     r"выбер(и|ите)[^|]*|выбрать|не выбрано|[-—–])\.{0,3}$", re.IGNORECASE)
 
 
+# ── Обязательность, написанная в ПОДПИСИ ─────────────────────────────────────
+#
+# Замер живых форм 2026-08-24/25 тем же скрейпером, что работает в проде:
+#   Teamtailor (careers.bluethrone.io, вакансия 8175038) — 19 полей, `required`
+#     ровно у ОДНОГО («Upload CV»). У остальных обязательность написана словами
+#     прямо в подписи: «First name*Required», «Locations*Required»,
+#     «What's your LinkedIn?*Required».
+#   Personio (synaforce-gmbh.jobs.personio.de/job/1245032 и
+#     prologistik-group.jobs.personio.com/job/2673489) — ни одного `required` на
+#     всю форму, маркер «E-Mail* (erforderlich)», «Verfügbar ab* (erforderlich)».
+#   Zalando (jobs.zalando.com, вакансия 2723788) — ни одного `required`, маркер
+#     «First Name*», «Résume*Attach File», «I identify as*».
+#   Lever (jobs.lever.co) — «Full name✱», «Email✱» (это U+2731, не звёздочка). У
+#     вакансии, где резюме обязательно, подпись «Resume/CV ✱ATTACH RESUME/CV…», а
+#     где нет — та же подпись без ✱. Маркер и есть единственная разница.
+#
+# Пока верили `required` на слово, `unmapped_required()` на таких формах не
+# удерживал НИЧЕГО, и анкета уходила работодателю с пустыми обязательными полями.
+#
+# Цена ошибки в другую сторону не меньше: лишнее «обязательное» поле утащит в
+# ручной отклик заявку, которая ушла бы сама. Поэтому маркером считается не
+# всякая звёздочка и не всякое слово «required», а только то, что стоит НА МЕСТЕ
+# пометки — вплотную за концом подписи:
+#   * перед маркером должна быть сама подпись. Сноска «* indicates a required
+#     field» (снята живьём с Greenhouse, отдельный <p> над формой) начинается со
+#     звёздочки — это легенда ко всей форме, а не пометка к полю;
+#   * за маркером фраза не продолжается строчной буквой: «competitive salary* and
+#     equity» — сноска в прозе;
+#   * до маркера в подписи нет законченного предложения — звёздочка в глубине
+#     длинного текста согласия относится не к подписи.
+# Слово «required» само по себе маркером не считается вовсе: «5+ years required»
+# и «Bachelor degree required» — про опыт, а не про поле, и «requirement» из
+# живого вопроса Lever («a residency requirement of living in the United
+# States») это не «required». Слово читается только на месте пометки:
+# приклеенным к звёздочке («Locations*Required»), в скобках сразу за ней
+# («* (erforderlich)») или отдельным словом в начале подписи с точкой
+# («Required.By submitting this application…» — та же Teamtailor, где звёздочку
+# в конце предложения срезает обрезка подписи до _MAX_LABEL_CHARS).
+#
+# Обрезка вообще стоит дорого: у той же Teamtailor «…without needing visa
+# sponsorship?*Required» теряет маркер вместе с хвостом, и такое поле мы
+# по-прежнему не удержим. Пропустить обязательное поле — прежнее поведение;
+# придумать обязательность там, где её нет, — новый ущерб. Правило ошибается
+# в первую сторону намеренно.
+#
+# Проверка на всём замере: 144 поля с девяти живых форм (Teamtailor, Zalando,
+# Paysenger, Greenhouse, Lever ×2, Personio ×2, Ashby), правило срабатывает на
+# 40 — и все сорок несут маркер в подписи буквально. Ни одного срабатывания на
+# прозе: ни на согласии Zalando про чувствительные данные, ни на абзаце Ashby
+# про SMS, ни на «(Optional) Add a cover letter», ни на сноске Greenhouse.
+_STAR_RE = re.compile(r"[*✱＊]")
+# Языки, снятые живьём: EN («Required») и DE («erforderlich», по корню — конец
+# слова обрезка съедает: «…Schweiz?* (erforder»). RU добавлен тем же образцом.
+_REQUIRED_WORD = r"required|erforder\w*|pflichtfeld|обязательн\w*"
+# Чем кончается подпись, к которой пометку можно приклеить.
+_CAPTION_TAIL_RE = re.compile(r"[\w)\]?!:»\"']$")
+# Законченное предложение до маркера: значит, он стоит уже не при подписи.
+_SENTENCE_BREAK_RE = re.compile(r"[.!?]\s+[A-ZА-ЯЁ]")
+# Фраза продолжается — звёздочка была сноской. Скобку пропускаем: «* (примерно)»
+# это тоже продолжение, а «* (erforderlich)» ловится словом-пометкой ниже.
+_TAIL_CONTINUES_RE = re.compile(r"^\s*[(\[]?\s*[a-zа-яё]")
+_TAIL_IS_REQUIRED_WORD_RE = re.compile(
+    r"^\s*[(\[]?\s*(?:" + _REQUIRED_WORD + r")", re.I)
+_LEADING_REQUIRED_RE = re.compile(r"^\s*(?:" + _REQUIRED_WORD + r")\s*[.:*]", re.I)
+
+
+def label_says_required(label: str) -> bool:
+    """Несёт ли ПОДПИСЬ поля пометку обязательности — см. разбор выше."""
+    text = (label or "").strip()
+    if not text:
+        return False
+    if _LEADING_REQUIRED_RE.match(text):
+        return True
+    # Звёздочек может быть несколько (сноска формы плюс пометка поля), поэтому
+    # каждая проверяется отдельно: хватит одной, стоящей на месте пометки.
+    for m in _STAR_RE.finditer(text):
+        head, tail = text[:m.start()].rstrip(), text[m.end():]
+        # Ряд звёздочек — украшение или разделитель («*** ВАЖНО ***»), а пометка
+        # обязательности всегда одиночная.
+        if _STAR_RE.match(text[m.start() - 1:m.start()]) or _STAR_RE.match(tail[:1]):
+            continue
+        if not _CAPTION_TAIL_RE.search(head) or _SENTENCE_BREAK_RE.search(head):
+            continue
+        if not tail.strip() or _TAIL_IS_REQUIRED_WORD_RE.match(tail):
+            return True
+        if not _TAIL_CONTINUES_RE.match(tail):
+            return True
+    return False
+
+
+def field_is_required(f: FieldObs) -> bool:
+    """Обязательное поле — по DOM ИЛИ по подписи.
+
+    Правило только ДОБАВЛЯЕТ обязательность: `required=true` в разметке остаётся
+    решающим, снять его подпись не может.
+    """
+    return bool(f.required) or label_says_required(f.label)
+
+
 def _satisfied(a: FillAction) -> bool:
     if a.is_file:
         return bool(a.value)
@@ -83,8 +182,10 @@ class ApplyPlan:
         return [a for a in self.actions if a.needs_ai]
 
     def unmapped_required(self) -> list[str]:
+        # Последний заслон перед необратимой отправкой, поэтому обязательность
+        # берётся не только из разметки: половина ATS её там просто не ставит.
         return [a.field.label or a.field.name
-                for a in self.actions if a.field.required and not _satisfied(a)]
+                for a in self.actions if field_is_required(a.field) and not _satisfied(a)]
 
     def ready_to_submit(self) -> bool:
         return not self.unmapped_required()
@@ -358,7 +459,7 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
                     # в руках резюме и профиль, так что ответ берётся из них, а
                     # не выдумывается, — и это лучше, чем потерять всю заявку
                     # из-за одной строки, которой не оказалось в apply_profile.
-                    if f.required:
+                    if field_is_required(f):
                         return FillAction(field=f, needs_ai=True, source="ai")
                     return FillAction(field=f, source="unmapped")
                 if f.options:
@@ -398,7 +499,13 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # Группа чекбоксов приравнена к радиогруппе по тому же основанию: несколько
     # подписанных ответов на один вопрос внутри формы отклика — это вопрос, кто
     # бы там ни забыл проставить `required`.
-    if f.options and (f.required or f.type in ("radio", "checkbox")):
+    #
+    # «Форма требует» читается и по подписи: Personio рисует «Wie stufst du dein
+    # deutsches Sprachniveau ein?* (erforderlich)» вообще без `required` в DOM, и
+    # молчать в ответ значит держать отправку из-за поля, которое мы сами и
+    # отказались заполнить. Переключателя языка это не касается — на нём пометки
+    # нет, и он по-прежнему остаётся чужой настройкой.
+    if f.options and (field_is_required(f) or f.type in ("radio", "checkbox")):
         return FillAction(field=f, needs_ai=True, source="ai")
 
     # Незнакомое короткое поле. ОБЯЗАТЕЛЬНОЕ отдаём модели: прогон по Remocate
@@ -417,7 +524,7 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # «Спросили модель» не равно «заполнили»: если ответа не будет,
     # `unmapped_required` так же удержит отправку, и полупустая анкета
     # работодателю не уйдёт.
-    if f.required:
+    if field_is_required(f):
         return FillAction(field=f, needs_ai=True, source="ai")
     return FillAction(field=f, source="unmapped")
 
