@@ -5,7 +5,11 @@ service_account.json
 *.session
 *.session-journal
 # Playwright login sessions (LinkedIn/Wellfound cookies = account access)
+# Хвост после .json тоже: протухшую сессию принято отодвигать в сторону под
+# именем hh_state.json.dead-<дата>, и такой файл под `*_state.json` не подходил —
+# 18 КБ живых кук лежали неигнорируемыми и ждали случайного `git add -A`.
 *_state.json
+*_state.json.*
 # Real-Chrome profile used for the interactive Wellfound session (login cookies)
 sender/.wellfound_chrome/
 cv.pdf
