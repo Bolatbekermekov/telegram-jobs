@@ -32,3 +32,17 @@ def test_lead_to_row_carries_the_note():
     assert row[-1] == (
         "контакт из LinkedIn-поста: https://www.linkedin.com/posts/x-activity-1-a/")
     assert row[3:5] == ["telegram", "@acme_hr"]
+
+
+def test_lead_to_row_puts_the_score_in_the_note_column():
+    """Оценка обязана доехать именно до ячейки, а не остаться в объекте: в
+    таблице она единственный признак, по которому владелец видит Principal-
+    вакансию до того, как на неё потратится письмо и отправка."""
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Principal Software Engineer",
+                         raw_text="raw text",
+                         score=35, score_reason="Principal, профиль до Middle")
+    row = lead_to_row(lead, row_id=7, now="2026-06-14 10:00")
+
+    assert row[-1] == "соответствие профилю 35/100: Principal, профиль до Middle"
+    assert row[7] == "new"        # статус прежний: низкая оценка ничего не режет

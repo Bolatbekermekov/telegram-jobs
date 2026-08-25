@@ -105,3 +105,87 @@ def test_a_photo_with_a_caption_is_not_dropped(monkeypatch):
     asyncio.run(wh.telegram_webhook(_FakeRequest(update), ""))
 
     assert seen and "@acme_hr" in seen[0]
+
+
+# --- оценка соответствия профилю в ответе бота -------------------------------
+
+
+def test_a_low_score_is_said_out_loud(monkeypatch):
+    """Иначе Principal-вакансия становится сюрпризом уже после того, как на неё
+    сгенерировано письмо и потрачена отправка: замер 2026-08-23 на партии из 15
+    пересланных вакансий Remocate — Principal, два Senior, два Lead. В таблицу
+    оценка тоже ложится, но в переписку с ботом владелец смотрит сразу, а в
+    таблицу — когда-нибудь."""
+    monkeypatch.setattr(wh.config, "MATCH_THRESHOLD", 60, raising=False)
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Principal Software Engineer",
+                         raw_text="raw", score=35,
+                         score_reason="Principal, профиль до Middle")
+
+    replies = _run(monkeypatch, lead)
+
+    assert "35/100" in replies[0]
+    assert "Principal, профиль до Middle" in replies[0]
+    assert "60" in replies[0]                  # виден порог, с которым сравнили
+    assert "✅ Сохранил лид" in replies[0]      # и всё же сохранён
+
+
+def test_a_good_score_is_shown_without_a_warning(monkeypatch):
+    monkeypatch.setattr(wh.config, "MATCH_THRESHOLD", 60, raising=False)
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Junior Full-Stack", raw_text="raw",
+                         score=78, score_reason="Junior, стек совпадает")
+
+    replies = _run(monkeypatch, lead)
+
+    assert "78/100" in replies[0]
+    assert "⚠️" not in replies[0]
+
+
+def test_an_unscored_lead_says_nothing_about_the_score(monkeypatch):
+    """Молчание — единственный честный ответ, когда спросить не успели: любая
+    цифра здесь была бы выдуманной."""
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Backend", raw_text="raw")
+
+    replies = _run(monkeypatch, lead)
+
+    assert "/100" not in replies[0]
+
+
+def test_the_use_case_is_wired_to_a_scorer_with_the_search_profile(monkeypatch):
+    """Проводка — единственное, что связывает интейк с профилем поиска. Уронишь
+    её, и бот снова молча принимает Principal-вакансии: ошибок не будет, просто
+    перестанет появляться оценка."""
+    monkeypatch.setattr(wh, "_build_repo", lambda: object())
+    monkeypatch.setattr(wh, "OpenAISummarizer", lambda *a, **k: object())
+    asked = []
+    monkeypatch.setattr(wh, "OpenAIRelevanceScorer",
+                        lambda *a, **k: type("_S", (), {
+                            "score": lambda _s, profile, title, description, timeout=None: (
+                                asked.append((profile, title, description)) or (50, "ok"))
+                        })())
+
+    uc = wh._build_use_case()
+    verdict = uc._score("Junior Python Developer", "полный текст вакансии")
+
+    assert verdict == (50, "ok")
+    assert asked and "НЕ senior/lead/staff" in asked[0][0]
+
+
+def test_a_scorer_out_of_budget_declines_instead_of_calling_openai(monkeypatch):
+    """Функция живёт ~10 секунд, а до оценки уже потрачены чтение страницы,
+    вопрос «человек или канал» и суммаризация. Вызов, начатый на исходе бюджета,
+    убивает запрос целиком — Telegram повторит вебхук, и лид задвоится. Поэтому
+    просроченный бюджет отвечает «не знаю», не тронув сеть."""
+    called = []
+    monkeypatch.setattr(wh, "OpenAIRelevanceScorer",
+                        lambda *a, **k: type("_S", (), {
+                            "score": lambda _s, *args, **kw: called.append(args)
+                        })())
+    monkeypatch.setattr(wh.time, "monotonic", lambda: 10_000.0)
+    score = wh._relevance_scorer()
+    monkeypatch.setattr(wh.time, "monotonic", lambda: 10_000.0 + 3600)
+
+    assert score("Junior Python Developer", "текст") is None
+    assert called == []

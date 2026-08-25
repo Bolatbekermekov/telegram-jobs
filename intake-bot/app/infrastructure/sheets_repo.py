@@ -76,7 +76,7 @@ def lead_to_row(lead, row_id, now):
         "",                      # Сообщение
         STATUS_NEW,              # Статус
         "",                      # Дата отправки
-        lead.note,               # Заметка
+        lead.sheet_note(),       # Заметка (маршрут + оценка соответствия)
     ]
 
 

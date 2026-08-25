@@ -3,6 +3,8 @@ import os
 
 from dotenv import load_dotenv
 
+from app.search_profile import SEARCH_PROFILE as _BUNDLED_SEARCH_PROFILE
+
 load_dotenv()  # local .env; on Vercel the vars are injected and this is a no-op
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
@@ -29,3 +31,14 @@ SHEET_TAB = os.environ.get("SHEET_TAB", "Лист1")
 # дедупликации.
 CONTROL_TAB = os.environ.get("CONTROL_TAB", "Команды")
 HEARTBEAT_STALE_SECONDS = int(os.environ.get("HEARTBEAT_STALE_SECONDS", "180"))
+
+# Оценка «подходит ли пересланная вакансия» — тот же вопрос, который поиск на
+# ноуте задаёт о каждой найденной. Профиль по умолчанию вшит в бандл (см.
+# app/search_profile.py — .txt из sender/ в Vercel не доезжает); переменная
+# окружения нужна, чтобы поправить профиль в облаке, не дожидаясь деплоя.
+SEARCH_PROFILE = os.environ.get("SEARCH_PROFILE", "").strip() or _BUNDLED_SEARCH_PROFILE
+# Порог назван и посчитан как у поиска (sender: MATCH_THRESHOLD=60), но делает
+# здесь другое: ничего не отбрасывает. Постоянное указание владельца — никогда
+# не пропускать вакансию молча, поэтому лид сохраняется при любой оценке, а
+# порог решает лишь, предупредить ли о нём в ответе бота.
+MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))

@@ -295,3 +295,121 @@ def test_a_contact_inside_a_post_reached_through_a_short_link_still_wins():
 
     assert (lead.platform, lead.target) == ("telegram", "https://t.me/daria_hr")
     assert lead.note == f"контакт из LinkedIn-поста: {POST}"
+
+
+# --- оценка соответствия профилю поиска -------------------------------------
+# Владелец пересылает боту всё подряд, и до этого шага интейк не знал, подходит
+# ли вакансия: фильтр релевантности жил только в поиске на ноуте. Замер
+# 2026-08-23 на партии из 15 пересланных вакансий Remocate — Principal, два
+# Senior и два Lead при профиле «Intern / Junior / Junior+ / Middle»: треть
+# партии уходила в очередь на отправку, каждая со своей генерацией письма и
+# поднятым браузером.
+#
+# Ни один тест здесь не проверяет, что вакансию ОТБРОСИЛИ, — и это главное:
+# постоянное указание владельца «никогда не пропускать вакансию молча». Оценка
+# только рассказывает, лид сохраняется всегда.
+
+
+class _Scorer:
+    """Скорер-заглушка: помнит, что ему дали оценить, и отвечает заготовленным."""
+
+    def __init__(self, verdict=(35, "Principal, профиль до Middle")):
+        self._verdict = verdict
+        self.seen = []
+
+    def __call__(self, title, description):
+        self.seen.append((title, description))
+        return self._verdict
+
+
+def test_the_score_lands_on_the_lead():
+    scorer = _Scorer((35, "Principal, профиль до Middle"))
+    lead = ExtractLeadFromText(_detector(Contact("email", "hr@acme.io")),
+                               _FakeSummarizer("Principal Software Engineer"),
+                               _FakeRepo(), score=scorer).execute(
+        "Ищем Principal Software Engineer, 10+ лет опыта. CV на hr@acme.io")
+
+    assert (lead.score, lead.score_reason) == (35, "Principal, профиль до Middle")
+
+
+def test_the_score_is_read_from_the_full_text_not_from_the_summary():
+    """Суммаризация пишется под сопроводительное письмо и режет ровно то, по
+    чему считается пригодность: «must be authorized to work in the US», список
+    стран найма, слово Principal в третьем абзаце. Оценивать её вместо исходного
+    текста значит спрашивать модель о пересказе, а не о вакансии."""
+    scorer = _Scorer((72, "ok"))
+    raw = ("Senior Backend Engineer, Acme. Must be authorized to work in the US; "
+           "no sponsorship. Пиши hr@acme.io")
+
+    ExtractLeadFromText(detect_contact, _FakeSummarizer("Backend Engineer"),
+                        _FakeRepo(), score=scorer).execute(raw)
+
+    title, description = scorer.seen[0]
+    assert "no sponsorship" in description
+    assert title == "Backend Engineer"      # заголовка у пересланного текста нет
+
+
+def test_the_page_behind_a_link_is_what_gets_scored():
+    """Сообщение из одной ссылки само по себе не содержит ничего оцениваемого —
+    оценка обязана видеть то же, что видит суммаризация: прочитанную страницу."""
+    scorer = _Scorer((40, "Lead-позиция"))
+    ExtractLeadFromText(detect_contact, _RecordingSummarizer("s"), _FakeRepo(),
+                        _Fetcher("Lead Platform Engineer, 8+ years"),
+                        score=scorer).execute("https://hh.ru/vacancy/1")
+
+    assert "Lead Platform Engineer" in scorer.seen[0][1]
+
+
+def test_a_scorer_that_raises_still_saves_the_lead():
+    """Ради этого теста всё и обёрнуто: OpenAI отвечает 429/500 или просто не
+    успевает в бюджет serverless-функции, а лид дороже оценки. Раньше сбоя тут
+    не было, потому что и вызова не было, — теперь это самый вероятный новый
+    способ потерять пересланную вакансию."""
+    repo = _FakeRepo()
+
+    def _boom(title, description):
+        raise RuntimeError("openai timeout")
+
+    lead = ExtractLeadFromText(_detector(Contact("email", "hr@acme.io")),
+                               _FakeSummarizer("Backend"), repo,
+                               score=_boom).execute("Ищем бэкендера, hr@acme.io")
+
+    assert repo.saved == [lead]
+    assert lead.score is None
+    assert lead.vacancy_context == "Backend"     # всё остальное как было
+
+
+def test_a_scorer_that_declines_leaves_the_lead_unscored():
+    """None значит «спросить не успели» (бюджет сообщения вышел), а не «0/100».
+    Ноль в «Заметке» читался бы как вердикт «не подходит»."""
+    lead = ExtractLeadFromText(_detector(Contact("email", "hr@acme.io")),
+                               _FakeSummarizer("Backend"), _FakeRepo(),
+                               score=lambda t, d: None).execute("вакансия hr@acme.io")
+
+    assert lead.score is None
+    assert lead.score_reason == ""
+
+
+def test_an_unreadable_link_is_not_scored_at_all():
+    """У лида, чью страницу не удалось прочитать, «Вакансия» пустая — оценивать
+    нечего, кроме голого URL. Спросить всё равно значит получить выдуманное
+    «0/100» на вакансию, которую никто не читал: ровно тот сюрприз, от которого
+    оценка и заводилась, только наоборот."""
+    scorer = _Scorer()
+    lead = ExtractLeadFromText(detect_contact, _RecordingSummarizer("s"),
+                               _FakeRepo(), _Fetcher(""),
+                               score=scorer).execute("https://hh.ru/vacancy/1")
+
+    assert scorer.seen == []
+    assert lead.score is None
+    assert lead.vacancy_context == ""
+
+
+def test_the_use_case_still_runs_without_a_scorer():
+    """Оценка необязательна ровно как fetcher и resolve_link: без неё интейк
+    работает по-старому."""
+    lead = ExtractLeadFromText(_detector(Contact("email", "hr@acme.io")),
+                               _FakeSummarizer("Backend"),
+                               _FakeRepo()).execute("вакансия hr@acme.io")
+
+    assert lead.score is None

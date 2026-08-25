@@ -19,6 +19,7 @@ from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
 from app.domain.contact import detect_contact  # noqa: E402
 from app.domain.telegram_message import message_text  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
+from app.infrastructure.openai_relevance import OpenAIRelevanceScorer  # noqa: E402
 from app.infrastructure.sheets_repo import SheetsRepo  # noqa: E402
 from app.infrastructure.telegram_chat import (  # noqa: E402
     is_writable_telegram_target,
@@ -78,6 +79,56 @@ def _telegram_oracle():
     return ask
 
 
+# Бюджет оценки «подходит ли вакансия профилю», устроен как оракул выше: у
+# функции ~10 секунд на всё, и к моменту оценки уже потрачены разворачивание
+# lnkd.in, вопрос «человек или канал», чтение страницы и суммаризация. Отсчёт
+# идёт от начала разбора сообщения, поэтому медленное начало съедает именно
+# оценку — и правильно: без оценки лид сохранится как раньше, а вот вызов,
+# начатый на исходе бюджета, убивает функцию целиком. Дальше Telegram повторяет
+# вебхук, и в таблице появляется второй такой же лид — цена, ради которой append
+# в sheets_repo намеренно не ретраится.
+#
+# 8,0 — момент, к которому оценка обязана ЗАКОНЧИТЬСЯ (таймаут вызова всегда
+# урезается остатком), дальше идёт запись в таблицу: три обращения к Sheets,
+# ~1 с. Цифры замерены живьём 2026-08-25 на gpt-5.4-nano с этим профилем:
+# 0,8-1,2 с на ответ независимо от длины текста (короткая вакансия ~380
+# символов и потолок в ~4300 неотличимы), плюс 0,5-1,5 с на установку
+# соединения — у serverless-контейнера оно всегда холодное, у суммаризации свой
+# клиент. Один раз наблюдались 2,56 с, поэтому таймаут вдвое выше медианы: не
+# ждать вечно, но и не выбрасывать оценку из-за обычного разброса.
+_SCORE_DEADLINE_SECONDS = 8.0
+_SCORE_TIMEOUT_SECONDS = 4.0
+# С меньшим остатком не начинаем вовсе: холодное соединение плюс ответ занимают
+# около полутора секунд, то есть вызов заведомо не успеет — а деньги за
+# оборванный запрос всё равно спишутся.
+_SCORE_MIN_SECONDS = 2.0
+
+
+def _relevance_scorer():
+    """callable(title, description) -> (0-100, причина) | None, с дедлайном.
+
+    Оценка ничего не отбрасывает — постоянное указание владельца — но говорит
+    вслух: до 2026-08-23 интейк не знал про вакансию ничего, и в партии из 15
+    пересланных вакансий Remocate оказались Principal, два Senior и два Lead
+    при профиле «Intern / Junior / Junior+ / Middle».
+
+    None значит «не спросили»: бюджет сообщения вышел. Отличать это от вердикта
+    обязательно — «0/100» на невыясненную вакансию ляжет в «Заметку» и в ответ
+    бота как приговор, которого никто не выносил.
+    """
+    deadline = time.monotonic() + _SCORE_DEADLINE_SECONDS
+    scorer = OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
+
+    def score(title: str, description: str):
+        left = deadline - time.monotonic()
+        if left < _SCORE_MIN_SECONDS:
+            return None
+        return scorer.score(config.SEARCH_PROFILE, title, description,
+                            timeout=min(_SCORE_TIMEOUT_SECONDS, left))
+
+    return score
+
+
 def _detector(oracle):
     """`detect_contact`, которому есть у кого спросить «человек или канал».
 
@@ -98,7 +149,8 @@ def _build_use_case() -> ExtractLeadFromText:
     return ExtractLeadFromText(_detector(_telegram_oracle()), summarizer,
                                _build_repo(),
                                fetcher=fetch_vacancy_text,
-                               resolve_link=resolve_lnkd_in)
+                               resolve_link=resolve_lnkd_in,
+                               score=_relevance_scorer())
 
 
 def _book():
@@ -153,6 +205,33 @@ _STATUS_LABELS = [
     ("skipped", "⏭ Пропущено"),
     ("failed", "❌ Ошибки"),
 ]
+
+
+def _match_line(lead) -> str:
+    """Строка ответа про соответствие профилю — или "", когда оценки нет.
+
+    Зачем вообще говорить: до 2026-08-23 бот на любую пересланную вакансию
+    отвечал одинаковым «✅ Сохранил лид», и Principal-вакансия становилась
+    сюрпризом уже после того, как на неё сгенерировано письмо и потрачена
+    отправка. В таблицу оценка тоже ложится («Заметка»), но в переписку с ботом
+    владелец смотрит сразу, а в таблицу — когда-нибудь.
+
+    Ничего не отбрасывается ни при какой оценке: постоянное указание владельца —
+    никогда не пропускать вакансию молча. Поэтому низкая оценка это ПРЕДУПРЕЖДЕНИЕ
+    с готовым действием («Статус = skipped»), а не отказ сохранять.
+
+    Оценки нет — молчим. Любая цифра здесь была бы выдуманной, а «0/100»
+    прочиталось бы как вердикт «не подходит»; пустая строка означает ровно то же,
+    что пустая «Вакансия» рядом, — не успели, ноут дочитает.
+    """
+    if lead.score is None:
+        return ""
+    tail = f" — {lead.score_reason}" if lead.score_reason else ""
+    if lead.score >= config.MATCH_THRESHOLD:
+        return f"\n🎯 Соответствие профилю: {lead.score}/100{tail}"
+    return (f"\n⚠️ Соответствие профилю: {lead.score}/100{tail}"
+            f"\nЭто ниже порога {config.MATCH_THRESHOLD}: лид сохранён и уйдёт в "
+            f"очередь на отправку. Не нужен — поставь в таблице Статус = skipped.")
 
 
 def _format_status(counts: dict) -> str:
@@ -249,7 +328,7 @@ async def telegram_webhook(
         _reply(
             chat_id,
             f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}"
-            f"{routing}\nВакансия: {vacancy}{extra}",
+            f"{routing}\nВакансия: {vacancy}{_match_line(lead)}{extra}",
         )
     except ValueError:
         _reply(

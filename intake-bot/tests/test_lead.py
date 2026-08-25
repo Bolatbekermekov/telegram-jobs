@@ -51,3 +51,50 @@ def test_lead_has_target_and_platform():
 def test_is_valid_requires_target():
     assert ExtractedLead("telegram", "@nick", "v", "r").is_valid() is True
     assert ExtractedLead("telegram", "  ", "v", "r").is_valid() is False
+
+
+# --- «Заметка» несёт ещё и оценку --------------------------------------------
+# Новой колонки под оценку нет намеренно: порядок COLUMNS общий с ноутбучной
+# половиной, и любая новая колонка — правка в обеих копиях и в живой таблице
+# сразу. «Заметка» же у нового лида пустая (её перезаписывает только отправка,
+# уже после того, как оценка отработала своё).
+
+
+def test_an_unscored_lead_keeps_the_plain_note():
+    """Оценки может не быть — сбой модели, вышедший бюджет, нечитаемая ссылка.
+    Тогда «Заметка» обязана выглядеть ровно как до появления оценки."""
+    lead = ExtractedLead(platform="telegram", target="@acme_hr",
+                         vacancy_context="Backend", raw_text="raw",
+                         note="контакт из LinkedIn-поста: https://x")
+
+    assert lead.sheet_note() == "контакт из LinkedIn-поста: https://x"
+
+
+def test_the_score_goes_first_in_the_note():
+    """Оценка стоит впереди маршрутной заметки, потому что заметка длинная (в
+    ней URL), а в таблице видно начало ячейки — и глазами колонку теперь
+    просматривают именно ради оценки."""
+    lead = ExtractedLead(platform="telegram", target="@acme_hr",
+                         vacancy_context="Backend", raw_text="raw",
+                         note="контакт из LinkedIn-поста: https://x",
+                         score=35, score_reason="Principal, профиль до Middle")
+
+    assert lead.sheet_note() == ("соответствие профилю 35/100: Principal, профиль "
+                                 "до Middle | контакт из LinkedIn-поста: https://x")
+
+
+def test_a_score_without_a_reason_still_shows_the_number():
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Backend", raw_text="raw", score=88)
+
+    assert lead.sheet_note() == "соответствие профилю 88/100"
+
+
+def test_a_zero_score_is_not_mistaken_for_no_score():
+    """0 — это вердикт «совсем мимо», а None — «не оценили». Проверка на
+    истинность вместо `is None` схлопнула бы их в одно."""
+    lead = ExtractedLead(platform="email", target="hr@acme.io",
+                         vacancy_context="Backend", raw_text="raw",
+                         score=0, score_reason="не IT")
+
+    assert lead.sheet_note() == "соответствие профилю 0/100: не IT"
