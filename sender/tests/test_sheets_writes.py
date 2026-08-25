@@ -428,3 +428,50 @@ def test_update_resolved_never_touches_status(fake_ws_repo):
         span = a1_range_to_grid_range(d["range"])
         assert not (span["startColumnIndex"] <= status
                     < span["endColumnIndex"]), d["range"]
+
+
+# --- повтор после сбоя не должен ломать сам запрос ----------------------------
+# Замер 2026-08-25, живая 502 от Google: первая же повторная попытка получила
+# «Unable to parse range: 'Лист1'!'Лист1'!H414» — имя листа задвоилось.
+#
+# Причина в gspread: `Worksheet.batch_update` дописывает имя листа ПРЯМО В
+# ПЕРЕДАННЫЙ словарь (`values["range"] = absolute_range_name(self.title, …)`).
+# Payload собирался один раз снаружи `_with_retry`, поэтому вторая попытка
+# отправляла уже дописанный диапазон, получала 400 — а 400 не транзиентный, и
+# ошибка летела наружу.
+#
+# Это ровно тот случай, ради которого повтор и написан: запись падает ПОСЛЕ
+# того, как сообщение доставлено, лид остаётся `new`, и следующий прогон пишет
+# тому же человеку второй раз. То есть защита от повторной отправки ломалась
+# именно тогда, когда была нужна.
+
+class _MutatingWs(_FakeWorksheet):
+    """Фейк, который ведёт себя как gspread: портит переданный ему payload."""
+
+    TITLE = "Лист1"
+
+    def batch_update(self, data, **kw):
+        for values in data:
+            values["range"] = f"'{self.TITLE}'!{values['range']}"
+        super().batch_update(data, **kw)
+
+
+def test_a_retried_status_write_sends_a_clean_range():
+    ws = _MutatingWs(fail_times=1)
+    _repo(ws).mark_status(_Lead(), STATUS_NEW, note="повтор")
+
+    assert ws.calls == 2
+    for data, _kw in ws.batches:
+        for values in data:
+            assert values["range"].count("Лист1") == 1, values["range"]
+
+
+def test_a_retried_resolve_write_sends_a_clean_range():
+    ws = _MutatingWs(fail_times=1)
+    _repo(ws).update_resolved(_Lead(), "email", "hr@acme.io", "вакансия",
+                              note="повтор")
+
+    assert ws.calls == 2
+    for data, _kw in ws.batches:
+        for values in data:
+            assert values["range"].count("Лист1") == 1, values["range"]

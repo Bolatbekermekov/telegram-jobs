@@ -235,17 +235,29 @@ class SheetsRepo:
             raise ValueError(
                 "invited ставится через mark_invited: без «Даты отправки» "
                 "приглашение будет закрыто на следующем прогоне")
-        updates = [{
-            "range": rowcol_to_a1(lead.row, COL_STATUS),
-            "values": [[status]],
-        }]
-        if note:
-            updates.append({
-                "range": rowcol_to_a1(lead.row, COL_NOTE),
-                "values": [[note]],
-            })
+        # Payload собирается ЗАНОВО на каждую попытку. gspread дописывает имя
+        # листа прямо в переданный словарь (`values["range"] =
+        # absolute_range_name(self.title, …)`), поэтому повтор с тем же объектом
+        # отправлял «'Лист1'!'Лист1'!H414» и получал 400 — а 400 не транзиентный
+        # и летел наружу. Замер 2026-08-25 на живой 502 от Google.
+        #
+        # Это ровно тот случай, ради которого повтор написан: запись падает ПОСЛЕ
+        # доставки сообщения, лид остаётся `new`, и следующий прогон пишет тому
+        # же человеку второй раз. Защита ломалась именно тогда, когда нужна.
+        def _payload():
+            updates = [{
+                "range": rowcol_to_a1(lead.row, COL_STATUS),
+                "values": [[status]],
+            }]
+            if note:
+                updates.append({
+                    "range": rowcol_to_a1(lead.row, COL_NOTE),
+                    "values": [[note]],
+                })
+            return updates
+
         _with_retry(lambda: self._ws.batch_update(
-            updates, value_input_option=ValueInputOption.raw))
+            _payload(), value_input_option=ValueInputOption.raw))
 
     def update_vacancy(self, lead: Lead, vacancy_context: str) -> None:
         """Replace a lead's «Вакансия» text, leaving every other column alone.
@@ -290,15 +302,20 @@ class SheetsRepo:
         RAW, not USER_ENTERED: the vacancy text is scraped, so a leading `=`
         must be stored as text, never evaluated as a formula.
         """
-        updates = [{
-            "range": (f"{rowcol_to_a1(lead.row, COL_PLATFORM)}"
-                      f":{rowcol_to_a1(lead.row, COL_VACANCY)}"),
-            "values": [[platform, target, vacancy_context]],
-        }]
-        if note:
-            updates.append({
-                "range": rowcol_to_a1(lead.row, COL_NOTE),
-                "values": [[note]],
-            })
+        # Заново на каждую попытку — по той же причине, что и в `mark_status`:
+        # gspread портит переданный payload, дописывая в него имя листа.
+        def _payload():
+            updates = [{
+                "range": (f"{rowcol_to_a1(lead.row, COL_PLATFORM)}"
+                          f":{rowcol_to_a1(lead.row, COL_VACANCY)}"),
+                "values": [[platform, target, vacancy_context]],
+            }]
+            if note:
+                updates.append({
+                    "range": rowcol_to_a1(lead.row, COL_NOTE),
+                    "values": [[note]],
+                })
+            return updates
+
         _with_retry(lambda: self._ws.batch_update(
-            updates, value_input_option=ValueInputOption.raw))
+            _payload(), value_input_option=ValueInputOption.raw))
