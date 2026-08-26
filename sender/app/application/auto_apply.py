@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.domain.apply_profile import ApplyProfile
+from app.domain.availability import availability_iso
 from app.domain.page_observation import FieldObs, PageObservation
 
 EEO_ANSWER = "Prefer not to say"
@@ -18,6 +19,15 @@ _SKIP_FILL_RE = re.compile(r"cookie|newsletter|subscrib|\bsearch\b", re.I)
 # reads as a question (or as prose smuggling keywords), so keyword rules stop
 # applying — see map_field. "Are you legally authorized to work in the US?" is 46.
 _MAX_LABEL_CHARS = 80
+
+# Подпись поля-даты, которое спрашивает про НАШ выход на работу. «graduation
+# date», «End date» и даты прошлых мест сюда намеренно не попадают: у Greenhouse
+# раздел образования подписан «Start date month» / «Start date year», и прежнее
+# правило подставляло туда срок отработки — форма Datadog отклонила отправку с
+# «Start date year*» (замер 2026-08-26).
+_AVAILABILITY_DATE_RE = re.compile(
+    r"availab|available start|start date|starting date|joining|can you start|"
+    r"notice period|дата выхода|когда.*готов", re.IGNORECASE)
 
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
@@ -35,7 +45,7 @@ _LABEL_RULES = [
     (re.compile(r"location|where are you", re.I),
      lambda p: ", ".join(x for x in (p.city, p.country) if x)),
     (re.compile(r"salary|compensation|expected pay|\brate\b", re.I), lambda p: p.desired_salary),
-    (re.compile(r"notice period|availability|start date", re.I), lambda p: p.notice_period),
+    (re.compile(r"notice period|availability", re.I), lambda p: p.notice_period),
 ]
 
 
@@ -442,6 +452,22 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         if profile.desired_salary:
             return FillAction(field=f, value=profile.desired_salary, source="profile")
         return FillAction(field=f, needs_ai=True, source="ai")
+
+    # Контрол `input[type=date]` принимает только YYYY-MM-DD. Строка из профиля
+    # («1 month») в него не встаёт вовсе — замер 2026-08-26 на BlueThrone, где
+    # обязательное «Please enter your available start date» останавливало заявку.
+    # Поэтому дата считается, а не пересказывается.
+    #
+    # И только про НАШУ доступность. Дату выпуска или даты прошлой работы мы не
+    # знаем, и подставлять туда день выхода нельзя: это уйдёт работодателю как
+    # факт биографии, которого не было. Такое поле остаётся пустым и честно
+    # удерживает отправку.
+    if f.type == "date":
+        if _AVAILABILITY_DATE_RE.search(low):
+            iso = availability_iso(profile.notice_period)
+            if iso:
+                return FillAction(field=f, value=iso, source="profile")
+        return FillAction(field=f, source="unmapped")
 
     # _LABEL_RULES match anywhere in the label, which is right for a real caption
     # ("Email", "Your phone number") but wrong for prose: a question ending in
