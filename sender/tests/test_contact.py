@@ -166,3 +166,46 @@ def test_a_scheme_less_linkedin_link_is_canonicalised():
 def test_a_scheme_that_is_already_there_is_left_alone():
     assert detect_contact("https://www.linkedin.com/in/ivan").target == \
         "https://www.linkedin.com/in/ivan"
+
+
+# --- служебные пути t.me -----------------------------------------------------
+#
+# Замер листа 2026-08-26: лиды #435 и #436 ушли в очередь с целью
+# `https://t.me/addlist` — это ссылка на ПАПКУ ЧАТОВ, а не на человека. Писать
+# туда некому: отправка гарантированно падает, а настоящий контакт из того же
+# поста при этом теряется, потому что правило t.me срабатывает первым.
+#
+# Оракул тут не спасает: он доказывает только отказ («это канал»), а на
+# несуществующий ник Bot API отвечает «chat not found» — ровно то же, что на
+# живого человека, которого бот не видит. Поэтому служебные пути отсекаются
+# по имени, а не спрашиванием.
+
+
+def test_addlist_folder_link_is_not_a_contact():
+    text = ("Golang в БЮРО 1440. Резюме: hr@buro1440.ru\n"
+            "Все вакансии: https://t.me/addlist/AbCdEf")
+    c = detect_contact(text)
+    assert c is not None
+    assert (c.platform, c.target) == ("email", "hr@buro1440.ru")
+
+
+def test_joinchat_invite_is_not_a_contact():
+    text = "Вакансия Go. Чат: https://t.me/joinchat/AAAAAE\nПишите: hr@acme.io"
+    assert detect_contact(text).platform == "email"
+
+
+def test_share_link_is_not_a_contact():
+    text = "Поделиться: https://t.me/share/url?url=x — писать на jobs@acme.io"
+    assert detect_contact(text).target == "jobs@acme.io"
+
+
+def test_a_real_handle_after_a_service_path_still_wins():
+    # Отклонённая ссылка передаёт очередь следующей, а не хоронит всё правило.
+    text = "Папка: https://t.me/addlist/XX\nПо вакансии: https://t.me/anna_hr"
+    c = detect_contact(text)
+    assert c.platform == "telegram"
+    assert c.target.endswith("anna_hr")
+
+
+def test_service_path_alone_gives_no_telegram_contact():
+    assert detect_contact("Все вакансии: https://t.me/addlist") is None

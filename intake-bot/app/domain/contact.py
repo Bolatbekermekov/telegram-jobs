@@ -25,6 +25,28 @@ class Contact:
 
 # t.me / telegram.me links (scheme optional).
 _TME_RE = re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/\w{3,}", re.IGNORECASE)
+
+# Служебные пути t.me: за ними стоит не человек, а функция мессенджера. Замер
+# листа 2026-08-26: лиды #435 и #436 получили целью `https://t.me/addlist` —
+# ссылку на ПАПКУ ЧАТОВ, которой подписывают пост. Отправка в неё не может
+# состояться, а настоящая почта работодателя из того же поста терялась, потому
+# что правило t.me стоит первым.
+#
+# Отсекаются по имени, а не оракулом: оракул доказывает только отказ («это
+# канал»), а на служебный путь Bot API отвечает «chat not found» — тем же, чем
+# на живого человека, которого бот не видит.
+_TME_RESERVED = frozenset({
+    "addlist", "joinchat", "share", "proxy", "socks", "iv", "login",
+    "addstickers", "addemoji", "addtheme", "setlanguage", "confirmphone",
+    "invoice", "giftcode", "boost", "contact", "bg",
+})
+
+
+def _is_service_path(target: str) -> bool:
+    """Первый сегмент пути t.me — служебный, а не имя пользователя."""
+    tail = target.rstrip("/").rsplit("/", 1)[-1] if "/" in target else ""
+    return tail.split("?", 1)[0].lower() in _TME_RESERVED
+
 # A Telegram @handle anchored to start-or-whitespace, so it never matches the
 # "@" inside an email address (e.g. john@gmail.com).
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
@@ -212,6 +234,8 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
     # Отклонённая ссылка передаёт очередь следующей, а не всему правилу сразу.
     for m in _TME_RE.finditer(text):
         target = _clean(m.group(0))
+        if _is_service_path(target):
+            continue
         if _writable(target, telegram_writable):
             return Contact("telegram", target)
     for m in _HANDLE_RE.finditer(text):
