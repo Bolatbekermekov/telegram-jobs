@@ -72,6 +72,14 @@ HH_SUBMIT_TIMEOUT_SECONDS = int(os.environ.get("HH_SUBMIT_TIMEOUT_SECONDS", "100
 # (always send, then wait the random delay). False (default) = ask send/edit/skip per lead.
 AUTO_SEND = os.environ.get("AUTO_SEND", "false").lower() == "true"
 
+# Площадки, которые прогон не трогает: "linkedin" или "linkedin,hh".
+# Лиды такой площадки остаются `new` и ждут снятия паузы — они НЕ становятся
+# `skipped`, иначе прогон больше никогда их не поднял бы. Появилось после бана
+# LinkedIn 2026-08-26: проверка приглашённых открывает LinkedIn первым делом в
+# каждом прогоне, так что без этого выключателя нельзя было отправить даже то,
+# что к LinkedIn отношения не имеет.
+PAUSED_PLATFORMS = os.environ.get("PAUSED_PLATFORMS", "")
+
 MIN_DELAY_SECONDS = int(os.environ.get("MIN_DELAY_SECONDS", "40"))
 MAX_DELAY_SECONDS = int(os.environ.get("MAX_DELAY_SECONDS", "120"))
 

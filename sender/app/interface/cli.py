@@ -38,6 +38,7 @@ from app.application.send_plan import (
     unresolved_thread,
 )
 from app.domain.invite_age import expired_note, invite_expired
+from app.domain.paused import parse_paused, partition_paused
 from app.application.answer_log import answers_note
 from app.domain.sent_note import cv_note
 from app.domain.outreach_history import (
@@ -205,7 +206,8 @@ def _warn_if_apply_profile_blank() -> None:
     print("   Либо выключи автоотклик: EXTERNAL_APPLY_ENABLED=false в .env\n")
 
 
-def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None:
+def _followup_invited(repo, switcher, generator, classifier, cv_library,
+                      paused=frozenset()) -> None:
     """Re-check everyone we invited without a cover letter, and finish the job.
 
     A lead reaches `invited` only when LinkedIn's monthly personalized-invite
@@ -226,6 +228,13 @@ def _followup_invited(repo, switcher, generator, classifier, cv_library) -> None
     to make, not a thing to loop on.
     """
     invited = repo.fetch_by_status(STATUS_INVITED)
+    # Площадка на паузе: канал не поднимаем вовсе. Раньше эта проверка была
+    # первым, что делал прогон, и открывала LinkedIn ещё до очереди лидов —
+    # поэтому под баном нельзя было отправить даже Remocate.
+    invited, held = partition_paused(invited, paused)
+    if held:
+        print(f"\n⏸  Приглашённых на паузе: {len(held)} — не проверяю, "
+              "статус не трогаю.")
     if not invited:
         return
     print(f"\n🔁 Проверяю {len(invited)} приглашённых (ждём подтверждения)...")
@@ -336,11 +345,16 @@ def run() -> None:
     cv_library = CvLibrary(config.CV_DIR, config.CV_PATH)
 
     switcher = ChannelSwitcher(lambda p: build_channel(p, config))
+    paused = parse_paused(config.PAUSED_PLATFORMS)
+    if paused:
+        print(f"⏸  На паузе: {', '.join(sorted(paused))}. "
+              "Их лиды остаются 'new' и ждут снятия паузы.")
     try:
         # Before anything else: the invited leads are the ones already waiting on
         # somebody, and a run that only ever looked at `new` would never finish
         # them — including a run with no new leads at all.
-        _followup_invited(repo, switcher, generator, role_classifier, cv_library)
+        _followup_invited(repo, switcher, generator, role_classifier,
+                          cv_library, paused=paused)
     except Exception as exc:  # noqa: BLE001 — never let the follow-up cost the run
         print(f"⚠️  Проверка приглашённых не отработала ({type(exc).__name__}: {exc}).")
 
@@ -351,8 +365,12 @@ def run() -> None:
     sent_history = repo.fetch_sent_history()
 
     leads = repo.fetch_new_leads()
+    leads, held = partition_paused(leads, paused)
+    if held:
+        print(f"⏸  Отложено по паузе: {len(held)} — статус остаётся 'new'.")
     if not leads:
-        print("Нет новых лидов (статус 'new'). Выход.")
+        print("Нет новых лидов к отправке"
+              + (" (все на паузе)." if held else " (статус 'new'). Выход."))
         switcher.close()
         return
 
