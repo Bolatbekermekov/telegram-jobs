@@ -25,6 +25,14 @@ from app.infrastructure.widgets.file_upload import attach_file as _attach_file
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.availability import availability_iso
 from app.domain.legal_page import looks_like_legal_page
+# `page_is_gone` живёт в домене и переэкспортируется отсюда — тем же приёмом,
+# каким `vacancy_fetcher` переэкспортирует предикаты из `vacancy_text`. Правило
+# чисто строковое, и спрашивает его теперь не только канал: цикл отправки
+# спрашивает то же самое ДО генерации письма, обычным GET. Имя остаётся здесь,
+# чтобы уже написанные вызовы (и тесты на снятых живьём строках) не переезжали.
+from app.domain.page_gone import (  # noqa: F401 — переэкспорт, см. выше
+    GONE_NOTE, page_is_gone,
+)
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 # Сколько ждать на форме вендора после перехода: она рисуется скриптом.
@@ -639,47 +647,6 @@ def _requires_signup_or_login(page) -> bool:
         return False
 
 
-# A dead or closed job link — the page is gone (404) or the posting stopped
-# accepting applications. Detected from the title/body so the sheet note reads
-# "страница недоступна / вакансия неактуальна" instead of "форма не распознана".
-_GONE_RE = re.compile(
-    r"no longer (available|accepting|active)"
-    r"|(position|role|job|vacancy|posting) (has been |is )?(closed|filled|expired|removed)"
-    r"|not accepting applications|page (not found|does ?n'?t exist)|404 error"
-    r"|вакансия (снят|закрыт|не найден|неактивн|больше не)|страница не найдена|больше не принима",
-    re.I)
-
-
-# Состояние, объявленное ОТДЕЛЬНОЙ строкой. Сайт не всегда пишет «position
-# closed» — чаще рисует статус самостоятельным элементом, и в тексте страницы он
-# оказывается строкой сам по себе. Замер 2026-08-24: у Toughbyte это ровно
-# «Closed» при обычном заголовке вакансии и HTTP 200, у YouHodler — «404» при
-# заголовке «Not Found». Прежний шаблон требовал существительное перед
-# состоянием, поэтому оба прошли мимо и легли в таблицу как «форма не
-# распознана» — формально верно, а человека отправляет чинить несуществующее.
-#
-# Требование ЦЕЛОЙ строки здесь несущее: «closed» встречается и в живых
-# описаниях («closed-source SDK», «closed beta»), а «404» — в вакансиях про
-# обработку ошибок. Отдельной строкой оно стоит только когда это статус.
-_GONE_LINE_RE = re.compile(
-    r"^(404|not found|closed|position closed|job closed|expired|"
-    r"вакансия закрыта|закрыта|снята)$", re.I)
-
-
-def page_is_gone(title: str, text: str) -> bool:
-    """Снята ли вакансия / нет ли страницы — по заголовку и тексту страницы.
-
-    Отделено от Playwright, чтобы правило можно было проверить на снятых живьём
-    строках, а не только через браузер.
-    """
-    if _GONE_RE.search(f"{title} {text}"):
-        return True
-    if _GONE_LINE_RE.match((title or "").strip()):
-        return True
-    return any(_GONE_LINE_RE.match(line.strip())
-               for line in (text or "").splitlines())
-
-
 def _page_unavailable(page) -> bool:
     title = text = ""
     try:
@@ -987,7 +954,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         if _requires_signup_or_login(page):
             raise ManualApplyRequired(f"требует Sign Up / Login: {obs.url}")
         if _page_unavailable(page):
-            raise ManualApplyRequired(f"страница недоступна / вакансия неактуальна: {obs.url}")
+            raise ManualApplyRequired(f"{GONE_NOTE}: {obs.url}")
         raise ManualApplyRequired(f"форма не распознана: {obs.url}")
 
     # Checked here, on the page that actually holds the form — not on job_url.

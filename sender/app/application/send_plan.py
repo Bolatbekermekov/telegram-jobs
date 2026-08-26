@@ -9,6 +9,11 @@ mid-run rate limits are handled by the loop itself, which leaves those leads
 import re
 
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
+from app.domain.page_gone import GONE_NOTE
+from app.domain.vacancy_text import (
+    is_aggregator_job_url, is_hh_vacancy_url, is_linkedin_job_url,
+    is_remoteok_job_url,
+)
 from app.infrastructure.channels.threads import normalize_target
 from app.infrastructure.threads_thread import author_from_url
 
@@ -227,6 +232,54 @@ def dm_fallback_reason(platform: str, session_live, author: str = "",
         # nothing and read as a broken link.
         parts.append(f"тред: {source_url}")
     return STATUS_MANUAL, "; ".join(parts)
+
+
+def _points_at_a_vacancy_page(target: str) -> bool:
+    """Цель лида — адрес объявления, которое можно открыть и спросить.
+
+    Спрашивать есть смысл далеко не у всех. У `telegram` цель — ник, у `email` —
+    адрес: там открывать нечего. У профиля и поста в LinkedIn цель — ЧЕЛОВЕК:
+    пост могли удалить, а написать автору всё равно можно, и хоронить такой лид
+    нельзя. Осмысленно ровно там, где цель и есть страница, на которой мы
+    собираемся откликаться, — тогда «страницы нет» означает «делать нечего».
+
+    Собрано из уже существующих предикатов, а не из нового правила: это те же
+    четыре формы адреса, которые проект и так умеет читать (`vacancy_text`), и
+    заводить им пятое определение значило бы завести пятое место для расхождения.
+    """
+    t = (target or "").strip()
+    return (is_aggregator_job_url(t) or is_remoteok_job_url(t)
+            or is_hh_vacancy_url(t) or is_linkedin_job_url(t))
+
+
+def dead_vacancy_reason(target: str, gone) -> tuple[str, str] | None:
+    """Почему на этот лид не стоит тратить генерацию, как (статус, заметка), или None.
+
+    Замер прогона 2026-08-26 по `remocate`: из двенадцати лидов четыре вели на
+    закрытые вакансии, и порядок в логе был «Генерирую сообщение...», а следом
+    «страница недоступна / вакансия неактуальна». Треть лидов площадки платила
+    за письмо, роль и тему объявлению, которого больше нет.
+
+    `gone(url) -> str` возвращает адрес страницы, доказавшей смерть, или "" —
+    сеть живёт в инфраструктуре (`vacancy_alive.vacancy_gone`), сюда приходит
+    callable, ровно как `session_live` в `dm_fallback_reason`. Пустая строка
+    означает «не знаю» и ведёт себя как «жива»: недоступный на секунду сайт —
+    не повод хоронить лид.
+
+    Статус — `manual`, и по тем же трём причинам, что у `hold_reason`: он вне
+    `fetch_new_leads`, он говорит правду («нужен человек») и он НЕ терминальный
+    `skipped`, который владелец запретил проставлять автоматом — закрытый
+    автоматом лид человек больше не увидит. Ровно этот статус канал уже пишет,
+    когда сам натыкается на снятую вакансию; заметка тоже та же, слово в слово,
+    чтобы в листе одна находка называлась одинаково независимо от того, кто её
+    сделал — проверка до генерации или браузер после неё.
+    """
+    if not _points_at_a_vacancy_page(target):
+        return None
+    dead_url = gone(target)
+    if not dead_url:
+        return None
+    return STATUS_MANUAL, f"{GONE_NOTE}: {dead_url}"
 
 
 # A slot the writer was supposed to fill: bracketed prose in ANY case

@@ -29,6 +29,7 @@ from app.application.send_plan import (
     CONFIRM_SEND,
     CONFIRM_SKIP,
     confirm_action,
+    dead_vacancy_reason,
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
@@ -54,6 +55,7 @@ from app.infrastructure.cv_loader import load_cv_text, load_text_file
 from app.infrastructure.openai_client import OpenAIMessageGenerator
 from app.infrastructure.openai_role import OpenAIRoleClassifier
 from app.infrastructure.sheets_repo import SheetsRepo
+from app.infrastructure.vacancy_alive import vacancy_gone
 from app.infrastructure.vacancy_fetcher import (
     fetch_vacancy_text, is_fetchable_vacancy_url,
 )
@@ -537,6 +539,26 @@ def run() -> None:
                 status, note = dup
                 repo.mark_status(lead, status, note=note)
                 print(f"⏭  Лид #{lead.lead_id} [{platform}]: {note} — пропуск.")
+                continue
+
+            # Жива ли ещё вакансия. Замер прогона 2026-08-26 по `remocate`: из
+            # двенадцати лидов четыре были закрыты, и в логе у каждого сначала
+            # шло «Генерирую сообщение...», а уже потом «страница недоступна /
+            # вакансия неактуальна» — то есть треть лидов площадки платила за
+            # письмо, роль и тему объявлению, которого нет.
+            #
+            # Стоит ЗДЕСЬ по трём причинам. После бесплатных проверок — за
+            # дубликат и паузу сеть платить незачем. После перечитывания ссылки
+            # — там свой вопрос (чем писать письмо), а не этот. И до открытия
+            # канала, как все остальные калитки: поднимать Chrome ради лида,
+            # которому мы не пишем, незачем — на площадке из одних мёртвых лидов
+            # браузер теперь не поднимется вовсе.
+            dead = dead_vacancy_reason(lead.target, vacancy_gone)
+            if dead is not None:
+                status, note = dead
+                repo.mark_status(lead, status, note=note)
+                print(f"✋ Лид #{lead.lead_id} [{platform}]: {note} "
+                      "— генерацию не трачу.")
                 continue
 
             try:
