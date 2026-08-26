@@ -54,3 +54,40 @@ def test_duration_reads_naturally():
     assert format_duration(60) == "1 м 0 с"
     assert format_duration(92.4) == "1 м 32 с"
     assert format_duration(3675) == "1 ч 1 м"
+
+
+# --- пауза площадки ----------------------------------------------------------
+#
+# Один и тот же текст уходит в двух направлениях: в консоль ноута (`make search`)
+# и в Telegram тому, кто прислал команду из вкладки «Команды». У строки запроса в
+# таблице колонки для причины нет, поэтому кроме этого текста человеку сказать
+# нечем.
+
+from app.application.notify import search_paused_message  # noqa: E402
+
+
+def test_paused_message_names_the_platform_and_how_to_lift_the_pause():
+    msg = search_paused_message(["linkedin"], [])
+
+    assert "linkedin" in msg
+    assert "PAUSED_PLATFORMS" in msg     # иначе отказ некуда деть, кроме как терпеть
+
+
+def test_paused_message_says_what_is_still_being_searched():
+    msg = search_paused_message(["linkedin"], ["remotive", "hh"])
+
+    assert "linkedin" in msg
+    assert "remotive, hh" in msg
+
+
+def test_done_message_names_what_the_pause_left_out():
+    """Без этой строки «Поиск завершён (remotive, hh)» читается как «искали
+    везде»: выпавшая площадка в сообщении просто отсутствует."""
+    msg = search_done_message(["remotive", "hh"], 3, paused=["linkedin"])
+
+    assert "linkedin" in msg
+    assert "паузе" in msg.lower()
+
+
+def test_done_message_without_a_pause_is_unchanged():
+    assert "паузе" not in search_done_message(["hh"], 1).lower()

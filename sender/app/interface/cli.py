@@ -38,7 +38,9 @@ from app.application.send_plan import (
     unresolved_thread,
 )
 from app.domain.invite_age import expired_note, invite_expired
-from app.domain.paused import parse_paused, partition_paused
+from app.domain.paused import (
+    SearchPaused, is_paused, parse_paused, partition_paused, partition_platforms,
+)
 from app.application.answer_log import answers_note
 from app.domain.sent_note import cv_note
 from app.domain.outreach_history import (
@@ -146,14 +148,24 @@ def _record_sent(repo, lead, body: str, platform: str, history=None,
         return False
 
 
-def _notify_done(platforms, added: int, timings=None) -> None:
-    """Best-effort Telegram ping after a search; no-op unless token+chat configured."""
+def _notify_text(text: str) -> None:
+    """Best-effort Telegram ping; no-op unless token+chat configured.
+
+    Отдельно от _notify_done, потому что сказать человеку иногда надо не про
+    результат поиска, а про то, что поиска не было: команду он присылает из
+    таблицы, у ноута его в этот момент нет, и консоль ему не видна.
+    """
     if not (config.TELEGRAM_BOT_TOKEN and config.NOTIFY_CHAT_ID):
         return
-    from app.application.notify import search_done_message
     from app.infrastructure.telegram_notify import send_telegram
-    send_telegram(config.TELEGRAM_BOT_TOKEN, config.NOTIFY_CHAT_ID,
-                  search_done_message(list(platforms), added, timings))
+    send_telegram(config.TELEGRAM_BOT_TOKEN, config.NOTIFY_CHAT_ID, text)
+
+
+def _notify_done(platforms, added: int, timings=None, paused=()) -> None:
+    """Best-effort Telegram ping after a search; no-op unless token+chat configured."""
+    from app.application.notify import search_done_message
+    _notify_text(search_done_message(list(platforms), added, timings,
+                                     paused=list(paused)))
 
 
 def _scored_out_store():
@@ -705,6 +717,49 @@ def run() -> None:
               "Все они остались 'new' — следующий прогон возьмёт их снова.")
 
 
+def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
+    """Обработчик одного запроса поиска: и из «Команд», и от авто-поиска.
+
+    Вынесено из run_worker отдельной функцией не ради красоты: отказ по паузе —
+    это поведение, которое обязано быть под тестом, а внутри run_worker до него
+    не добраться, не подняв ни таблицу, ни браузер.
+    """
+    from app.application.notify import search_paused_message
+    from app.application.run_search import run_search
+    from app.domain.search_request import platforms_for
+
+    notify = _notify_text if notify is None else notify
+
+    def run_one(req):
+        # Пауза срабатывает до run_search: searcher приостановленной площадки не
+        # запускается, то есть браузер с её сессией не открывается вовсе.
+        plats, held = partition_platforms(platforms_for(req.platform), paused)
+        if held:
+            note = search_paused_message(held, plats)
+            print(note)
+            if not plats:
+                # Запрос пришёл из таблицы — человека у ноута сейчас нет, и
+                # консоль ему не видна. Молчание он прочтёт как «поиск прошёл,
+                # ничего не нашлось», а SearchPaused не даст worker_tick
+                # пометить строку `done` (см. app/domain/paused.py).
+                notify(note)
+                raise SearchPaused(note)
+        timings = []
+        added = run_search(
+            plats, searchers, candidates,
+            keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
+            limit=config.SEARCH_LIMIT_PER_PLATFORM,
+            on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
+            scored_out=_scored_out_store(),
+            on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
+            **_relevance_args(),
+        )
+        _notify_done(plats, added, timings, paused=held)
+        return added
+
+    return run_one
+
+
 def run_worker():
     """Always-on loop: heartbeat, drain «Команды», auto-search ~3×/day. Ctrl+C to stop."""
     import datetime as _dt
@@ -715,9 +770,8 @@ def run_worker():
 
     from app import config
     from app.application.auto_search import due_auto_search, parse_times
-    from app.application.run_search import run_search
     from app.application.worker_tick import worker_tick
-    from app.domain.search_request import SEARCH_PLATFORMS, SearchRequest, platforms_for
+    from app.domain.search_request import SEARCH_PLATFORMS, SearchRequest
     from app.infrastructure.search_leads_repo import SearchLeadsRepo
     from app.infrastructure.control_repo import ControlRepo
     from app.infrastructure.search.registry import build_searcher
@@ -733,22 +787,15 @@ def run_worker():
     # Порядок аргументов обратный прежнему и это не опечатка: писать теперь надо
     # в ОСНОВНУЮ вкладку, а «Кандидаты» остались источником памяти для дедупа.
     candidates = SearchLeadsRepo(main_ws, cand_ws, config.CANDIDATES_PENDING_CAP)
-    searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS}
-
-    def run_one(req):
-        plats = platforms_for(req.platform)
-        timings = []
-        added = run_search(
-            plats, searchers, candidates,
-            keywords=config.SEARCH_KEYWORDS, location=config.SEARCH_LOCATION,
-            limit=config.SEARCH_LIMIT_PER_PLATFORM,
-            on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
-            scored_out=_scored_out_store(),
-            on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
-            **_relevance_args(),
-        )
-        _notify_done(plats, added, timings)
-        return added
+    paused = parse_paused(config.PAUSED_PLATFORMS)
+    if paused:
+        print(f"⏸  На паузе: {', '.join(sorted(paused))} — эти площадки не ищу. "
+              "Значение прочитано при старте: правку .env увижу после перезапуска.")
+    # Searcher приостановленной площадки не строится вовсе: так до неё нечем
+    # добраться даже запросу, который каким-то образом проскочил бы проверку.
+    searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS
+                 if not is_paused(p, paused)}
+    run_one = _make_run_one(searchers, candidates, paused)
 
     tz = _dt.timezone(_dt.timedelta(hours=config.AUTO_SEARCH_TZ_OFFSET))
     times = parse_times(config.AUTO_SEARCH_TIMES)
@@ -761,7 +808,14 @@ def run_worker():
             now = _dt.datetime.now(tz)
             if due_auto_search(times, last_auto, now):
                 print(f"auto-search {now:%Y-%m-%d %H:%M} (UTC+{config.AUTO_SEARCH_TZ_OFFSET}): all platforms")
-                run_one(SearchRequest(id="auto", platform="all", status="running"))
+                try:
+                    run_one(SearchRequest(id="auto", platform="all", status="running"))
+                except SearchPaused:
+                    # Причина уже сказана вслух самим run_one. Гасим здесь, чтобы
+                    # отметить слот выполненным: иначе расписание повторяло бы
+                    # отказ каждый опрос — то есть слало бы его в Telegram раз в
+                    # минуту до конца дня, хотя снимается пауза руками в .env.
+                    pass
                 last_auto = now
         except Exception as exc:  # noqa: BLE001 — survive transient sheet errors
             print("tick error:", exc)
@@ -780,9 +834,20 @@ def run_search_once(platforms):
     import gspread
     from google.oauth2.service_account import Credentials
 
+    from app.application.notify import search_paused_message
     from app.application.run_search import run_search
     from app.infrastructure.search_leads_repo import SearchLeadsRepo
     from app.infrastructure.search.registry import build_searcher
+
+    # Пауза проверяется раньше всего остального: приостановленной площадке не
+    # положено ни строки в таблице, ни тем более браузера, а `make search_hh`
+    # ниже сам открывает окно логина, если сессии нет.
+    platforms, held = partition_platforms(
+        platforms, parse_paused(config.PAUSED_PLATFORMS))
+    if held:
+        print(search_paused_message(held, platforms))
+    if not platforms:
+        return
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
@@ -814,7 +879,7 @@ def run_search_once(platforms):
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
-    _notify_done(platforms, added, timings)
+    _notify_done(platforms, added, timings, paused=held)
 
 
 def run_login_browser():
