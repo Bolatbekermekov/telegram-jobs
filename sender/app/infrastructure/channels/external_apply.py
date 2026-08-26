@@ -22,6 +22,7 @@ from app.infrastructure.widgets.combobox import (
 )
 from app.infrastructure.widgets.file_upload import attach_file as _attach_file
 from app.domain.channel import ManualApplyRequired, OutreachContent
+from app.domain.legal_page import looks_like_legal_page
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 # Сколько ждать на форме вендора после перехода: она рисуется скриптом.
@@ -888,6 +889,19 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
                    subject_maker=None, vacancy_context: str = "") -> None:
     obs, route = scrape_until_ready(page)
     if route is Route.NONE and _reveal_apply_form(page):
+        # Кнопка «Apply» ведёт к форме не всегда. Замер 2026-08-26 на Zalando
+        # (лиды #412, #413): там Usercentrics, согласие нарисовано в shadow DOM,
+        # мы его не видим и не отвечаем — и кнопка уводит на текст политики
+        # обработки данных, где ни формы, ни продолжения нет.
+        #
+        # Раньше в таблицу уходило «форма не распознана: <адрес политики>» —
+        # формально правда, но это ложный след: выглядит как поломка разбора
+        # формы. Говорим прямо и показываем адрес ВАКАНСИИ, а не документа, —
+        # откликаться человек пойдёт туда.
+        if looks_like_legal_page(getattr(page, "url", "")):
+            raise ManualApplyRequired(
+                "кнопка отклика увела на юридический текст (похоже, сайт ждёт "
+                f"ответа на согласие), формы там нет — отклик руками: {job_url}")
         obs, route = scrape_until_ready(page)   # form opened in a modal / next step
     if route is Route.NONE:
         obs, route = _hop_to_embedded_form(page, obs, route)
