@@ -72,12 +72,16 @@ HH_SUBMIT_TIMEOUT_SECONDS = int(os.environ.get("HH_SUBMIT_TIMEOUT_SECONDS", "100
 # (always send, then wait the random delay). False (default) = ask send/edit/skip per lead.
 AUTO_SEND = os.environ.get("AUTO_SEND", "false").lower() == "true"
 
-# Площадки, которые прогон не трогает: "linkedin" или "linkedin,hh".
+# Площадки, которые не трогают ни отправка, ни поиск: "linkedin" или "linkedin,hh".
 # Лиды такой площадки остаются `new` и ждут снятия паузы — они НЕ становятся
 # `skipped`, иначе прогон больше никогда их не поднял бы. Появилось после бана
 # LinkedIn 2026-08-26: проверка приглашённых открывает LinkedIn первым делом в
 # каждом прогоне, так что без этого выключателя нельзя было отправить даже то,
 # что к LinkedIn отношения не имеет.
+# Поиск сначала выключателя не знал вовсе, и это была половина защиты: `make
+# search` и авто-поиск воркера открывали забаненный аккаунт трижды в день —
+# ровно тот, ради которого пауза и ставилась. Воркер читает значение при старте,
+# так что правку .env он увидит только после перезапуска.
 PAUSED_PLATFORMS = os.environ.get("PAUSED_PLATFORMS", "")
 
 MIN_DELAY_SECONDS = int(os.environ.get("MIN_DELAY_SECONDS", "40"))
