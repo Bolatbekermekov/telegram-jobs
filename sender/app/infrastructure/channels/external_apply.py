@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 from app.application.apply_guard import (
     host_or_vendor_allowed, leaked_secrets, vendor_behind,
 )
+from app.application.hidden_date import wants_availability_date
 from app.application.auto_apply import (
     COVER_LETTER_RE, _match_choice, answer_ai_fields, build_plan,
     field_is_required as _required,
@@ -22,6 +23,7 @@ from app.infrastructure.widgets.combobox import (
 )
 from app.infrastructure.widgets.file_upload import attach_file as _attach_file
 from app.domain.channel import ManualApplyRequired, OutreachContent
+from app.domain.availability import availability_iso
 from app.domain.legal_page import looks_like_legal_page
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -463,6 +465,72 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                     f"{where}: не смог заполнить обязательное поле "
                     f"«{a.field.label or a.field.name}», нужен ручной отклик")
             continue
+
+    for label in fill_hidden_required_dates(page, profile):
+        print(f"   ↳ проставил дату выхода в скрытое обязательное поле: {label}")
+
+
+# Скрытое обязательное поле даты выхода. Скрапер читает только видимые контролы,
+# поэтому такого поля план не видит вовсе — а ATS его требует и отправку без
+# него отклоняет (BlueThrone, лид #419: блок `hidden max-h-0`, не раскрывается
+# ни при одном ответе на соседний вопрос).
+#
+# Писать в невидимое опасно — там токены и служебные значения формы, — поэтому
+# отбор двойной: сначала JS отдаёт ТОЛЬКО пустые `input[type=date]`, спрятанные
+# и не заполненные, а решение по тексту блока принимает `wants_availability_date`
+# на стороне Python, где его видно и можно проверить тестами.
+_HIDDEN_DATES_JS = r"""() => {
+  const out = [];
+  document.querySelectorAll('input[type=date]').forEach((el, i) => {
+    if (el.value) return;                       // уже заполнено — не трогаем
+    if (el.offsetParent !== null) return;       // видимое разбирает обычный план
+    const block = el.closest('.question, fieldset, .form-group, li, section')
+                  || el.parentElement;
+    out.push({i, text: ((block && block.innerText) || '').trim().slice(0, 200)});
+  });
+  return out;
+}"""
+
+# Значение ставим родным сеттером и шлём события: контролируемому полю
+# (React/Turbo) присваивания через .value мало — стейт формы его не заметит.
+_SET_DATE_JS = r"""([index, value]) => {
+  const el = document.querySelectorAll('input[type=date]')[index];
+  if (!el) return false;
+  const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype, 'value').set;
+  setter.call(el, value);
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  return el.value === value;
+}"""
+
+
+def fill_hidden_required_dates(page, profile) -> list:
+    """Проставить дату выхода в скрытые обязательные поля. Возвращает их подписи.
+
+    Ничего не делает, когда таких полей нет или срок выхода в профиле разобрать
+    не удалось: выдуманная дата ушла бы работодателю как обещание.
+    """
+    iso = availability_iso(getattr(profile, "notice_period", "") or "")
+    if not iso:
+        return []
+    try:
+        candidates = page.evaluate(_HIDDEN_DATES_JS)
+    except Exception:  # noqa: BLE001 — фейковая страница/нет JS: молча мимо
+        return []
+    filled = []
+    for c in candidates or []:
+        text = (c or {}).get("text", "")
+        if not wants_availability_date(text):
+            continue
+        try:
+            if page.evaluate(_SET_DATE_JS, [c["i"], iso]):
+                # innerText блока приходит с переносами и отступами вёрстки —
+                # в лог человеку нужна одна строка.
+                filled.append(" ".join(text.split())[:60])
+        except Exception:  # noqa: BLE001 — одно поле не повод ронять заполнение
+            continue
+    return filled
 
 
 def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
