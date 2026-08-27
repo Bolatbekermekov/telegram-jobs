@@ -7,6 +7,8 @@ import json
 
 from openai import OpenAI
 
+from app.domain.message_language import summary_language, summary_language_rule
+
 _SYSTEM = (
     "Ты кратко суммируешь сообщения с вакансиями. Верни строго JSON "
     '{"vacancy_context": "..."} — роль, формат работы, условия и зарплата '
@@ -22,11 +24,20 @@ class OpenAISummarizer:
 
     def summarize(self, raw_text: str) -> str:
         try:
+            # Язык пересказа называем прямо, а не надеемся, что модель сохранит
+            # язык оригинала сама. Промпт выше целиком русский, и этого хватает,
+            # чтобы переписать по-русски что угодно: в листе за 2026-08-26
+            # русскую «Вакансию» получили все 35 строк с чисто английским
+            # оригиналом. Дальше эта колонка идёт в письмо — лиду #441
+            # (стажировка в Бангалоре) отклик так и ушёл, русским текстом через
+            # Easy Apply. Считается язык внутри try по той же причине, что и всё
+            # остальное здесь: лид дороже пересказа.
+            system = _SYSTEM + summary_language_rule(summary_language(raw_text))
             resp = self._client.chat.completions.create(
                 model=self._model,
                 response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": _SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": raw_text},
                 ],
                 max_completion_tokens=self._max_output_tokens,
