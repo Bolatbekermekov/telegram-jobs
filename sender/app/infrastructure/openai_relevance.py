@@ -13,8 +13,9 @@ class OpenAIRelevanceScorer:
         self._model = model
         self._max_output_tokens = max_output_tokens
 
-    def score(self, profile: str, title: str, description: str) -> tuple[int, str]:
-        system, user = build_score_prompt(profile, title, description)
+    def score(self, profile: str, title: str, description: str,
+              location: str = "") -> tuple[int, str]:
+        system, user = build_score_prompt(profile, title, description, location)
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[

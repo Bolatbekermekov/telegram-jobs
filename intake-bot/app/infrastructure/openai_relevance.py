@@ -41,9 +41,17 @@ class OpenAIRelevanceScorer:
         self._model = model
         self._max_output_tokens = max_output_tokens
 
-    def score(self, profile: str, title: str, description: str,
+    def score(self, profile: str, title: str, description: str, location: str = "",
               timeout: float = _TIMEOUT_SECONDS) -> tuple[int, str] | None:
-        system, user = build_score_prompt(profile, title, description)
+        """`location` здесь всегда пустая, и параметр всё равно есть.
+
+        Локацию отдаёт КАРТОЧКА выдачи, а у интейка карточки нет — есть текст
+        пересланного сообщения, и страна в нём либо уже написана, либо её нет
+        нигде. Параметр стоит, чтобы промпт остался дословной копией ноутбучного:
+        разъедься сигнатуры — и пересланная вакансия начала бы меряться другим
+        промптом, чем найденная поиском, а цифры лягут в одну колонку.
+        """
+        system, user = build_score_prompt(profile, title, description, location)
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=[

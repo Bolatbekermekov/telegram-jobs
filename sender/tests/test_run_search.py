@@ -67,7 +67,7 @@ def test_run_search_survives_one_platform_failing():
 
 
 class _Scorer:
-    def score(self, profile, title, description):
+    def score(self, profile, title, description, location=""):
         # keep only the candidate whose url ends in /keep
         return (90, "fit") if description and title == "keep" else (10, "no")
 
