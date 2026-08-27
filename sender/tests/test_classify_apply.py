@@ -1,4 +1,4 @@
-from app.application.classify_apply import classify
+from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 
@@ -157,3 +157,51 @@ def test_the_first_usable_address_wins_over_the_noise():
         "mailto:datenschutz@acme.de",
         "mailto:jobs@acme.de?subject=Application"])
     assert classify(obs) is Route.EMAIL
+
+
+# --- вендор во встроенном ATS опознаётся по ХОСТУ, а не подстрокой -----------
+# Замер 2026-08-27 видимым браузером на живой вакансии SmartRecruiters
+# (`jobs.smartrecruiters.com/SmartRecruiters/744000143115219-…`): страницу
+# закрывает капча DataDome, и её iframe несёт адрес закрытой страницы В
+# ПАРАМЕТРЕ — `geo.captcha-delivery.com/captcha/?…&referer=https%3A%2F%2Fjobs
+# .smartrecruiters.com%2F…`. Прежнее правило искало имя вендора подстрокой во
+# ВСЁМ адресе, находило «smartrecruiters.com» в этом параметре, маршрут выходил
+# IFRAME_ATS — и `_enter_ats_iframe` уводил браузер ВНУТРЬ КАПЧИ вместо формы.
+# Оттуда ни формы, ни вакансии: Route.NONE и «форма не распознана».
+#
+# Хост сравнивается ровно тем же `host_allowed`, что стоит перед отправкой
+# (`apply_guard`), и по той же причине: границы меток, а не подстроки. Обрезать
+# до самого домена при этом нельзя — вендоры шардят по регионам и клиентам
+# (`job-boards.greenhouse.io`, `acme.wd3.myworkdayjobs.com`).
+
+def test_a_captcha_naming_the_vendor_in_a_parameter_is_not_the_vendors_form():
+    obs = PageObservation(
+        url="https://jobs.smartrecruiters.com/SmartRecruiters/744000143115219-engineer",
+        iframes=["https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAM"
+                 "&cid=n2R1Ir&referer=https%3A%2F%2Fjobs.smartrecruiters.com%2F"
+                 "SmartRecruiters%2F744000143115219&hash=A3&t=fe"])
+    assert known_ats_iframe(obs.iframes) is None
+    assert classify(obs) is Route.NONE
+
+
+def test_a_lookalike_host_is_not_the_vendor():
+    """`greenhouse.io.evil.tld` — это evil.tld; имя вендора в параметре — не вендор."""
+    assert known_ats_iframe(["https://greenhouse.io.evil.tld/apply"]) is None
+    assert known_ats_iframe(["https://ads.tld/px?utm_source=lever.co"]) is None
+    assert known_ats_iframe(["https://evil.tld/www.comeet.co/jobs/1/apply"]) is None
+
+
+def test_a_vendor_subdomain_is_still_the_vendors_form():
+    for src in ("https://www.comeet.co/jobs/28.003/26.D66/apply?token=x&embedded=true",
+                "https://job-boards.greenhouse.io/embed/job_app?token=1",
+                "https://acme.wd3.myworkdayjobs.com/en-US/careers/job/1",
+                "https://jobs.lever.co/acme/1234/apply"):
+        assert known_ats_iframe([src]) == src, src
+
+
+def test_the_first_vendor_iframe_wins_over_the_noise():
+    """Капча и аналитика на странице стоят рядом с настоящим встроенным ATS."""
+    srcs = ["https://geo.captcha-delivery.com/captcha/?referer=https%3A%2F%2Fx.comeet.co",
+            "https://www.googletagmanager.com/ns.html?id=GTM-1",
+            "https://www.comeet.co/jobs/28.003/26.D66/apply?token=x"]
+    assert known_ats_iframe(srcs) == srcs[2]

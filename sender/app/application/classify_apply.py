@@ -7,6 +7,12 @@ banner is never mistaken for an application form (learned live on superplay.co).
 """
 import re
 
+# Сравнение хостов берётся у соседа целиком, а не переписывается здесь: то же
+# сравнение стоит перед отправкой (`host_allowed`), и разъедься эти двое — мы
+# войдём в iframe, который потом сами же не разрешим заполнять. Список вендоров
+# при этом остаётся свой (см. `KNOWN_ATS_HOSTS`): «во что можно войти» и «что
+# можно заполнить» — разные вопросы.
+from app.application.apply_guard import host_allowed
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
 KNOWN_ATS_HOSTS = (
@@ -117,9 +123,26 @@ def has_mailto_address(href: str) -> bool:
 
 
 def known_ats_iframe(iframes: list[str]) -> str | None:
+    """Адрес iframe, который РИСУЕТ вендор из списка, — или None.
+
+    Сравнивается ХОСТ. Прежде имя вендора искалось подстрокой во всём адресе, и
+    замер 2026-08-27 видимым браузером на живой вакансии SmartRecruiters
+    (`jobs.smartrecruiters.com/SmartRecruiters/744000143115219-…`) показал, чем
+    это кончается: страницу закрывает капча DataDome, её iframe несёт адрес
+    закрытой страницы в ПАРАМЕТРЕ — `geo.captcha-delivery.com/captcha/?…&referer=
+    https%3A%2F%2Fjobs.smartrecruiters.com%2F…`, — «smartrecruiters.com» из
+    параметра засчитывалось за вендора, маршрут выходил IFRAME_ATS, и
+    `_enter_ats_iframe` уводил браузер ВНУТРЬ КАПЧИ вместо формы. Оттуда
+    Route.NONE и «форма не распознана» — то есть вместо честного ручного отклика
+    прогон тратил браузер на чужой антибот. Тем же путём проходили и пиксели
+    аналитики с `utm_source=lever.co`, и `greenhouse.io.evil.tld`.
+
+    Обрезать хост до самого домена при этом нельзя: вендоры шардят по регионам и
+    клиентам (`job-boards.greenhouse.io`, `acme.wd3.myworkdayjobs.com`). Ровно
+    это и умеет `host_allowed` — совпадение по границам меток плюс поддомены.
+    """
     for src in iframes:
-        low = src.lower()
-        if any(host in low for host in KNOWN_ATS_HOSTS):
+        if host_allowed(src, KNOWN_ATS_HOSTS):
             return src
     return None
 
