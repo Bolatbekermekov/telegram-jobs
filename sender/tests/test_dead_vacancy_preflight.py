@@ -19,6 +19,7 @@ from app.application.send_plan import dead_vacancy_reason
 from app.domain.lead import STATUS_MANUAL
 from app.domain.page_gone import (
     GONE_NOTE, html_says_gone, page_lines, redirect_says_gone,
+    spa_shell_says_gone,
 )
 from app.infrastructure.vacancy_alive import vacancy_gone
 
@@ -451,3 +452,144 @@ def test_a_live_vacancy_that_merely_got_its_address_tidied_survives():
     reads = _Reads({asked: (200, LIVE, landed)})
 
     assert vacancy_gone(asked, read=reads) == ""
+
+
+# --- SPA-скорлупа: страница молчит, потому что говорить будет JS --------------
+#
+# Замер 2026-08-27/28. Ashby и Workday рисуют «Job not found» только после JS, а
+# дешёвый GET по определению JS не выполняет. Разметка при этом отвечает честным
+# 200, ни редирект, ни текст страницы о смерти не говорят — и лид шёл дальше
+# живым: на 300 карточках remocate ссылок на Ashby нашлось 13, из них МЁРТВЫХ 4,
+# и все четыре наше правило пропускало.
+#
+# Признак, который виден БЕЗ JS, нашёлся, и он положительный, а не отрицательный:
+# оба вендора вкладывают в `<head>` вакансию как schema.org JobPosting
+# (`application/ld+json`). Живая страница его несёт ВСЕГДА, снятая — никогда:
+#
+#   Ashby    206 живых вакансий из 27 досок  — JobPosting есть у 206
+#   Workday  195 живых вакансий из 14 арендаторов — есть у 195
+#   мёртвые   4 Ashby + 5 Workday, все девять подтверждены ВИДИМЫМ браузером
+#             («Job not found», «The page you are looking for doesn't exist.») —
+#             нет ни у одной
+#
+# Отсутствие признака само по себе смертью не считается, и это главное в правиле.
+# Два ограничения куплены ложными срабатываниями, найденными в том же замере:
+#
+#   1. Адрес обязан называть ОДНУ вакансию. Живая вакансия Workday по адресу
+#      `…/job/Data-Engineer_R0240103/apply` отдаёт ту же пустую скорлупу (6449 Б):
+#      анкету рисует JS после входа. Так же выглядят корень сайта вакансий
+#      (`…/en-US/BAH_Jobs`, 8208 Б) и доска Ashby (`jobs.ashbyhq.com/deel`,
+#      10767 Б) — всё это ЖИВЫЕ страницы. Судим только форму «одна вакансия»:
+#      у Ashby `/<компания>/<uuid>`, у Workday сегмент `job`/`details` с именем
+#      вакансии за ним.
+#   2. Разметка обязана быть маленькой. Все девять мёртвых уместились в
+#      5904–7319 Б, самая маленькая живая — 12355 Б (Workday) и 19231 Б (Ashby).
+#      Порог стоит посередине. Условие независимое: перестань вендор класть
+#      ld+json в живую страницу — она всё равно останется большой, потому что в
+#      ней лежит описание вакансии, и хоронить её мы не начнём.
+#
+# Правило намеренно НЕ общее. Живых страниц без ld+json на свете сколько угодно;
+# сказать «нет разметки — значит мертва» можно только там, где обратное
+# измерено. Список вендоров и есть список измеренного.
+
+ASHBY_JOB = "https://jobs.ashbyhq.com/adjoe/3610b4c7-4c2d-4746-8fa0-bd52272a248d"
+WORKDAY_JOB = ("https://bdx.wd1.myworkdayjobs.com/en-US/EXTERNAL_CAREER_SITE_USA"
+               "/job/Software-Engineer---Remote_R-517078-1")
+
+# Скорлупа снята дословно по форме с живых страниц: у Ashby это ровно 7270 байт
+# при любой компании, у Workday 5904–6706. Ни одного слова о вакансии в ней нет.
+SHELL = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Jobs</title><meta name="title" content="Jobs" />
+<link rel="icon" href="https://cdn.ashbyprd.com/cdn_assets/favicon.svg"></head>
+<body><noscript>You need to enable JavaScript to run this app.</noscript>
+<div id="root"><div class="center fade-in">Loading</div></div>
+<script>window.__appData = {};</script></body></html>"""
+
+# Живая: тот же каркас, но с вакансией, объявленной в `<head>`. Описание внутри
+# ld+json — то самое, из-за которого живая страница не бывает маленькой; повторов
+# столько, чтобы фикстура вышла размером с настоящую (самая маленькая живая
+# страница Ashby из замера — 19231 Б).
+_DESCRIPTION = ("adjoe builds the technologies behind mobile apps growth and "
+                "monetization. ") * 260
+LIVE_SHELL = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Senior MLOps Engineer (f/m/d) @ adjoe</title>
+<meta property="og:title" content="Senior MLOps Engineer (f/m/d)" />
+<script type="application/ld+json">{{"@context":"https://schema.org/",
+"@type":"JobPosting","title":"Senior MLOps Engineer (f/m/d)",
+"description":"{_DESCRIPTION}"}}</script></head>
+<body><div id="root"></div></body></html>"""
+
+
+def test_the_four_ashby_shells_are_recognised_without_javascript():
+    assert spa_shell_says_gone(ASHBY_JOB, SHELL) is True
+
+
+def test_a_workday_shell_is_recognised_too():
+    assert spa_shell_says_gone(WORKDAY_JOB, SHELL) is True
+
+
+def test_a_vacancy_that_the_vendor_still_declares_is_alive():
+    assert spa_shell_says_gone(ASHBY_JOB, LIVE_SHELL) is False
+    assert spa_shell_says_gone(WORKDAY_JOB, LIVE_SHELL) is False
+
+
+def test_the_apply_step_of_a_live_workday_vacancy_is_not_a_dead_vacancy():
+    """Замер: `…/job/Data-Engineer_R0240103/apply` у ЖИВОЙ вакансии — 6449 Б
+    пустой скорлупы, анкету рисует JS после входа. Адрес называет действие, а не
+    вакансию, поэтому правило о нём молчит."""
+    base = "https://bah.wd1.myworkdayjobs.com/en-US/BAH_Jobs/job/Data-Engineer_R0240103"
+    assert spa_shell_says_gone(base + "/apply", SHELL) is False
+    assert spa_shell_says_gone(base + "/apply/useMyLastApplication", SHELL) is False
+    assert spa_shell_says_gone(base + "/apply/applyManually", SHELL) is False
+
+
+def test_a_careers_site_root_is_not_a_dead_vacancy():
+    """Живые страницы, тоже отдающие скорлупу: корень сайта Workday (8208 Б) и
+    доска Ashby (10767 Б). Ни та ни другая не называет одну вакансию."""
+    assert spa_shell_says_gone(
+        "https://bah.wd1.myworkdayjobs.com/en-US/BAH_Jobs", SHELL) is False
+    assert spa_shell_says_gone("https://jobs.ashbyhq.com/deel", SHELL) is False
+    assert spa_shell_says_gone("https://jobs.ashbyhq.com/", SHELL) is False
+
+
+def test_a_big_page_without_the_marker_is_left_alone():
+    """Второе условие независимо от первого: перестань Ashby класть ld+json —
+    страница останется большой, и мы её не похороним."""
+    big = LIVE_SHELL.replace("application/ld+json", "application/json")
+    assert spa_shell_says_gone(ASHBY_JOB, big) is False
+
+
+def test_only_the_vendors_we_measured_are_judged_this_way():
+    """Живых страниц без ld+json на свете сколько угодно — общим это правило быть
+    не может. И граница метки та же, что везде: `ashbyhq.com.evil.tld` — не Ashby."""
+    assert spa_shell_says_gone("https://jobs.lever.co/acme/1234", SHELL) is False
+    assert spa_shell_says_gone(
+        "https://careers.acme.com/jobs/123-backend", SHELL) is False
+    assert spa_shell_says_gone(
+        "https://jobs.ashbyhq.com.evil.tld/acme/"
+        "3610b4c7-4c2d-4746-8fa0-bd52272a248d", SHELL) is False
+
+
+def test_a_vendor_subdomain_is_still_the_vendor():
+    """Workday шардит арендаторов по датацентрам — хостов у него много."""
+    for host in ("acme.wd1.myworkdayjobs.com", "acme.wd103.myworkdayjobs.com"):
+        url = f"https://{host}/en-US/Careers/job/Remote/Data-Engineer_R1"
+        assert spa_shell_says_gone(url, SHELL) is True, host
+
+
+def test_empty_markup_says_nothing():
+    assert spa_shell_says_gone(ASHBY_JOB, "") is False
+    assert spa_shell_says_gone(ASHBY_JOB, None) is False
+    assert spa_shell_says_gone("", SHELL) is False
+
+
+def test_the_preflight_check_now_sees_the_ashby_shell():
+    """Ради этого всё и делалось: лид на снятую вакансию не должен доходить до
+    генерации письма."""
+    reads = _Reads({ASHBY_JOB: (200, SHELL, ASHBY_JOB)})
+    assert vacancy_gone(ASHBY_JOB, read=reads) == ASHBY_JOB
+
+
+def test_the_preflight_check_leaves_a_live_ashby_vacancy_alone():
+    reads = _Reads({ASHBY_JOB: (200, LIVE_SHELL, ASHBY_JOB)})
+    assert vacancy_gone(ASHBY_JOB, read=reads) == ""
