@@ -226,6 +226,25 @@ REMOTEOK_API_URL = os.environ.get("REMOTEOK_API_URL", "https://remoteok.com/api"
 REMOTIVE_API_URL = os.environ.get(
     "REMOTIVE_API_URL", "https://remotive.com/api/remote-jobs")
 
+# Remocate — агрегатор чужих вакансий; поиск идёт по публичной ленте раздела и
+# ни аккаунта, ни браузера не требует.
+#
+# Лента, а НЕ sitemap: `https://www.remocate.app/sitemap.xml` отдаёт 5049
+# ссылок, но замер 2026-08-27 по случайной выборке из них дал 65% мёртвых
+# вакансий — до отправки дошла бы одна из сорока. У ленты раздела на первой
+# странице мёртвых 15%, и это подтверждает живой лист: из 16 лидов remocate
+# отправлено 4.
+REMOCATE_FEED_URL = os.environ.get(
+    "REMOCATE_FEED_URL", "https://www.remocate.app/job-categories/development")
+# Сколько страниц ленты проходить (по 20 вакансий; всего в разделе 102).
+# Глубина — единственная настройка, которая тут что-то решает, и три — это
+# граница живого запаса, а не круглое число. Доля мёртвых по страницам
+# (замер 2026-08-27, случайные выборки живьём): 1-я — 15%, 3-я — 25%,
+# 10-я — 75%, 30-я — 60%, 70-я — 70%. Обрыв между третьей и десятой, то есть
+# живого около 60 вакансий. Remocate — быстрая узкая лента: её надо опрашивать
+# часто и неглубоко, а не вычерпывать.
+REMOCATE_PAGES = int(os.environ.get("REMOCATE_PAGES", "3"))
+
 # AI relevance filtering of search results.
 RELEVANCE_ENABLED = os.environ.get("RELEVANCE_ENABLED", "true").lower() == "true"
 MATCH_THRESHOLD = int(os.environ.get("MATCH_THRESHOLD", "60"))

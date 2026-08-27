@@ -28,6 +28,22 @@ def test_search_defaults_present():
 # значения по умолчанию: режем по формату работы, но не по региону и не по
 # уровню — там выдача садится ниже потолка SEARCH_PER_KEYWORD=25 на слово.
 
+# --- глубина ленты remocate --------------------------------------------------
+
+def test_remocate_depth_default_matches_the_measurement():
+    """Три страницы — это граница живого запаса, а не круглое число.
+
+    Замер 2026-08-27 по случайным выборкам живьём. Sitemap (5049 ссылок) взять
+    нельзя: 65% вакансий там мертвы, до отправки дошла бы одна из сорока. В
+    ленте `/job-categories/development` доля мёртвых по страницам: 1-я — 15%,
+    3-я — 25%, 10-я — 75%, 30-я — 60%, 70-я — 70%. Обрыв между третьей и
+    десятой, то есть живого примерно 60 вакансий — их и берём.
+    """
+    assert config.REMOCATE_PAGES == 3
+    assert config.REMOCATE_FEED_URL == \
+        "https://www.remocate.app/job-categories/development"
+
+
 def test_hh_filters_have_defaults():
     assert config.HH_WORK_FORMAT == ["REMOTE"]
     assert config.HH_AREAS == []        # регион не сужаем: hh складывает его с

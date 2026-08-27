@@ -229,7 +229,25 @@ def test_worker_request_searches_everything_but_the_paused_platform(monkeypatch)
     run_one(SearchRequest(id="1", platform="all", status="running"))
 
     assert [p for p, s in searchers.items() if s.started] == [
-        "wellfound", "remoteok", "remotive", "hh"]
+        "wellfound", "remoteok", "remotive", "remocate", "hh"]
+
+
+def test_pausing_remocate_stops_its_search_too(monkeypatch):
+    """Выключатель обязан подхватить новую площадку сам, без правок в нём.
+
+    Он и подхватывает — ровно потому, что поиск назвал площадку `remocate`, тем
+    же словом, каким её зовут лиды в листе и канал отправки. Ошибись именем
+    («remocate.app», «external») — и пауза прикрывала бы отправку, продолжая
+    ходить на площадку поиском.
+    """
+    _offline(monkeypatch)
+    searchers = {p: _FakeSearcher(p) for p in SEARCH_PLATFORMS}
+    run_one = _make_run_one(searchers, _FakeCandidates(), parse_paused("remocate"))
+
+    run_one(SearchRequest(id="1", platform="all", status="running"))
+
+    assert not searchers["remocate"].started
+    assert searchers["remoteok"].started
 
 
 def test_worker_request_for_a_paused_platform_is_refused_out_loud(monkeypatch):

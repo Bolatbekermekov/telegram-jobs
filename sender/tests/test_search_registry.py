@@ -35,6 +35,25 @@ def test_build_remotive():
     assert isinstance(build_searcher("remotive"), RemotiveSearcher)
 
 
+def test_build_remocate():
+    from app.infrastructure.search.remocate_search import RemocateSearcher
+    assert isinstance(build_searcher("remocate"), RemocateSearcher)
+
+
+def test_remocate_gets_its_depth_from_config():
+    """Глубина ленты обязана доехать из .env до searcher'а, а не осесть в конфиге.
+
+    У remocate это единственная настройка, которая вообще что-то решает: в
+    ленте 102 страницы, и с десятой она на три четверти мёртвая (замер
+    2026-08-27).
+    """
+    from app import config
+
+    s = build_searcher("remocate")
+    assert s._pages == config.REMOCATE_PAGES
+    assert s._feed_url == config.REMOCATE_FEED_URL
+
+
 def test_build_hh():
     from app.infrastructure.search.hh_search import HHSearcher
     assert isinstance(build_searcher("hh"), HHSearcher)
