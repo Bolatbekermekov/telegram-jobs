@@ -23,7 +23,9 @@ JS, распознавание формы, заполнение — она не 
 зеркалит копию интейк-бота (см. tests/test_vacancy_mirror.py): интейку эта
 проверка не нужна, а разъехаться копиям нельзя.
 """
-from app.domain.page_gone import html_says_gone, redirect_says_gone
+from app.domain.page_gone import (
+    html_says_gone, redirect_says_gone, spa_shell_says_gone,
+)
 from app.domain.vacancy_text import aggregator_apply_url, is_aggregator_job_url
 # UA берётся из зеркального модуля, а не копируется сюда: строка там одна и
 # объяснена там же («бот-подобный UA придушат hh и LinkedIn»). Второй экземпляр
@@ -80,12 +82,19 @@ def _verdict(url: str, timeout: float, read) -> tuple[str, str]:
         return landed, ""
     if status != 200:
         return "", ""                 # 403/429/5xx/сеть — вердикта нет
-    # Два независимых свидетельства смерти, и второе не стоит ни одного запроса:
-    # адрес, на котором мы оказались, читается всё равно. Замер 2026-08-27 на 215
-    # ссылках отклика с карточек remocate: разметка ловит 85 мёртвых, а ещё 53
-    # отвечают честным 200 и молчат — сайт увёл на заглушку, и виден только
-    # редирект. Что считать «увёл», объяснено в `domain/page_gone.py`.
-    gone = redirect_says_gone(url, landed) or html_says_gone(markup)
+    # Три независимых свидетельства смерти, и ни одно не стоит лишнего запроса:
+    # адрес, на котором мы оказались, и разметка читаются всё равно. Замер
+    # 2026-08-27 на 215 ссылках отклика с карточек remocate: разметка ловит 85
+    # мёртвых, а ещё 53 отвечают честным 200 и молчат — сайт увёл на заглушку, и
+    # виден только редирект. Третье свидетельство про тех, кто молчит и не
+    # уводит: SPA-вендор отдаёт пустую скорлупу, а «Job not found» дорисовывает
+    # JS (Ashby и Workday, 4 случая на 13 ссылок Ashby с карточек remocate).
+    # Что считать каждым из трёх, объяснено в `domain/page_gone.py`.
+    #
+    # Хост берётся у КОНЕЧНОГО адреса: скорлупу отдаёт тот, кто ответил, а
+    # приехать к вендору можно и редиректом с домена компании.
+    gone = (redirect_says_gone(url, landed) or html_says_gone(markup)
+            or spa_shell_says_gone(landed, markup))
     return (landed if gone else ""), markup
 
 

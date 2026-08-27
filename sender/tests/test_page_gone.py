@@ -47,3 +47,40 @@ def test_a_number_404_inside_prose_is_not_a_dead_page():
     text = ("Backend Engineer\nApply\nYou will handle 404 and 500 responses "
             "in our API gateway.")
     assert page_is_gone("Backend Engineer — Acme", text) is False
+
+
+# --- вендоры, которые пишут о смерти СВОИМИ словами ---------------------------
+# Замер 2026-08-27/28 видимым браузером на девяти снятых вакансиях (четыре Ashby
+# с карточек remocate, пять Workday из поисковой выдачи). Обе формулировки —
+# отдельными строками, и обе проходили мимо прежнего правила:
+#
+#   Ashby   `jobs.ashbyhq.com/adjoe/3610b4c7-…`  «Job not found»
+#                                                «The job you requested was not found.»
+#   Workday `bdx.wd1.myworkdayjobs.com/…/job/…`  «The page you are looking for doesn't exist.»
+#
+# «Job not found» не ловилось, потому что шаблон `page (not found|…)` требует
+# перед состоянием слово «page», а `_GONE_LINE_RE` — чтобы строка была РОВНО
+# «not found». У Workday между «page» и «doesn't exist» стоит целое придаточное.
+# Обе строки — ЦЕЛЫЕ строки текста страницы, поэтому они и добавлены к правилу
+# целой строки, а не к поиску по тексту: «job not found» внутри живого описания
+# («handle job not found errors in the scheduler») ничего не отменяет.
+
+def test_ashby_says_the_job_is_not_found():
+    text = ("Job not found\n\nThe job you requested was not found.\n\n"
+            "View all open positions\nPowered by\nPrivacy PolicySecurity")
+    assert page_is_gone("Jobs", text) is True
+
+
+def test_workday_says_the_page_does_not_exist():
+    text = ("Skip to main content\nDecline\nAccept Cookies\nEnglish\nSign In\n"
+            "Search for Jobs\nThe page you are looking for doesn't exist.\n"
+            "Search for Jobs\nFollow Us\n© 2026 Workday, Inc. All rights reserved.")
+    assert page_is_gone("Careers", text) is True
+
+
+def test_the_same_words_inside_a_live_description_are_not_a_state():
+    """Строка целиком — несущее требование: в описании эти слова живут спокойно."""
+    text = ("Senior Backend Engineer\nApply\n"
+            "You will handle job not found errors in the scheduler.\n"
+            "If the page you are looking for doesn't exist, we render a 404.")
+    assert page_is_gone("Senior Backend Engineer — Acme", text) is False

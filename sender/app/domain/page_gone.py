@@ -41,8 +41,17 @@ _GONE_RE = re.compile(
 # Требование ЦЕЛОЙ строки здесь несущее: «closed» встречается и в живых
 # описаниях («closed-source SDK», «closed beta»), а «404» — в вакансиях про
 # обработку ошибок. Отдельной строкой оно стоит только когда это статус.
+# «Job not found» и фраза Workday добавлены сюда, а не в поиск по тексту, по той
+# же причине, по которой здесь стоит «closed»: в живом описании эти слова живут
+# спокойно («handle job not found errors in the scheduler»), состоянием они
+# становятся только отдельной строкой. Замер 2026-08-27/28 видимым браузером на
+# девяти снятых вакансиях: Ashby рисует «Job not found», Workday — «The page you
+# are looking for doesn't exist.». Мимо прежнего правила проходили обе: шаблон
+# `page (not found|…)` требует слова «page» вплотную к состоянию, а у Workday
+# между ними целое придаточное.
 _GONE_LINE_RE = re.compile(
     r"^(404|not found|closed|position closed|job closed|expired|"
+    r"job not found|the page you are looking for does ?n['’]?t exist\.?|"
     r"вакансия закрыта|закрыта|снята)$", re.I)
 
 
@@ -194,3 +203,100 @@ def redirect_says_gone(asked: str, landed: str) -> bool:
         return False
     dropped = asked_path[len(landed_path):]
     return any(part.lower() not in _ACTION_TAIL for part in dropped)
+
+
+# --- то же правило, но по СКОРЛУПЕ, которую отдаёт SPA-вендор ----------------
+#
+# Замер 2026-08-27/28. Ashby и Workday отдают дешёвому GET пустой каркас: HTTP
+# 200, 6–7 КБ, а «Job not found» дорисовывает JS. Ни код ответа, ни редирект, ни
+# текст разметки о смерти не говорят, и лид шёл дальше живым. На 300 карточках
+# remocate ссылок на Ashby нашлось 13, мёртвых среди них 4 — все четыре
+# проходили мимо.
+#
+# Дёшево выполнить JS нельзя, а поднимать браузер на каждую проверку живости
+# значит отменить то, ради чего проверку заводили дешёвой. Но признак, видимый
+# БЕЗ JS, есть, и он ПОЛОЖИТЕЛЬНЫЙ: оба вендора кладут вакансию прямо в `<head>`
+# как schema.org JobPosting (`application/ld+json`). Живая страница несёт его
+# всегда, снятая — никогда:
+#
+#     Ashby    206 живых вакансий с 27 досок           — JobPosting у 206
+#     Workday  195 живых вакансий у 14 арендаторов     — JobPosting у 195
+#     мёртвые  4 Ashby (карточки remocate) + 5 Workday — ни у одной
+#
+# Все девять мёртвых прочитаны ВИДИМЫМ браузером: Ashby пишет «Job not found»,
+# Workday — «The page you are looking for doesn't exist.». Признак не мигает:
+# те же 156 живых страниц, прочитанные ещё дважды подряд и вдвое быстрее, чем
+# читает прогон, ни разу не пришли скорлупой.
+#
+# Отсутствие ld+json само по себе смертью НЕ считается — на это правило узкое с
+# трёх сторон, и каждая сторона куплена ложным срабатыванием из того же замера:
+#
+#   (1) Вендор — только измеренный. Живых страниц без ld+json на свете сколько
+#       угодно; сказать «нет разметки — значит мертва» можно ровно там, где
+#       обратное посчитано. Список вендоров и есть список посчитанного.
+#   (2) Адрес обязан называть ОДНУ вакансию. Живая вакансия Workday по адресу
+#       `…/job/Data-Engineer_R0240103/apply` отдаёт ту же скорлупу (6449 Б):
+#       анкету рисует JS после входа. Так же выглядят корень сайта вакансий
+#       (`…/en-US/BAH_Jobs`, 8208 Б) и доска Ashby (`jobs.ashbyhq.com/deel`,
+#       10767 Б) — обе живые. Поэтому судится только форма «одна вакансия».
+#   (3) Разметка обязана быть маленькой. Девять мёртвых уместились в 5904–7319 Б,
+#       самая маленькая живая — 12355 Б у Workday и 19231 Б у Ashby; порог стоит
+#       посередине. Условие независимое: перестань вендор класть ld+json — живая
+#       страница всё равно останется большой, в ней лежит описание вакансии, и
+#       хоронить её мы не начнём.
+#
+# Цена ошибки прежняя и несимметричная: пропущенная мёртвая стоит одной
+# генерации, похороненная живая — самой вакансии. Все три ограничения работают
+# в сторону «промолчать».
+
+_SSR_JOB_VENDORS = ("ashbyhq.com", "myworkdayjobs.com")
+
+# Ashby: адрес вакансии — это `/<компания>/<uuid>` и ничего больше. Всё
+# остальное на этом хосте (доска компании, подстраница отклика) — не вакансия.
+_ASHBY_JOB_ID_RE = re.compile(
+    r"(?i)^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+# Workday: вакансию называет сегмент `job` или `details`, а за ним — её имя
+# (иногда с городом посередине: `/job/US---Remote/Data-Engineer_R1`).
+_WORKDAY_JOB_SEGMENTS = frozenset({"job", "details"})
+
+_SHELL_MAX_BYTES = 10_000
+_JSON_LD_RE = re.compile(r"(?is)<script[^>]*ld\+json[^>]*>(.*?)</script>")
+_JOB_POSTING_RE = re.compile(r'(?i)"@type"\s*:\s*"JobPosting"')
+
+
+def _ssr_vendor(host: str) -> str:
+    """Вендор из списка, которому принадлежит хост, — по границам меток.
+
+    Подстрокой сравнивать нельзя ровно по той же причине, что и в
+    `apply_guard.host_allowed`: `ashbyhq.com.evil.tld` — это evil.tld. Поддомены
+    при этом нужны: Workday шардит арендаторов по датацентрам
+    (`acme.wd103.myworkdayjobs.com`), и хостов у него столько же, сколько
+    клиентов.
+    """
+    return next((v for v in _SSR_JOB_VENDORS
+                 if host == v or host.endswith("." + v)), "")
+
+
+def _names_one_vacancy(vendor: str, segments: list) -> bool:
+    """Называет ли путь ОДНУ вакансию — а не доску, корень или шаг отклика."""
+    if any(p.lower() in _ACTION_TAIL for p in segments):
+        return False            # `/apply`, `/application` — действие, не вакансия
+    if vendor == "ashbyhq.com":
+        return len(segments) == 2 and bool(_ASHBY_JOB_ID_RE.match(segments[1]))
+    where = next((i for i, p in enumerate(segments)
+                  if p.lower() in _WORKDAY_JOB_SEGMENTS), -1)
+    # За `job` стоит имя вакансии, иногда с городом перед ним. Больше двух
+    # сегментов — это уже шаг мастера отклика (`/apply/useMyLastApplication`).
+    return where >= 0 and 1 <= len(segments) - where - 1 <= 2
+
+
+def spa_shell_says_gone(url: str, markup: str) -> bool:
+    """Отдал ли известный SPA-вендор пустую скорлупу вместо страницы вакансии."""
+    if not url or not markup or len(markup) >= _SHELL_MAX_BYTES:
+        return False
+    host, segments, _ = _address_parts(url)
+    vendor = _ssr_vendor(host)
+    if not vendor or not _names_one_vacancy(vendor, segments):
+        return False
+    return not any(_JOB_POSTING_RE.search(block)
+                   for block in _JSON_LD_RE.findall(markup))
