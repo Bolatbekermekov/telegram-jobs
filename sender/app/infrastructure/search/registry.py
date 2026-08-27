@@ -47,6 +47,16 @@ def build_searcher(platform: str):
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )
     if platform == "hh":
-        return HHSearcher(config.HH_STATE_PATH, headless=config.BROWSER_HEADLESS,
-                          per_keyword=config.SEARCH_PER_KEYWORD)
+        return HHSearcher(
+            config.HH_STATE_PATH, headless=config.BROWSER_HEADLESS,
+            per_keyword=config.SEARCH_PER_KEYWORD,
+            # Регион у hh свой (числовые id), а не общий SEARCH_LOCATION:
+            # «Worldwide» hh не понимает — см. app/config.py.
+            areas=config.HH_AREAS,
+            work_format=config.HH_WORK_FORMAT,
+            experience=config.HH_EXPERIENCE,
+            search_period=config.HH_SEARCH_PERIOD,
+            order_by=config.HH_ORDER_BY,
+            pages=config.HH_PAGES,
+        )
     raise ValueError(f"no searcher for platform: {platform}")

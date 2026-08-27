@@ -15,7 +15,13 @@ from app.domain.candidate import KIND_JOB, Candidate, normalize_url
 from app.domain.search_request import per_keyword_limit
 
 HH_BASE_URL = "https://hh.ru"
-SEARCH_PAGES = 2  # first 1-2 result pages per keyword (spec)
+# Страниц выдачи на один запрос. Страница отдаёт 50 карточек (замер живой
+# выдачи 2026-08-27: [data-qa='vacancy-serp__vacancy'] -> ровно 50), а потолок
+# на слово — SEARCH_PER_KEYWORD=25, поэтому вторая страница открывается только
+# там, где фильтр оставил меньше 25 вакансий. На настройках по умолчанию таких
+# слов ровно одно из 14: «next.js developer» — 23 удалённые вакансии за неделю.
+# Значение по умолчанию, поверх него — HH_PAGES из .env.
+SEARCH_PAGES = 2
 
 # hh.ru data-qa hooks (verified live in Task 8; fix HERE when they drift).
 SEL_CARD = "[data-qa='vacancy-serp__vacancy']"
@@ -26,9 +32,88 @@ SEL_ADDRESS = "[data-qa='vacancy-serp__vacancy-address']"
 SEL_DESCRIPTION = "[data-qa='vacancy-description']"
 _LOGIN_MARKERS = ("/account/login", "captcha")
 
+# Значения фильтров, сняты с ЖИВОЙ панели «Фильтры» 2026-08-27 (имена полей
+# формы: work_format, experience).
+WORK_FORMATS = ("REMOTE", "HYBRID", "ON_SITE", "FIELD_WORK")
+EXPERIENCE_LEVELS = ("noExperience", "between1And3", "between3And6", "moreThan6")
 
-def build_search_url(query: str, page: int = 0) -> str:
-    return f"{HH_BASE_URL}/search/vacancy?text={quote(query)}&page={page}"
+
+def _only_known(values, allowed):
+    """Привести значение фильтра к тому виду, в котором hh его понимает.
+
+    hh на неизвестное значение не ругается и НЕ отдаёт пусто — он молча
+    выбрасывает фильтр и возвращает всё подряд. Замер 2026-08-27, «python
+    developer», все четыре адреса подряд в один заход: work_format=REMOTE —
+    1 712 вакансий, work_format=remote (тот же смысл, другой регистр) — 5 236,
+    ровно столько же, сколько без фильтра вообще; так же отработали
+    work_format=камни, experience=junior и area=999999. Значит опечатка в .env
+    не ломает поиск с грохотом, она тихо
+    возвращает его в состояние «до 2026-08-27» — с перекосом в московские
+    офисы, ради которого фильтр и заводили.
+
+    Отсюда регистр приводится здесь, а не оставляется на человека, а
+    непонятные значения выбрасываются: в адрес они всё равно ничего не вносят,
+    зато в нём видно, что реально применилось.
+    """
+    by_lower = {a.lower(): a for a in allowed}
+    return [by_lower[str(v).strip().lower()]
+            for v in values or () if str(v).strip().lower() in by_lower]
+
+
+def valid_work_formats(values) -> list[str]:
+    return _only_known(values, WORK_FORMATS)
+
+
+def valid_experience(values) -> list[str]:
+    return _only_known(values, EXPERIENCE_LEVELS)
+
+
+def build_search_url(query: str, page: int = 0, areas=(), work_format=(),
+                     experience=(), search_period: int = 0,
+                     order_by: str = "") -> str:
+    """Адрес выдачи hh со всеми фильтрами.
+
+    Параметры сняты с ЖИВОЙ выдачи 2026-08-27: фильтры ставились руками в
+    интерфейсе, адрес читался после применения.
+      * кнопка «Показать N вакансий» в панели «Фильтры» ->
+        /search/vacancy?text=python+developer&search_field=name&search_field=
+        company_name&search_field=description&work_format=REMOTE&...
+      * чип «Регион» -> /search/vacancy?text=python+developer&area=40&...
+      * меню сортировки, пункт «По дате» -> ...&order_by=publication_time
+      * меню периода: search_period=1|3|7|30 (подпись меняется на «За день»,
+        «За три дня», «За неделю», «За месяц»).
+
+    Одноимённые параметры hh складывает по ИЛИ, и только повторением: замер
+    «python developer» — work_format=REMOTE 1 708 вакансий, два параметра
+    REMOTE и HYBRID 2 764, а одно значение «REMOTE,HYBRID» — 5 236, ровно
+    столько же, сколько вообще без фильтра. Запятую hh не понимает и молча
+    снимает фильтр, поэтому список разворачивается в повторяющиеся пары.
+
+    search_field (искать в названии / в компании / в описании) в адрес не
+    кладём: живая выдача пишет туда все три значения, то есть это и есть
+    умолчание hh, а сузить область поиска здесь значит потерять вакансию, где
+    нужное слово стоит только в описании.
+
+    Пустой набор = фильтра нет вовсе. Прежний голый адрес (только text и page)
+    получается сам собой, если ничего не настроено, — обновление не ломает уже
+    работающие прогоны.
+    """
+    parts = [f"text={quote(query)}", f"page={page}"]
+    for area in areas or ():
+        parts.append(f"area={quote(str(area))}")
+    for fmt in work_format or ():
+        parts.append(f"work_format={quote(str(fmt))}")
+    for level in experience or ():
+        parts.append(f"experience={quote(str(level))}")
+    if search_period:
+        # Ноль — «за всё время», а не «за ноль дней». Замер 2026-08-27:
+        # search_period=30 и отсутствие параметра дают одно и то же число
+        # (5 236 по «python developer»), то есть глубже месяца hh и так не
+        # хранит; сужают только 7 (1 913) и 1 (467).
+        parts.append(f"search_period={int(search_period)}")
+    if order_by:
+        parts.append(f"order_by={quote(order_by)}")
+    return f"{HH_BASE_URL}/search/vacancy?" + "&".join(parts)
 
 
 def parse_hh_cards(cards, limit: int) -> list[Candidate]:
@@ -68,10 +153,18 @@ class HHSearcher:
     name = "hh"
 
     def __init__(self, storage_state_path: str, headless: bool = False,
-                 per_keyword: int = 25):
+                 per_keyword: int = 25, areas=None, work_format=None,
+                 experience=None, search_period: int = 0, order_by: str = "",
+                 pages: int = SEARCH_PAGES):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._per_keyword = per_keyword
+        self._areas = [str(a).strip() for a in (areas or []) if str(a).strip()]
+        self._work_format = valid_work_formats(work_format)
+        self._experience = valid_experience(experience)
+        self._search_period = search_period
+        self._order_by = order_by
+        self._pages = max(1, pages)
         self._pw = None
         self._browser = None
         self._page = None
@@ -122,17 +215,31 @@ class HHSearcher:
             ))
         return cards
 
+    def _url(self, query: str, page_n: int) -> str:
+        return build_search_url(
+            query, page_n, areas=self._areas, work_format=self._work_format,
+            experience=self._experience, search_period=self._search_period,
+            order_by=self._order_by)
+
     def search(self, keywords_list, location, limit) -> list[Candidate]:
+        """`location` намеренно не используется: у hh своя география.
+
+        Через run_search сюда приходит общая для всех площадок строка
+        SEARCH_LOCATION («Worldwide») — понятие LinkedIn. hh адресует регионы
+        числовыми id (40 = Казахстан, 113 = Россия, 159 = Астана), подставить
+        туда строку нельзя, поэтому регион у hh задаётся своим списком
+        HH_AREAS. Аргумент остаётся в подписи: она общая для всех searcher'ов.
+        """
         found: list[Candidate] = []
         seen: set[str] = set()
         per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         for query in keywords_list:
             kw_found = 0
-            for page_n in range(SEARCH_PAGES):
+            for page_n in range(self._pages):
                 if kw_found >= per_kw:
                     break
                 try:
-                    self._page.goto(build_search_url(query, page_n),
+                    self._page.goto(self._url(query, page_n),
                                     wait_until="domcontentloaded", timeout=30000)
                 except Exception:  # noqa: BLE001 — one page failing must not kill the rest
                     break
