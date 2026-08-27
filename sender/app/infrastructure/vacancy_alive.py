@@ -23,7 +23,7 @@ JS, распознавание формы, заполнение — она не 
 зеркалит копию интейк-бота (см. tests/test_vacancy_mirror.py): интейку эта
 проверка не нужна, а разъехаться копиям нельзя.
 """
-from app.domain.page_gone import html_says_gone
+from app.domain.page_gone import html_says_gone, redirect_says_gone
 from app.domain.vacancy_text import aggregator_apply_url, is_aggregator_job_url
 # UA берётся из зеркального модуля, а не копируется сюда: строка там одна и
 # объяснена там же («бот-подобный UA придушат hh и LinkedIn»). Второй экземпляр
@@ -80,7 +80,13 @@ def _verdict(url: str, timeout: float, read) -> tuple[str, str]:
         return landed, ""
     if status != 200:
         return "", ""                 # 403/429/5xx/сеть — вердикта нет
-    return (landed if html_says_gone(markup) else ""), markup
+    # Два независимых свидетельства смерти, и второе не стоит ни одного запроса:
+    # адрес, на котором мы оказались, читается всё равно. Замер 2026-08-27 на 215
+    # ссылках отклика с карточек remocate: разметка ловит 85 мёртвых, а ещё 53
+    # отвечают честным 200 и молчат — сайт увёл на заглушку, и виден только
+    # редирект. Что считать «увёл», объяснено в `domain/page_gone.py`.
+    gone = redirect_says_gone(url, landed) or html_says_gone(markup)
+    return (landed if gone else ""), markup
 
 
 def vacancy_gone(url: str, timeout: float = _TIMEOUT_SECONDS, read=None) -> str:
@@ -95,9 +101,10 @@ def vacancy_gone(url: str, timeout: float = _TIMEOUT_SECONDS, read=None) -> str:
     запроса, а единственный способ увидеть то, что видел прогон: карточка на
     remocate живёт своей жизнью, а умирает страница работодателя за ней — все
     четыре мёртвых лида 2026-08-26 были именно такими. Ссылку ищет тот же
-    `aggregator_apply_url`, которым ходит канал, и на тех же условиях:
-    кандидатов больше одного — прыжка нет, потому что угадывать между чужими
-    работодателями нельзя ни здесь, ни там.
+    `aggregator_apply_url`, которым ходит канал, и на тех же условиях: адрес
+    берётся с кнопки отклика, а когда её нет и однозначного кандидата тоже —
+    прыжка нет, потому что угадывать между чужими работодателями нельзя ни
+    здесь, ни там.
     """
     _read = _read_page if read is None else read
     url = (url or "").strip()

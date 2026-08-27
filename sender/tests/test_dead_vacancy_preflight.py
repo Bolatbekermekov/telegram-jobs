@@ -17,7 +17,9 @@
 """
 from app.application.send_plan import dead_vacancy_reason
 from app.domain.lead import STATUS_MANUAL
-from app.domain.page_gone import GONE_NOTE, html_says_gone, page_lines
+from app.domain.page_gone import (
+    GONE_NOTE, html_says_gone, page_lines, redirect_says_gone,
+)
 from app.infrastructure.vacancy_alive import vacancy_gone
 
 # --- разметка снятых вакансий, дословно по форме с живых страниц -------------
@@ -286,3 +288,166 @@ def test_the_note_is_worded_exactly_as_the_channel_words_it():
 
     assert GONE_NOTE == "страница недоступна / вакансия неактуальна"
     assert channel_note is GONE_NOTE
+
+
+# --- смерть, которую видно только по адресу ----------------------------------
+#
+# Замер 2026-08-27: 215 ссылок отклика, снятых с 222 случайных карточек remocate
+# и прочитанных обычным GET. Мёртвых по нынешнему правилу (404/410 плюс текст
+# страницы) — 85. Ещё 53 отвечают ЧЕСТНЫМ 200 и ничего про себя не пишут: сайт
+# молча уводит на свою страницу-заглушку, и единственный след — адрес, на
+# котором мы оказались. Он уже читается (`resp.url`), так что признак не стоит
+# ни одного лишнего запроса.
+#
+# Две формы, обе снятые живьём:
+#
+#   * адрес УКОРОТИЛИ до его же родителя — вакансии в нём больше нет:
+#       fxpro.bamboohr.com/careers/819    -> /careers
+#       wargaming.com/en/careers/vacancy_3329214_nicosia/ -> /en/careers/
+#       scorewarrior.recruitee.com/o/…    -> recruitee.com/   (корень чужого хоста)
+#   * адресу ПРИПИСАЛИ слово «не найдено»:
+#       job-boards.greenhouse.io/checkr/jobs/7733714 -> /checkr?error=true
+#       apply.workable.com/vivid-money/j/D551B1C739/ -> /vivid-money/?not_found=true
+#       ats.rippling.com/chess/jobs/<uuid>          -> /chess/jobs?rr_message=job_not_found
+#       aviasales.com/about/vacancies/4249292      -> /4249292/not-found
+#
+# Проверка на живых: те же 20 вакансий, что стояли в ленте remocate первыми в
+# день замера, — ни одна не помечена. Плюс контроль на одном хосте:
+# `fxpro.bamboohr.com/careers/809` (живая) редиректа не даёт вовсе, а
+# `/careers/819` (снятая) уходит на `/careers`. Списки BambooHR тех же 13
+# компаний подтвердили: ни одного помеченного id в живых вакансиях нет.
+
+def test_a_redirect_up_to_the_parent_page_means_the_posting_is_gone():
+    asked = "https://fxpro.bamboohr.com/careers/819?source=aWQ9ODQ%3D"
+    landed = "https://fxpro.bamboohr.com/careers"
+    assert redirect_says_gone(asked, landed) is True
+
+
+def test_a_redirect_to_a_not_found_marker_means_the_posting_is_gone():
+    assert redirect_says_gone(
+        "https://job-boards.greenhouse.io/checkr/jobs/7733714",
+        "https://job-boards.greenhouse.io/checkr?error=true") is True
+    assert redirect_says_gone(
+        "https://apply.workable.com/vivid-money/j/D551B1C739/",
+        "https://apply.workable.com/vivid-money/?not_found=true") is True
+    assert redirect_says_gone(
+        "https://recruiting.paylocity.com/recruiting/jobs/Details/2758/acme",
+        "https://recruiting.paylocity.com/recruiting/JobNotFound") is True
+
+
+def test_a_marker_appended_below_the_vacancy_counts_too():
+    """Aviasales не укорачивает адрес, а дописывает: `/4249292/not-found`."""
+    assert redirect_says_gone(
+        "https://www.aviasales.com/about/vacancies/4249292",
+        "https://www.aviasales.com/about/vacancies/4249292/not-found") is True
+
+
+def test_landing_on_the_root_of_somebody_elses_host_is_gone():
+    """Recruitee и Personio отправляют снятую вакансию на свою витрину."""
+    assert redirect_says_gone(
+        "https://scorewarrior.recruitee.com/o/senior-system-engineer-2",
+        "https://recruitee.com/") is True
+    assert redirect_says_gone(
+        "https://smartpricing.jobs.personio.com/job/1682529?display=en",
+        "https://www.personio.com/") is True
+
+
+# --- и ни одного из безобидных ------------------------------------------------
+# Похоронить живую вакансию дороже, чем пропустить мёртвую: пропущенная стоит
+# одной генерации, похороненная — самой вакансии. Поэтому правило смотрит только
+# на ПУТЬ и только на его укорачивание.
+
+def test_www_and_scheme_are_not_a_death():
+    assert redirect_says_gone("http://acme.com/jobs/123",
+                              "https://www.acme.com/jobs/123") is False
+    assert redirect_says_gone("https://www.acme.com/jobs/123",
+                              "https://acme.com/jobs/123") is False
+
+
+def test_a_trailing_slash_is_not_a_death():
+    assert redirect_says_gone(
+        "https://careers.zeroavia.com/jobs/5ab171/chief-engineer-kemble-united-kingdom",
+        "https://careers.zeroavia.com/jobs/5ab171/chief-engineer-kemble-united-kingdom/"
+    ) is False
+
+
+def test_a_locale_swap_is_not_a_death():
+    """mediacube.io уводит `/en-AR/` на `/en/`, вакансия та же."""
+    assert redirect_says_gone(
+        "https://mediacube.io/en-AR/vacancies/business-development-manager-96",
+        "https://mediacube.io/en/vacancies/business-development-manager-96") is False
+
+
+def test_a_new_slug_for_the_same_vacancy_is_not_a_death():
+    """Teamtailor дописывает к id название роли, Huntflow переименовал хост."""
+    assert redirect_says_gone(
+        "https://alberblanc.teamtailor.com/jobs/4894006",
+        "https://alberblanc.teamtailor.com/jobs/4894006-quantitative-analyst") is False
+    assert redirect_says_gone(
+        "https://vertex.huntflow.io/vacancy/senior-devops-engineer-1",
+        "https://apicworld.huntflow.io/vacancy/senior-devops-engineer-1") is False
+    assert redirect_says_gone(
+        "https://www.transparent-hiring.com/jobs/tech-recruiter/",
+        "https://www.transparent-hiring.com/jobs/it-recruiter/") is False
+
+
+def test_a_renamed_section_is_not_a_death():
+    """Stripe перевёз `/jobs/search` в `/careers/search`, `gh_jid` на месте."""
+    assert redirect_says_gone("https://stripe.com/jobs/search?gh_jid=7923191",
+                              "https://stripe.com/careers/search?gh_jid=7923191") is False
+
+
+def test_dropping_the_apply_step_is_not_a_death():
+    """`/jobs/<id>/apply` -> `/jobs/<id>`: сняли ДЕЙСТВИЕ, а не вакансию. Обратный
+    ход у Lever ровно такой же и тоже живой: `/<id>/a` -> `/<id>/apply`."""
+    assert redirect_says_gone("https://jobs.acme.com/jobs/123/apply",
+                              "https://jobs.acme.com/jobs/123") is False
+    assert redirect_says_gone(
+        "https://jobs.lever.co/easybrain/14c15acb-eaf8-4f3e-aa42-9dcd8ed8eaca/a",
+        "https://jobs.lever.co/easybrain/14c15acb-eaf8-4f3e-aa42-9dcd8ed8eaca/apply"
+    ) is False
+
+
+def test_losing_a_tracking_param_is_not_a_death():
+    """Путь тот же — вакансия та же, что бы сайт ни сделал с запросом."""
+    assert redirect_says_gone("https://acme.com/jobs/123?utm_source=remocate",
+                              "https://acme.com/jobs/123") is False
+
+
+def test_no_redirect_at_all_is_not_a_death():
+    assert redirect_says_gone("https://acme.com/jobs/123",
+                              "https://acme.com/jobs/123") is False
+    assert redirect_says_gone("https://acme.com/jobs/123", "") is False
+    assert redirect_says_gone("", "https://acme.com/") is False
+
+
+# --- и то же самое через саму проверку ---------------------------------------
+
+def test_a_two_hundred_that_redirected_off_the_vacancy_is_a_dead_lead():
+    """Ровно тот случай, ради которого признак и вводится: сайт отвечает 200,
+    страница-заглушка о себе молчит, а вакансии нет."""
+    asked = "https://job-boards.greenhouse.io/checkr/jobs/7733714"
+    landed = "https://job-boards.greenhouse.io/checkr?error=true"
+    board = ("<html><head><title>Jobs at Checkr</title></head>"
+             "<body><h1>Open roles</h1><a href='/checkr/jobs/1'>Backend</a></body></html>")
+    reads = _Reads({asked: (200, board, landed)})
+
+    assert vacancy_gone(asked, read=reads) == landed
+
+
+def test_the_same_board_reached_by_its_own_address_is_left_alone():
+    """Без редиректа тот же ответ ничего не доказывает: страница-витрина с
+    вакансией внутри — обычное дело (`careers.nebius.com/?gh_jid=…` живая)."""
+    url = "https://careers.nebius.com/?gh_jid=4919123101"
+    board = ("<html><head><title>Open positions at Nebius</title></head>"
+             "<body><h1>Find your role</h1></body></html>")
+
+    assert vacancy_gone(url, read=_Reads({url: (200, board, url)})) == ""
+
+
+def test_a_live_vacancy_that_merely_got_its_address_tidied_survives():
+    asked = "https://careers.zeroavia.com/jobs/5ab171/chief-engineer-kemble"
+    landed = asked + "/"
+    reads = _Reads({asked: (200, LIVE, landed)})
+
+    assert vacancy_gone(asked, read=reads) == ""

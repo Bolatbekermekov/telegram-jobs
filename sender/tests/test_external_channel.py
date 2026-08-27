@@ -151,3 +151,49 @@ def test_the_role_specific_cv_is_the_one_that_travels():
         JOB, OutreachContent(body="x", attachment_path="/под-роль.pdf"))
 
     assert handed["cv"] == "/под-роль.pdf"
+
+
+# --- кнопку берём с кнопки, а не перебором ------------------------------------
+#
+# Замер 2026-08-27, 242 карточки remocate живьём: кнопка «Apply for this job»
+# есть на всех 242, перебор внешних хостов давал верный адрес на 172.
+# Разметка ниже — дословная форма живой карточки: класс `button w-button` (это
+# Webflow, такой же у «Blog» и «Post a job»), перед кнопкой `contact-wrapper`,
+# после — `apply-disclaimer`.
+
+WEBFLOW_APPLY = "https://n26.com/en-eu/careers/positions/6668071"
+WEBFLOW_PAGE = f"""<html><head><title>Director of Reward at N26</title></head><body>
+<a href="/blog" class="button is-secondary is-nav w-button">Blog</a>
+<a href="https://remocate.lemonsqueezy.com" class="button w-button">Post a job</a>
+<h1>Director of Reward and People Analytics</h1>
+<p>Technology and design empower <a href="https://n26.com/en-eu/blog">everything we do</a>.</p>
+<a href="https://jobs.lever.co/other/1">чужая вакансия ниже по ленте</a>
+<div class="contact-wrapper w-condition-invisible"><div>Contact info:&nbsp;</div>
+<a href="#" class="w-dyn-bind-empty"></a></div>
+<a href="{WEBFLOW_APPLY}" class="button w-button">Apply for this job</a>
+<div class="apply-disclaimer">Please mention &quot;I found this job at Remocate!&quot;</div>
+</body></html>"""
+
+
+def test_the_browser_follows_the_button_and_not_the_first_link_of_that_host():
+    """На этой самой карточке перебор возвращал `n26.com/en-eu/blog`: блог
+    упомянут в описании на несколько килобайт раньше кнопки, хост единственный,
+    «неоднозначности» нет — и отклик уходил бы по пресс-релизу."""
+    page = _FakePage(WEBFLOW_PAGE)
+
+    _channel(page, fn=lambda *a, **k: None).send(JOB, OutreachContent(body="x"))
+
+    assert page.visited == [JOB, WEBFLOW_APPLY]
+
+
+def test_a_button_without_an_address_still_goes_to_a_human():
+    """`href="#"` — так Webflow рисует кнопку, когда отклик идёт письмом на
+    контакт из `contact-wrapper`. Страницы отклика нет, угадывать нечего."""
+    page = _FakePage(WEBFLOW_PAGE.replace(
+        f'href="{WEBFLOW_APPLY}" class="button w-button"',
+        'href="#" class="button w-button"'))
+
+    with pytest.raises(ManualApplyRequired, match="не смог однозначно"):
+        _channel(page, fn=lambda *a, **k: None).send(JOB, OutreachContent(body="x"))
+
+    assert page.visited == [JOB]

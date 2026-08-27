@@ -12,6 +12,7 @@
 """
 import html as _html
 import re
+from urllib.parse import urlsplit as _urlsplit
 
 # Как эта находка называется в «Заметке». Константа, а не строка в двух местах:
 # формулировку читает человек, разбирающий лист, и одна находка должна
@@ -110,3 +111,86 @@ def html_says_gone(markup: str) -> bool:
     if not markup:
         return False
     return page_is_gone(page_title(markup), page_lines(markup)[:_TEXT_LIMIT])
+
+
+# --- то же правило, но по АДРЕСУ, на котором мы в итоге оказались -------------
+#
+# Замер 2026-08-27: 215 ссылок отклика, снятых с 222 случайных карточек remocate
+# и прочитанных обычным GET. Мёртвых по правилам выше (404/410 плюс текст
+# страницы) — 85. Ещё 53 отвечают ЧЕСТНЫМ 200 и о себе не пишут ничего: сайт
+# молча уводит на страницу-заглушку, и единственный след — конечный адрес. Он и
+# так уже прочитан (`resp.url` у обычного GET), так что признак не стоит ни
+# одного лишнего запроса.
+#
+# Смертью считаются ровно две формы, обе снятые живьём:
+#
+#   (А) адрес УКОРОТИЛИ до его же родителя — того, что называло вакансию, в нём
+#       больше нет:  `fxpro.bamboohr.com/careers/819` на `/careers`;
+#       `wargaming.com/en/careers/vacancy_3329214_nicosia/` на `/en/careers/`;
+#       `scorewarrior.recruitee.com/o/…` на `recruitee.com/` (корень чужого хоста);
+#   (Б) адресу ПРИПИСАЛИ слово «не найдено»: Greenhouse отвечает `?error=true`,
+#       Workable — `?not_found=true`, Rippling — `?rr_message=job_not_found`,
+#       Paylocity — `/JobNotFound`, Aviasales — `/<id>/not-found`.
+#
+# Всё остальное — не смерть, и это в правиле главное. Похороненная живая вакансия
+# стоит самой вакансии, пропущенная мёртвая — одной генерации, цены несравнимы.
+# Поэтому сравнивается только ПУТЬ и только на укорачивание: `www` и схема,
+# добавленный слэш, смена локали (`/en-AR/` на `/en/` у mediacube), новый слаг
+# той же вакансии (`/jobs/4894006` на `/jobs/4894006-quantitative-analyst` у
+# Teamtailor), переезд на другой хост с тем же путём (`vertex.huntflow.io` на
+# `apicworld.huntflow.io`), потерянный utm — всё это проходит мимо.
+#
+# Проверено на живых: 20 вакансий, стоявших в ленте remocate первыми в день
+# замера, — помечено 0. Контроль на одном хосте: `fxpro.bamboohr.com/careers/809`
+# (живая) редиректа не даёт вовсе, а `/careers/819` (снятая) уходит на
+# `/careers`. Списки BambooHR тринадцати компаний подтвердили каждый вердикт: ни
+# одного помеченного id среди живых вакансий нет.
+
+# Слова, которыми АДРЕС сам говорит «такой вакансии нет». Список закрытый и снят
+# с живых редиректов: догадка здесь стоит дороже пропуска.
+_GONE_URL_RE = re.compile(
+    r"(?i)(?:^|[^a-z0-9])(?:404|not[-_]?found|jobnotfound|"
+    r"no[-_]?longer[-_]?available|error=true)(?:[^a-z0-9]|$)")
+
+# Хвост, который называет ДЕЙСТВИЕ, а не вакансию. Сняв его, сайт не уводит нас
+# с вакансии, а возвращает на неё: `/jobs/123/apply` на `/jobs/123` — это
+# по-прежнему та же живая вакансия. Обратный ход у Lever ровно такой же
+# (`/<id>/a` на `/<id>/apply`) и тоже живой.
+_ACTION_TAIL = frozenset({"apply", "apply-now", "application", "applications",
+                          "a", "form", "submit"})
+
+
+def _address_parts(url: str):
+    """(хост без `www`, сегменты пути, строка запроса)."""
+    s = _urlsplit((url or "").strip())
+    segments = [p for p in s.path.split("/") if p]
+    return s.netloc.lower().split(":")[0].removeprefix("www."), segments, s.query
+
+
+def redirect_says_gone(asked: str, landed: str) -> bool:
+    """Увёл ли редирект ПРОЧЬ со страницы вакансии, а не поправил её адрес."""
+    if not asked or not landed or asked == landed:
+        return False
+    asked_host, asked_path, asked_query = _address_parts(asked)
+    landed_host, landed_path, landed_query = _address_parts(landed)
+    if (asked_host, asked_path, asked_query) == (landed_host, landed_path,
+                                                 landed_query):
+        return False            # `www`, схема, слэш — адрес тот же самый
+
+    # (Б) слово «не найдено» ПОЯВИЛОСЬ по дороге. «Появилось» здесь несущее:
+    # вакансия, у которой такое слово в собственном адресе, редиректом его не
+    # заслужила.
+    was = "/".join(asked_path) + "?" + asked_query
+    now = "/".join(landed_path) + "?" + landed_query
+    if _GONE_URL_RE.search(now) and not _GONE_URL_RE.search(was):
+        return True
+
+    # (А) путь укоротили до собственного родителя. Только путь: потерянный или
+    # добавленный параметр вакансию не отменяет, а витрина с вакансией внутри —
+    # обычное дело (`careers.nebius.com/?gh_jid=…` живая).
+    if len(landed_path) >= len(asked_path):
+        return False
+    if asked_path[:len(landed_path)] != landed_path:
+        return False
+    dropped = asked_path[len(landed_path):]
+    return any(part.lower() not in _ACTION_TAIL for part in dropped)
