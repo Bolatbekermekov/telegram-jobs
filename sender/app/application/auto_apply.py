@@ -48,6 +48,25 @@ _LABEL_RULES = [
     (re.compile(r"notice period|availability", re.I), lambda p: p.notice_period),
 ]
 
+# Правила выше, у которых верное значение РОВНО ОДНО: это способ работодателя с
+# нами связаться и наше имя. Если такого значения нет среди вариантов поля, то
+# верного варианта там нет вовсе, и выбрать любой — значит сообщить чужой
+# контакт. Такое поле остаётся человеку.
+#
+# Замер 2026-07-29, LinkedIn Easy Apply: «Email address» приходит выпадающим
+# списком ПОДТВЕРЖДЁННЫХ адресов аккаунта, и адреса из профиля среди них может
+# не быть (см. test_prefilled_fields).
+#
+# Остальное в списке — место, страна, срок выхода — вопросы ВЫБОРА: набор
+# ответов задаёт сам работодатель («Locations*Required»: Tbilisi / Limassol /
+# Paphos), и профиль про этот набор знать не обязан.
+#
+# Подписи взяты у самих правил, а не написаны заново: «\bname\b» покрывает
+# first/last/full/given/family name, «surname» словом не режется.
+_ONE_TRUE_VALUE_RE = re.compile(
+    r"e-?mail|phone|mobile|\btel\b|\bname\b|surname|linkedin|telegram|телеграм|"
+    r"\btg\b|github|portfolio|personal website|website|\burl\b", re.I)
+
 
 @dataclass
 class FillAction:
@@ -495,6 +514,29 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
                     # account's verified addresses.
                     idx = _option_index_for(f.options, val)
                     if idx is None:
+                        # Ответ у нас есть, но в ЭТОМ списке его нет. Обязательное
+                        # поле-ВЫБОР отдаём модели — тем же доводом, что строкой
+                        # выше, где факта в профиле нет вовсе, и что в
+                        # `_load_combobox_options`, где готовый ответ мимо словаря
+                        # виджета тоже становится вопросом к модели.
+                        #
+                        # Замер живьём 2026-08-27, TradingView на Teamtailor
+                        # (лента remocate): «Locations*Required» — не согласие и
+                        # не одиночная галочка, а ТРИ чекбокса под одним `name`,
+                        # то есть вопрос с вариантами Tbilisi / Limassol / Paphos.
+                        # Подпись ловило правило `location`, профиль отвечал
+                        # «Astana, Kazakhstan», и одиннадцать заполненных полей
+                        # из двенадцати держало это одно. Знать БОЛЬШЕ и делать
+                        # МЕНЬШЕ — расхождение, а не осторожность: то же поле без
+                        # слова «location» в подписи модель отвечает уже сейчас,
+                        # веткой «f.options и обязательное» ниже.
+                        #
+                        # Контакты сюда не попадают, см. `_ONE_TRUE_VALUE_RE`.
+                        # Необязательное не трогаем и здесь: отправку оно не
+                        # держит, а цена ответа на чужой необязательный виджет
+                        # измерена 2026-07-29 (переключатель языка LinkedIn).
+                        if field_is_required(f) and not _ONE_TRUE_VALUE_RE.search(low):
+                            return FillAction(field=f, needs_ai=True, source="ai")
                         return FillAction(field=f, source="unmapped")
                     return FillAction(field=f, choice_index=idx,
                                       value=f.options[idx], source="profile")

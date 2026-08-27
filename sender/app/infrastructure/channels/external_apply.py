@@ -592,6 +592,34 @@ def scrape_until_ready(page, attempts: int = 6, interval_ms: int = 1500):
 # Some ATS hide the form behind an "Apply"/"Easy Apply" button that opens it in a
 # modal or a later step (e.g. Ceipal). On an otherwise-empty page we click one and
 # re-scrape for the revealed form.
+#
+# «I'm interested» (SmartRecruiters) сюда СОЗНАТЕЛЬНО не добавлено. Замер
+# 2026-08-27 видимым браузером на живой вакансии
+# (`jobs.smartrecruiters.com/SmartRecruiters/744000143115219-…`) показал, что
+# добавление ничего бы не дало и увело бы прогон дальше в тупик:
+#   * до `_reveal_apply_form` дело не доходит вовсе. На странице вакансии висит
+#     iframe чат-бота `eu.winstonchat.smartrecruiters.com`, `known_ats_iframe`
+#     считает его формой вендора, маршрут выходит IFRAME_ATS, и `_enter_ats_iframe`
+#     уводит браузер В ЧАТ-БОТА. Оттуда Route.NONE и «форма не распознана»;
+#   * за самой ссылкой «I'm interested» (их на странице пять, все ведут на
+#     `…/oneclick-ui/company/<slug>/publication/<uuid>`) лежит форма из
+#     веб-компонентов `spl-*`: 1811 shadow root, и 14 контролов из 15 живут
+#     ВНУТРИ них. `_SCRAPE_JS` спрашивает `document.querySelectorAll`, поэтому
+#     видит ровно один — скрытый «Upload profile image». Ни `name`, ни `label`,
+#     ни `required` ни у одного поля нет;
+#   * а `SEL_SUBMIT` в обычном DOM совпадает ровно с одной кнопкой, и это
+#     «Apply With Indeed». То есть форма, объявленная заполненной, кликнула бы
+#     именно её.
+# Раскрытие тут ни при чём: нужен обход shadow DOM в скрапере, и до него
+# добавлять кнопку значит менять честный ручной отклик на клик в чужой сервис.
+#
+# Попутно там же видно, что `known_ats_iframe` сравнивает подстроку со ВСЕМ
+# адресом iframe, а не с его хостом: на той же форме DataDome отдаёт
+# `geo.captcha-delivery.com/captcha/?…&referer=https%3A%2F%2Fjobs.smartrecruiters
+# .com%2F…`, и «smartrecruiters.com» из ПАРАМЕТРА засчитывается за вендора.
+# Сегодня этим путём никто не ходит (маршрут туда и не доходит), поэтому правило
+# не тронуто, но чинить его придётся вместе с shadow DOM — иначе первый же
+# успешный клик уведёт браузер в капчу.
 _REVEAL_SEL = (
     "button:has-text('Easy Apply'), a:has-text('Easy Apply'), "
     "button:has-text('Apply now'), a:has-text('Apply now'), "
