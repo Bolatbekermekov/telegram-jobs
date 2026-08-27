@@ -2,17 +2,31 @@ from app.application.relevance import score_and_filter
 from app.domain.candidate import Candidate
 
 
-def _cand(title):
+def _cand(title, location=""):
     return Candidate(platform="linkedin", kind="job", url=f"https://x/{title}",
-                     title=title, company="Co", salary="", location="", summary="")
+                     title=title, company="Co", salary="", location=location,
+                     summary="")
 
 
 class _Scorer:
     def __init__(self, mapping):
         self._m = mapping
+        self.seen = []
 
-    def score(self, profile, title, description):
+    def score(self, profile, title, description, location=""):
+        self.seen.append((title, location))
         return self._m[title]
+
+
+def test_the_candidates_location_is_handed_to_the_scorer():
+    """Страну вакансии знает только кандидат — площадка кладёт её в
+    `Candidate.location`, а не в описание. Пока `score_and_filter` её не
+    передавал, полстраницы профиля про право на работу и спонсорство визы
+    модель применяла к тексту, где страны может не быть вовсе."""
+    scorer = _Scorer({"A": (80, "fit")})
+    score_and_filter([_cand("A", "🇰🇿 Kazakhstan")], lambda c: "desc", scorer,
+                     "P", threshold=60, max_jobs=10)
+    assert scorer.seen == [("A", "🇰🇿 Kazakhstan")]
 
 
 def test_keeps_only_at_or_above_threshold_and_sets_summary():

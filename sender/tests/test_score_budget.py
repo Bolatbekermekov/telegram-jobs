@@ -21,6 +21,7 @@ class _Cand:
     def __init__(self, url, score):
         self.url = url
         self.title = url
+        self.location = ""
         self.summary = ""
         self._score = score
 
@@ -31,7 +32,7 @@ class _Scorer:
     def __init__(self):
         self.calls = 0
 
-    def score(self, profile, title, description):
+    def score(self, profile, title, description, location=""):
         self.calls += 1
         return description, "почему"
 

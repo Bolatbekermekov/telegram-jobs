@@ -593,7 +593,7 @@ class _LevelScorer:
     def __init__(self):
         self.seen = []
 
-    def score(self, profile, title, description):
+    def score(self, profile, title, description, location=""):
         self.seen.append((title, description))
         junk = ("senior", "lead", "principal", "staff", "manager")
         return (20, "уровень выше") if any(w in title.lower() for w in junk) \

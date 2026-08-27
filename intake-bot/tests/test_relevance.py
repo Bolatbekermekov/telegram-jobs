@@ -6,16 +6,20 @@ lead.py. Тесты здесь стерегут ровно то, ради чег
 (иначе оценки поиска и интейка несравнимы) и ОДНО намеренное расхождение в
 разборе ответа.
 """
+import inspect
 from pathlib import Path
 
 import pytest
 
+from app.application import relevance
 from app.application.relevance import build_score_prompt, parse_score_response
 from app.search_profile import SEARCH_PROFILE
 
 # Профиль поиска у интейка свой (в Vercel .txt из sender/ не доезжает — см.
 # app/search_profile.py), но копия обязана быть дословной.
 _LAPTOP_PROFILE = Path(__file__).resolve().parents[2] / "sender" / "search_profile.txt"
+_LAPTOP_RELEVANCE = (Path(__file__).resolve().parents[2]
+                     / "sender" / "app" / "application" / "relevance.py")
 
 
 @pytest.mark.skipif(not _LAPTOP_PROFILE.exists(),
@@ -38,6 +42,40 @@ def test_the_bundled_profile_still_matches_the_laptops_one():
 
 
 
+def _laptop_source() -> str:
+    if not _LAPTOP_RELEVANCE.exists():
+        pytest.skip("ноутбучной половины рядом нет — деплой интейка отдельный")
+    return _LAPTOP_RELEVANCE.read_text(encoding="utf-8")
+
+
+def _constant_block(text: str, name: str) -> str:
+    """Исходник константы вида `name = (` … `\\n)` целиком, вместе со скобками."""
+    start = text.index(f"{name} = (")
+    return text[start:text.index("\n)", start) + 2]
+
+
+def test_the_prompt_is_still_the_laptops_prompt_word_for_word():
+    """Ловит расхождение промптов так же механически, как расхождение профилей.
+
+    Формулировка промпта — это не стиль, а вердикт: правка 2026-08-28 (шкала
+    вместо «будь строгим», уровни только из профиля, стаж и неудалённый формат
+    балл не снижают) подняла #422 QA Engineer с 18..38 (0 проходов из 38) до
+    68..80 (22 из 22) при пороге 60. Уедет одна копия — оценка пересланной
+    вакансии и оценка найденной поиском лягут в одну колонку одной таблицы,
+    означая разное.
+    """
+    theirs = _laptop_source()
+    ours = Path(inspect.getfile(relevance)).read_text(encoding="utf-8")
+    assert _constant_block(ours, "_SCORE_SYSTEM") in theirs, (
+        "_SCORE_SYSTEM разошёлся с sender/app/application/relevance.py — "
+        "правится одна копия, переносится в обе."
+    )
+    assert inspect.getsource(build_score_prompt) in theirs, (
+        "build_score_prompt разошлась с sender/app/application/relevance.py — "
+        "правится одна копия, переносится в обе."
+    )
+
+
 def test_prompt_carries_the_profile_and_the_vacancy():
     """Без профиля в промпте модель оценивает «хорошая ли это вакансия вообще»,
     а вопрос стоит «подходит ли она ЭТОМУ человеку»."""
@@ -50,6 +88,19 @@ def test_prompt_carries_the_profile_and_the_vacancy():
     assert "НЕ senior/lead/staff" in user
     assert "Principal Software Engineer" in user
     assert "lead the platform team" in user
+
+
+def test_the_location_reaches_the_model_and_an_empty_one_leaves_no_label():
+    """Пересланной вакансии локация не достаётся (у интейка есть только текст
+    сообщения), но параметр здесь такой же, как у ноутбучной копии: разъедься
+    сигнатуры — и промпты перестали бы совпадать дословно, ради чего копия и
+    сделана. Пустая локация подписи после себя не оставляет.
+    """
+    _, user = build_score_prompt("PROF", "TITLE", "DESC", "🇰🇿 Kazakhstan")
+    assert "🇰🇿 Kazakhstan" in user
+
+    _, without = build_score_prompt("PROF", "TITLE", "DESC")
+    assert "Локация" not in without
 
 
 def test_reads_the_score_and_the_reason():
