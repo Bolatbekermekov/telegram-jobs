@@ -9,6 +9,7 @@ from app.domain.channel import (
 from app.infrastructure.channels import linkedin as _li
 from app.infrastructure.channels.linkedin import (
     SEL_FILE_INPUT,
+    SEL_POST_ACTOR,
     SEL_INVITE_SEND,
     SEL_MENU_CONNECT,
     SEL_MESSAGE_BTN,
@@ -21,6 +22,7 @@ from app.infrastructure.channels.linkedin import (
     connect_with_note,
     fill_and_send,
     message_or_connect,
+    read_post_author_href,
 )
 
 
@@ -632,3 +634,139 @@ def test_a_page_with_no_message_affordance_reads_as_pending():
     from app.infrastructure.channels.linkedin import read_invite_state
     page = _FakePage({})            # no pending marker, no connect, no compose
     assert read_invite_state(page, "https://linkedin.com/in/x") == "pending"
+
+
+# --- Автор поста, когда ника нет в адресе -----------------------------------
+# Обе ссылки — из очереди прогона 2026-08-27, обе упали «не удалось определить
+# автора»: вместо ника автора в слаге стоят хештеги.
+_SHARE_POST = ("https://www.linkedin.com/posts/hiring-react-remotejobs-"
+               "share-7494732972525260800--qGz/")
+_NAMED_POST = ("https://www.linkedin.com/posts/ilyas-mustafin-44b575144_"
+               "x-activity-7-CmC7/")
+# Ровно те href'ы, что отдал блок автора на живых страницах 2026-08-27.
+_ACTOR_PERSON = "https://www.linkedin.com/in/rodion?miniProfileUrn=x"
+_ACTOR_COMPANY = "https://www.linkedin.com/company/eliza-black/posts"
+
+
+class _FakeActorPage:
+    """Страница поста: список href'ов, которые отдаёт селектор автора."""
+
+    def __init__(self, hrefs):
+        self.hrefs = list(hrefs)
+        self.actions = []
+
+    def goto(self, url, **kw):
+        self.actions.append(("goto", url))
+
+    def wait_for_load_state(self, state=None, timeout=None):
+        pass
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def locator(self, selector):
+        page = self
+
+        class _Locator:
+            def count(self_inner):
+                return len(page.hrefs) if selector == SEL_POST_ACTOR else 0
+
+            @property
+            def first(self_inner):
+                return self_inner
+
+            def get_attribute(self_inner, name):
+                return page.hrefs[0] if name == "href" else None
+
+        return _Locator()
+
+
+def test_read_post_author_href_takes_the_link_from_the_actor_block():
+    page = _FakeActorPage(["https://www.linkedin.com/in/chrisguindon?miniProfileUrn=x"])
+    assert read_post_author_href(page, _SHARE_POST) == \
+        "https://www.linkedin.com/in/chrisguindon?miniProfileUrn=x"
+    assert ("goto", _SHARE_POST) in page.actions
+
+
+def test_read_post_author_href_is_empty_when_the_actor_never_renders():
+    assert read_post_author_href(_FakeActorPage([]), _SHARE_POST) == ""
+
+
+def test_a_repost_answers_with_the_actor_of_the_update_itself():
+    """Голый репост измерен живьём 2026-08-27 (лента активности chrisguindon,
+    9 постов, 5 из них с шапкой «X поделился(лась) этим контентом»): в блоке
+    автора там стоит ИСХОДНЫЙ автор, а репостнувший — только в шапке. То есть
+    первая ссылка блока и есть тот, чей это пост."""
+    page = _FakeActorPage(["https://www.linkedin.com/in/thabang-mash?x=1",
+                           "https://www.linkedin.com/in/chrisguindon?x=2"])
+    assert "thabang-mash" in read_post_author_href(page, _SHARE_POST)
+
+
+def test_send_reads_the_author_off_the_page_when_the_url_has_none(monkeypatch):
+    called = _patch_routes(monkeypatch)
+    monkeypatch.setattr(_li, "read_post_author_href",
+                        lambda page, url: _ACTOR_PERSON)
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+    ch.send(_SHARE_POST, OutreachContent(body="hi"))
+    assert called == {"msg": "https://www.linkedin.com/in/rodion/"}
+
+
+def test_a_url_that_already_names_its_author_never_opens_the_post(monkeypatch):
+    """Адрес остаётся быстрым путём: где ник в слаге есть, лишняя загрузка
+    страницы — это и время, и ещё один запрос к площадке, которая только что
+    банила аккаунт."""
+    called = _patch_routes(monkeypatch)
+
+    def _boom(page, url):
+        raise AssertionError("страницу поста открывать было незачем")
+
+    monkeypatch.setattr(_li, "read_post_author_href", _boom)
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+    ch.send(_NAMED_POST, OutreachContent(body="hi"))
+    assert called == {"msg": "https://www.linkedin.com/in/ilyas-mustafin-44b575144/"}
+
+
+def test_a_company_authored_post_is_manual_not_a_message(monkeypatch):
+    """Автор — страница компании: ни «Сообщение», ни «Контакт» у неё не бывает.
+    Это работа для человека (`manual`), а не `failed`, и уж точно не попытка
+    писать в никуда."""
+    called = _patch_routes(monkeypatch)
+    monkeypatch.setattr(_li, "read_post_author_href",
+                        lambda page, url: _ACTOR_COMPANY)
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+    with pytest.raises(ManualApplyRequired, match="компании"):
+        ch.send(_SHARE_POST, OutreachContent(body="hi"))
+    assert called == {}
+
+
+def test_an_unreadable_author_still_fails_loud(monkeypatch):
+    called = _patch_routes(monkeypatch)
+    monkeypatch.setattr(_li, "read_post_author_href", lambda page, url: "")
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+    with pytest.raises(ChannelError, match="не удалось определить автора"):
+        ch.send(_SHARE_POST, OutreachContent(body="hi"))
+    assert called == {}
+
+
+def test_invite_state_reads_the_author_off_the_page_too(monkeypatch):
+    """`invite_state` держит в цели ту же ссылку на пост, что и `send` — значит
+    и разбирать её должен так же, иначе приглашённый лид упирается в ту же
+    ошибку на каждом прогоне."""
+    seen = {}
+
+    def _fake(page, url):
+        seen["url"] = url
+        return "pending"
+
+    monkeypatch.setattr(_li, "read_invite_state", _fake)
+    monkeypatch.setattr(_li, "read_post_author_href",
+                        lambda page, url: _ACTOR_PERSON)
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+
+    assert ch.invite_state(_SHARE_POST) == "pending"
+    assert seen["url"] == "https://www.linkedin.com/in/rodion/"

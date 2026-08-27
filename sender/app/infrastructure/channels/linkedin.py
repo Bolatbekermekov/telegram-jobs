@@ -10,7 +10,10 @@ from app.domain.channel import (
     ChannelError, ChannelUnavailable, InvitePendingError, InviteWithoutNoteError,
     ManualApplyRequired, OutreachContent, RateLimitedError,
 )
-from app.domain.candidate import linkedin_action_for_url, post_author_profile_url
+from app.domain.candidate import (
+    is_company_actor, linkedin_action_for_url, post_actor_profile_url,
+    post_author_profile_url,
+)
 
 
 # External-apply jobs ("Подать заявку" / "Apply", which open the company's own
@@ -163,6 +166,39 @@ SEL_INVITE_SEND_PLAIN = (
     "[role='dialog'] button:has-text('Send without'), "
     "button[aria-label*='Отправить без' i], button[aria-label*='Send without' i]")
 _NOTE_LIMIT = 200
+
+# Автор поста в разметке САМОЙ страницы — запасной путь, когда ника нет в адресе
+# (см. post_author_profile_url). Снято живьём 2026-08-27 на трёх постах: двух
+# упавших лидах-«share» и одном обычном. Блок автора у всех троих один и тот же,
+# и он на странице ЕДИНСТВЕННЫЙ (`.update-components-actor__container` — ровно
+# одно совпадение на каждой из трёх страниц; комментарии подписаны своим классом,
+# `comments-comment-meta__image-link`, и сюда не попадают):
+#
+#   <div class="update-components-actor__container display-flex flex-grow-1">
+#     <a class="ydrLbMSVZ… update-components-actor__image relative"
+#        href="https://www.linkedin.com/company/eliza-black/posts">…</a>
+#     <div class="update-components-actor__meta ">
+#       <a class="ydrLbMSVZ… update-components-actor__meta-link"
+#          aria-label="Просмотреть: Eliza Black 9 827 отслеживающих"
+#          href="https://www.linkedin.com/company/eliza-black/posts">
+#         <span class="update-components-actor__title">…Eliza Black…</span>
+#
+# У автора-человека тот же блок и тот же класс, отличается только адрес:
+#   href="https://www.linkedin.com/in/chrisguindon?miniProfileUrn=urn%3Ali%3A…"
+#   aria-label="Просмотреть: Christopher Guindon Подтверждено • 3-й и выше …"
+#
+# Классы берём ТОЛЬКО из семейства `update-components-actor__*`: всё, что стоит
+# рядом с ними в разметке (`ydrLbMSVZHsJNPURekwbzEFPglJhlYMLUbaE`,
+# `MGYBuURqwxOkWilXDtrbaSpTJEtqVnFbqkC`), — хеш конкретной сборки, как и у
+# кнопки отклика выше. Блочное имя `.update-components-actor` без `__…` не
+# подходит тоже: живьём оно дало 0 совпадений на всех трёх страницах, LinkedIn
+# оставил только имена элементов. Два хука вместо одного — на случай, если одно
+# из имён уедет: href у обоих, по замеру, один и тот же.
+SEL_POST_ACTOR = ("a.update-components-actor__meta-link, "
+                  "a.update-components-actor__image")
+# Блок автора монтируется клиентом уже после domcontentloaded. Столько же ждут
+# кнопку отправки; страница поста тяжелее профиля из-за комментариев.
+_POST_ACTOR_TIMEOUT_MS = 15000
 
 # Конец предложения: знак, за которым идёт пробел или конец строки. Просмотр
 # вперёд обязателен — точка внутри «Atlanti.ai» или «t.me» концом мысли не
@@ -525,6 +561,36 @@ def read_invite_state(page, profile_url: str) -> str:
     if page.locator(SEL_COMPOSE).count() == 0:
         return "pending"                   # not a profile card we can read
     return "accepted"
+
+
+def read_post_author_href(page, post_url: str) -> str:
+    """Ссылка на автора поста, снятая с открытой страницы («» — не нашли).
+
+    Возвращается СЫРОЙ href, без разбора: чей он — человека или страницы
+    компании — решает домен (`post_actor_profile_url` / `is_company_actor`),
+    здесь только работа с DOM, как и во всём остальном файле.
+
+    Про репост. У голого репоста в этом блоке стоит ИСХОДНЫЙ автор, а тот, кто
+    репостнул, — только в шапке `.update-components-header` («X поделился(лась)
+    этим контентом», отдельный класс, под селектор не подпадает). Измерено
+    живьём 2026-08-27 на ленте активности: 9 постов, 5 с такой шапкой, и в блоке
+    автора у них `/in/thabang-mash`, `/in/anwesha-das-1247121a2`,
+    `/company/eclipse-foundation/posts`, `/showcase/alpha-omega-oss/posts` —
+    никогда не сам репостнувший. Это ровно то, что нужно: у вакансии, которую
+    просто передали дальше, нанимает исходный автор, а не передавший.
+    `.first` оставлен и на случай репоста С КОММЕНТАРИЕМ (такого в замере не
+    попалось): там блоков будет два, и первый — того, чей это апдейт, то есть
+    чей текст мы и прочитали в лиде.
+    """
+    page.goto(post_url, wait_until="domcontentloaded")
+    _settle(page)
+    actor = page.locator(SEL_POST_ACTOR)
+    if not _wait_until(page, lambda: actor.count() > 0, _POST_ACTOR_TIMEOUT_MS):
+        return ""
+    try:
+        return actor.first.get_attribute("href") or ""
+    except Exception:  # noqa: BLE001 — перерисовка отцепляет хэндл; автора нет
+        return ""
 
 
 def connect_with_note(page, note: str) -> None:
@@ -947,11 +1013,7 @@ class LinkedInChannel:
                 self._external_apply(target, content)
             return
         if action == "post":
-            # A hiring post: message its author (id is embedded in the post URL).
-            author = post_author_profile_url(target)
-            if not author:
-                raise ChannelError(f"LinkedIn пост: не удалось определить автора: {target}")
-            target = author
+            target = self._post_author(target)   # пишем автору поста
         try:
             message_or_connect(self._page, target, content,
                                allow_note=not self._note_quota_spent)
@@ -959,21 +1021,54 @@ class LinkedInChannel:
             self._note_quota_spent = True
             raise
 
+    def _post_author(self, post_url: str) -> str:
+        """Кому писать по ссылке на пост.
+
+        Быстрый путь — адрес: у обычной ссылки ник автора стоит в слаге, и
+        открывать ради него страницу незачем (лишняя загрузка — это и время, и
+        ещё один запрос к площадке, которая только что банила аккаунт).
+        Запасной — сама страница: у «share»-ссылки из ленты по тегам вместо ника
+        стоят хештеги, и до этой правки такой лид уходил в `failed`, ничего не
+        отправив (прогон 2026-08-27, оба поста в очереди).
+
+        Автор-КОМПАНИЯ — не ошибка, а работа для человека. У страницы компании
+        нет ни «Сообщение», ни «Установить контакт» (ровно на этом сегодня упал
+        и лид `/in/uzumteam/`), так что писать некому: ни личным сообщением, ни
+        запросом на контакт. Идти на страницу и убеждаться в этом кнопками —
+        значит платить ещё одной загрузкой за уже известный ответ, а молча
+        отправлять «в никуда» нельзя тем более. Поэтому `ManualApplyRequired`, а
+        не `ChannelError`: `failed` — приговор лиду, с которым всё в порядке, а
+        `manual` кладёт его человеку на стол вместе со ссылкой (в посте почти
+        всегда есть куда написать — комментарий, почта, телеграм в тексте).
+        """
+        author = post_author_profile_url(post_url)
+        if author:
+            return author
+        href = read_post_author_href(self._page, post_url)
+        profile = post_actor_profile_url(href)
+        if profile:
+            return profile
+        if is_company_actor(href):
+            raise ManualApplyRequired(
+                f"LinkedIn: пост опубликован страницей компании ({href}) — "
+                f"ни сообщения, ни запроса на контакт ей не отправить, "
+                f"отклик руками: {post_url}")
+        raise ChannelError(f"LinkedIn пост: не удалось определить автора: {post_url}")
+
     def invite_state(self, target: str) -> str:
         """pending | accepted | gone for a profile we already invited.
 
         Resolves a post url to its author first, exactly as `send` does — an
         `invited` lead very often points at the hiring post, not at the person.
+        Через тот же `_post_author`, а не своей копией правила: в таблице у лида
+        остаётся ссылка на ПОСТ, и «share»-ссылка иначе упиралась бы здесь в ту
+        же ошибку на каждом прогоне.
         """
         if self._page is None:
             raise ChannelError("LinkedInChannel.start() not called")
         target = target.strip()
         if linkedin_action_for_url(target) == "post":
-            author = post_author_profile_url(target)
-            if not author:
-                raise ChannelError(
-                    f"LinkedIn пост: не удалось определить автора: {target}")
-            target = author
+            target = self._post_author(target)
         return read_invite_state(self._page, target)
 
     def _external_apply(self, job_url: str, content: OutreachContent) -> None:

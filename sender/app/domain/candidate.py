@@ -48,15 +48,53 @@ def linkedin_action_for_url(url: str) -> str:
     return "dm"
 
 
-# A post URL embeds the author's public id in its slug:
+# Автора поста дают два независимых источника, и адрес — первый из них: он
+# ничего не стоит. У обычной ссылки на пост слаг начинается с ника автора:
 #   /posts/<author-public-id>_<text-slug>-activity-<id>-<code>
 _POST_AUTHOR_RE = re.compile(r"/posts/([^/_]+)_")
 
 
 def post_author_profile_url(url: str) -> str | None:
-    """Return the profile URL of a post's author, or None if it can't be parsed
-    (e.g. a company `/feed/update/` share with no personal author in the slug)."""
+    """Профиль автора поста, вынутый ИЗ АДРЕСА, или None, если его там нет.
+
+    Ника в адресе нет у двух живых форм: `/feed/update/urn:li:activity:…` и
+    «share»-ссылки из ленты по тегам — `/posts/hiring-react-remotejobs-share-
+    <id>-<хеш>/`, где вместо ника стоят ХЕШТЕГИ. В прогоне 2026-08-27 оба
+    поста-лида в очереди пришли второй формой и оба упали «не удалось
+    определить автора»: взять его отсюда действительно неоткуда. Тогда автора
+    снимают с самой страницы поста — см. `post_actor_profile_url`.
+    """
     m = _POST_AUTHOR_RE.search(url)
     if not m:
         return None
     return f"https://www.linkedin.com/in/{m.group(1)}/"
+
+
+# Второй источник: ссылка на автора, снятая с открытой страницы поста. Сюда
+# приходит только её href — какой разметкой он подписан, знает канал. Две формы,
+# обе сняты живьём 2026-08-27:
+#   https://www.linkedin.com/in/chrisguindon?miniProfileUrn=urn%3Ali%3Afsd_…  — человек
+#   https://www.linkedin.com/company/eliza-black/posts                       — компания
+# Хвост после ника (`?miniProfileUrn=…`, `/posts`) отбрасывается: профиль
+# открывают чистым адресом, как и по быстрому пути выше.
+_ACTOR_PROFILE_RE = re.compile(r"(?:^|linkedin\.com)/in/([^/?#]+)")
+# Компания, витрина (`/showcase/`) и учебное заведение — это СТРАНИЦЫ, а не люди:
+# ни «Сообщение», ни «Установить контакт» на них не бывает в принципе.
+_ACTOR_ORG_RE = re.compile(r"(?:^|linkedin\.com)/(?:company|showcase|school)/")
+
+
+def post_actor_profile_url(href: str) -> str | None:
+    """Профиль ЧЕЛОВЕКА по ссылке на автора поста, или None, если это не человек.
+
+    None здесь значит «писать некому», а не «не разобрал»: отличить одно от
+    другого помогает `is_company_actor`, и канал отвечает на них по-разному.
+    """
+    m = _ACTOR_PROFILE_RE.search(href or "")
+    if not m:
+        return None
+    return f"https://www.linkedin.com/in/{m.group(1)}/"
+
+
+def is_company_actor(href: str) -> bool:
+    """Пост опубликован страницей компании (витрины, вуза), а не человеком."""
+    return bool(_ACTOR_ORG_RE.search(href or ""))
