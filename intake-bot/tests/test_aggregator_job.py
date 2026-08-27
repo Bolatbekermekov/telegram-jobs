@@ -169,3 +169,97 @@ def test_ambiguity_is_refused_rather_than_guessed():
 def test_a_page_without_an_employer_link_returns_empty():
     page = PAGE.replace(APPLY, "https://www.remocate.app/jobs/other")
     assert aggregator_apply_url(page, JOB) == ""
+
+
+# --- кнопка отклика, а не первая попавшаяся ссылка того же хоста --------------
+#
+# Замер 2026-08-27, 242 карточки remocate, читанные живьём: кнопка «Apply for
+# this job» стоит на всех 242, а правило «единственный внешний хост» выше дало
+# верный адрес только на 172. Шестьдесят раз оно промолчало (хостов на странице
+# оказывалось несколько), четыре раза увело не туда. Худший из четырёх —
+# карточка `director-of-reward-and-people-analytics`: правило вернуло
+# `n26.com/en-eu/blog`, потому что блог упомянут в описании на несколько
+# килобайт раньше кнопки. Хост единственный, «неоднозначности» нет, и письмо
+# писалось бы по блогу.
+#
+# Разметка ниже снята дословно с этой карточки: те же классы, тот же
+# `contact-wrapper` перед кнопкой, тот же `apply-disclaimer` после.
+
+N26_APPLY = "https://n26.com/en-eu/careers/positions/6668071"
+N26_PAGE = f"""<!doctype html><html><head>
+<title>Director of Reward and People Analytics at N26</title></head><body>
+<a href="/blog" class="button is-secondary is-nav w-button">Blog</a>
+<a href="https://remocate.lemonsqueezy.com" class="button w-button">Post a job</a>
+<h1>Director of Reward and People Analytics</h1>
+<p>Technology and design empower <a href="https://n26.com/en-eu/blog">everything we do</a>
+and it&#x27;s how we are building the global banking platform.</p>
+<p>Read our <a href="https://n26.com/en-eu/diversity-and-inclusion">website</a> to learn more.</p>
+<div class="contact-wrapper w-condition-invisible"><div>Contact info:&nbsp;</div>
+<a href="#" class="w-dyn-bind-empty"></a></div>
+<a href="{N26_APPLY}" class="button w-button">Apply for this job</a>
+<div class="apply-disclaimer">Please mention &quot;I found this job at Remocate!&quot;</div>
+</body></html>"""
+N26_JOB = "https://www.remocate.app/jobs/director-of-reward-and-people-analytics"
+
+
+def test_the_button_beats_a_link_that_merely_stands_earlier():
+    """Ровно тот случай, где прежнее правило отдавало блог N26."""
+    assert aggregator_apply_url(N26_PAGE, N26_JOB) == N26_APPLY
+
+
+def test_the_boards_own_buttons_are_not_the_apply_button():
+    """Класс `button w-button` у Webflow носят ВСЕ кнопки сайта — и «Blog», и
+    «Post a job». Одного класса мало, поэтому кнопка узнаётся ещё и по надписи."""
+    page = N26_PAGE.replace(f'<a href="{N26_APPLY}" class="button w-button">'
+                            'Apply for this job</a>', "")
+    assert "lemonsqueezy" not in aggregator_apply_url(page, N26_JOB)
+
+
+def test_an_apply_link_inside_the_description_is_not_the_button():
+    """Одной надписи тоже мало: на карточке
+    `middle-fullstack-developer-next-js-hono-drizzle-ai-sdk` в тексте стоит
+    ссылка «Apply here» на Google Forms, и она не кнопка — у неё нет класса."""
+    page = N26_PAGE.replace(
+        "<h1>", '<a href="https://forms.gle/wZU1k9ySLjQWwNUPA">Apply here</a><h1>')
+    assert aggregator_apply_url(page, N26_JOB) == N26_APPLY
+
+
+def test_two_employers_on_the_page_no_longer_make_it_ambiguous():
+    """Раньше вторая ссылка работодателя обнуляла ответ. Кнопка спор решает: её
+    поставил сам агрегатор, а не наш перебор."""
+    page = N26_PAGE.replace("<h1>", '<a href="https://jobs.lever.co/other/1">x</a><h1>')
+    assert aggregator_apply_url(page, N26_JOB) == N26_APPLY
+
+
+def test_a_button_without_an_address_means_the_card_has_no_apply_page():
+    """`href="#"` — это не «кнопку не нашли». Так Webflow рисует ту же кнопку,
+    когда отклик идёт письмом: рядом лежит заполненный `contact-wrapper`. Таких
+    карточек 7 из 242, и на одной из них прежнее правило вернуло
+    `88publishing.com` — главную страницу компании, где отклика нет вовсе."""
+    page = N26_PAGE.replace(f'href="{N26_APPLY}" class="button w-button"',
+                            'href="#" class="button w-button"')
+    assert aggregator_apply_url(page, N26_JOB) == ""
+
+
+def test_the_contact_beside_an_empty_button_never_becomes_the_apply_url():
+    """Почту и телеграм из `contact-wrapper` открывает не браузер: `page.goto`
+    на `mailto:` падает, а маршрут EMAIL начинается уже на странице
+    работодателя. Отдать их отсюда как адрес отклика значит сломать оба."""
+    page = N26_PAGE.replace(
+        '<a href="#" class="w-dyn-bind-empty"></a>',
+        '<a href="mailto:zarina@88projects.org">zarina@88projects.org</a>'
+        '<a href="https://t.me/tzarina">https://t.me/tzarina</a>')
+    page = page.replace(f'href="{N26_APPLY}" class="button w-button"',
+                        'href="#" class="button w-button"')
+    assert aggregator_apply_url(page, N26_JOB) == ""
+
+
+def test_a_button_pointing_back_at_the_board_is_not_an_employer():
+    page = N26_PAGE.replace(N26_APPLY, "https://www.remocate.app/jobs/other")
+    assert aggregator_apply_url(page, N26_JOB) == ""
+
+
+def test_the_old_single_host_rule_still_answers_when_there_is_no_button():
+    """Прежнее правило осталось запасным вариантом, а не выброшено: страница без
+    кнопки (другой агрегатор, другая вёрстка) по-прежнему разбирается им."""
+    assert aggregator_apply_url(PAGE, JOB) == APPLY
