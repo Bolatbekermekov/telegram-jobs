@@ -38,3 +38,19 @@ def test_build_remotive():
 def test_build_hh():
     from app.infrastructure.search.hh_search import HHSearcher
     assert isinstance(build_searcher("hh"), HHSearcher)
+
+
+def test_hh_gets_its_filters_from_config():
+    """Настройки из .env должны доехать до searcher'а, а не осесть в конфиге.
+
+    Ровно этого не хватало до 2026-08-27: `location` в HHSearcher.search
+    принимался и не использовался, а больше фильтров и не было — hh искался
+    голым текстовым запросом.
+    """
+    from app import config
+
+    s = build_searcher("hh")
+    assert s._work_format == config.HH_WORK_FORMAT
+    assert s._areas == config.HH_AREAS
+    assert s._search_period == config.HH_SEARCH_PERIOD
+    assert s._pages == config.HH_PAGES
