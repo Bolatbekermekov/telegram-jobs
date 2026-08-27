@@ -1,6 +1,6 @@
 from app.domain.candidate import (
     Candidate, CANDIDATE_COLUMNS, normalize_url, linkedin_action_for_url,
-    post_author_profile_url,
+    is_company_actor, post_actor_profile_url, post_author_profile_url,
 )
 
 
@@ -45,6 +45,59 @@ def test_post_author_profile_url_none_when_unparseable():
     assert post_author_profile_url(
         "https://www.linkedin.com/feed/update/urn:li:activity:747/") is None
     assert post_author_profile_url("https://www.linkedin.com/in/jane") is None
+
+
+def test_post_author_profile_url_none_for_a_hashtag_share_link():
+    """Прогон 2026-08-27: оба поста-лида в очереди пришли ссылкой вида
+    `/posts/<хештеги>-share-<id>-<хеш>/` — вместо ника автора там теги, и оба
+    упали «не удалось определить автора». Из адреса его взять НЕЛЬЗЯ, и правило
+    честно отвечает пусто; автора снимают со страницы (post_actor_profile_url)."""
+    assert post_author_profile_url(
+        "https://www.linkedin.com/posts/hiring-frontendengineer-"
+        "frontenddeveloper-share-7495708880526544896-xQBG/") is None
+    assert post_author_profile_url(
+        "https://www.linkedin.com/posts/hiring-react-remotejobs-"
+        "share-7494732972525260800--qGz/") is None
+
+
+def test_post_actor_profile_url_drops_the_mini_profile_query():
+    """Снято живьём 2026-08-27 со страницы поста: у ссылки на автора-человека
+    к нику приклеен `?miniProfileUrn=…`. Открывать профиль надо чистым."""
+    assert post_actor_profile_url(
+        "https://www.linkedin.com/in/chrisguindon?miniProfileUrn=urn%3Ali%3A"
+        "fsd_profile%3AACoAAANmiAEBHnimmxw__4Q-byyqxFgLRfHJWI8"
+    ) == "https://www.linkedin.com/in/chrisguindon/"
+
+
+def test_post_actor_profile_url_takes_a_relative_href():
+    # На странице соседние ссылки на профили — относительные; актор сегодня
+    # абсолютный, но полагаться на это незачем.
+    assert post_actor_profile_url("/in/jane-doe/") == \
+        "https://www.linkedin.com/in/jane-doe/"
+
+
+def test_a_company_page_is_not_a_person_to_write_to():
+    """Оба упавших поста 2026-08-27 подписаны СТРАНИЦАМИ компаний
+    (`/company/eliza-black/posts`, `/company/hr-diya-l2/posts`). У страницы нет
+    ни «Сообщение», ни «Установить контакт» — писать там некому."""
+    href = "https://www.linkedin.com/company/eliza-black/posts"
+    assert post_actor_profile_url(href) is None
+    assert is_company_actor(href)
+
+
+def test_a_showcase_page_counts_as_a_company_too():
+    # Витрина: снята живьём в репостах — `/showcase/alpha-omega-oss/posts`.
+    href = "https://www.linkedin.com/showcase/alpha-omega-oss/posts"
+    assert post_actor_profile_url(href) is None
+    assert is_company_actor(href)
+
+
+def test_an_unreadable_actor_href_is_neither_person_nor_company():
+    # Пусто и «что-то третье» — это не «компания», а «не смог прочитать»:
+    # канал на них отвечает разными исходами, и путать их нельзя.
+    assert post_actor_profile_url("") is None
+    assert not is_company_actor("")
+    assert not is_company_actor("https://www.linkedin.com/feed/hashtag/hiring/")
 
 
 def test_candidate_is_a_dataclass_with_fields():
