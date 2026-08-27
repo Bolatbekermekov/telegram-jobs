@@ -53,6 +53,9 @@ def build_searcher(platform: str):
         return RemocateSearcher(
             feed_url=config.REMOCATE_FEED_URL,
             pages=config.REMOCATE_PAGES,
+            # Второй проход — по главной: разделы не пересекаются, а у 102
+            # вакансий категории нет вовсе, и видны они только там.
+            home_pages=config.REMOCATE_HOME_PAGES,
             user_agent=config.HTTP_USER_AGENT,
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )
