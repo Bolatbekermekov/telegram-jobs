@@ -219,9 +219,11 @@ class _Feed:
 def test_search_walks_pages_and_stops_at_the_configured_depth():
     """Глубина — это ответ на замер, а не круглое число.
 
-    Доля мёртвых вакансий по страницам ленты (2026-08-27, случайные выборки):
-    1-я — 15%, 3-я — 25%, 10-я — 75%, 30-я — 60%, 70-я — 70%. Обрыв лежит между
-    третьей и десятой, поэтому по умолчанию берутся первые три страницы.
+    Доля мёртвых вакансий по страницам ленты — сплошная проверка 2026-08-27 всех
+    200 карточек первых десяти страниц тем же `vacancy_alive`, что стоит в
+    прогоне: 1-я 20%, 2-я 35%, 3-я 25%, 4-я 20%, 5-я 20%, 6-я 55%, 7-я 60%,
+    8-я 40%, 9-я 35%, 10-я 70%. Четвёртая и пятая живы ровно как первая, обрыв
+    начинается с шестой, поэтому по умолчанию берутся первые пять страниц.
     """
     feed = _Feed([
         _page([_card("p1", "Backend Developer", "A")], next_page="?c74bbb03_page=2"),
@@ -357,16 +359,16 @@ def test_zero_pages_falls_back_to_the_default_depth():
 
     В соседних настройках ноль значит «ограничения нет» (см.
     search_request.per_keyword_limit), и здесь такое правило было бы вредным: в
-    ленте 102 страницы, а живой запас — первые три. Пустое или нулевое значение
+    ленте 102 страницы, а живой запас — первые пять. Пустое или нулевое значение
     возвращает умолчание.
     """
     feed = _Feed([_page([_card(f"p{i}", "Backend Developer", "A"),],
-                        next_page=f"?c74bbb03_page={i + 1}") for i in range(1, 6)])
+                        next_page=f"?c74bbb03_page={i + 1}") for i in range(1, 8)])
     s = RemocateSearcher(feed_url=FEED, pages=0)
     s._page = feed
     s.search(["backend developer"], "Worldwide", limit=50)
 
-    assert len(feed.requested) == DEFAULT_PAGES == 3
+    assert len(feed.requested) == DEFAULT_PAGES == 5
 
 
 def test_start_stop_are_noops():
