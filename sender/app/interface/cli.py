@@ -113,6 +113,55 @@ def _sent_note(channel, attachment, attach_enabled: bool) -> str:
     return f"{note}\n{qa}" if qa else note
 
 
+def _remember_contact(history, lead, platform: str) -> None:
+    """Запомнить на этот прогон, что до человека мы уже дотянулись.
+
+    История читается один раз перед циклом, поэтому всё, что случилось в этом
+    же прогоне, обязано дописываться сюда — иначе второй лид на тот же адрес
+    видит его нетронутым. Одно определение на всех, кто до человека дотянулся,
+    ровно потому, что расхождение здесь и было багом: отправка себя записывала,
+    а запрос на контакт без письма — нет.
+
+    Адрес идёт через `normalize_address`, а не как есть: тот же профиль
+    приходит и с хвостовым слэшем, и без него, и без приведения к одному виду
+    два лида на одного человека выглядят как два разных адреса.
+    """
+    if history is None:
+        return
+    history.append(SentRecord(platform=platform,
+                              address=normalize_address(lead.target),
+                              vacancy=lead.vacancy_context or lead.raw_text,
+                              sent_at=datetime.now(), lead_id=lead.lead_id))
+
+
+def _record_invited(repo, lead, platform: str, history=None,
+                    note: str = "") -> None:
+    """Запрос на контакт ушёл без письма: записать это и в лист, и в память прогона.
+
+    Прогон 2026-08-26, поймано живьём. Лид #432 ушёл на
+    `https://www.linkedin.com/in/fadaee/` голым запросом на контакт и встал в
+    `invited`. Через ДВАДЦАТЬ МИНУТ в том же прогоне подошёл лид #479 с той же
+    ссылкой — и защита от повторов его не остановила. Второй запрос не ушёл
+    только потому, что прогон убили руками; в очереди ждала такая же пара
+    (#483 повторяет #474).
+
+    Дыра была ровно в памяти ВНУТРИ прогона, а не в чтении листа: `invited`
+    лист и так отдаёт как состоявшееся обращение (`record_to_sent`), но история
+    читается один раз до цикла, а дописывал в неё только `_record_sent` — и
+    приглашение, которое отправкой намеренно не считается, мимо него проходило.
+
+    Цена бага не в одной лишней строке: человек получает второй запрос на
+    контакт от того же незнакомца, и на это тратится месячная квота приглашений
+    LinkedIn, которая и так исчерпана — иначе письмо ушло бы вместе с запросом.
+
+    Память пополняется ПЕРЕД записью в лист и независимо от её исхода, по той
+    же причине, что и в `_record_sent`: запрос уже у человека, и для защиты от
+    повтора важно это, а не то, приняла ли таблица строку.
+    """
+    _remember_contact(history, lead, platform)
+    repo.mark_invited(lead, note=note)
+
+
 def _record_sent(repo, lead, body: str, platform: str, history=None,
                  note: str = "") -> bool:
     """Write a delivered send to the sheet; report whether the write landed.
@@ -130,11 +179,7 @@ def _record_sent(repo, lead, body: str, platform: str, history=None,
     ко второй отправке — а без этого списка два лида на один адрес в одном
     прогоне уходят оба, потому что история читается один раз до цикла.
     """
-    if history is not None:
-        history.append(SentRecord(platform=platform,
-                                  address=normalize_address(lead.target),
-                                  vacancy=lead.vacancy_context or lead.raw_text,
-                                  sent_at=datetime.now(), lead_id=lead.lead_id))
+    _remember_contact(history, lead, platform)
     try:
         repo.mark_sent(lead, body, STATUS_SENT, note=note)
         return True
@@ -696,7 +741,14 @@ def run() -> None:
                 # and messages them properly when they do. mark_invited, а не
                 # mark_status: вместе со статусом кладётся дата, иначе ждать
                 # ответа будет нечем и _followup_invited закроет лид сразу.
-                repo.mark_invited(lead, note=result.error)
+                #
+                # `sent_history` пополняется наравне с отправкой: «не отправка»
+                # — правда про письмо, но не про человека, запрос на контакт он
+                # получил. Раньше эта строка мимо истории проходила, и второй
+                # лид на тот же профиль в том же прогоне защиту не встречал
+                # (#432 и #479, 2026-08-26).
+                _record_invited(repo, lead, platform, sent_history,
+                                note=result.error)
                 print(f"🤝 Запрос на контакт БЕЗ письма [{platform}] — жду подтверждения "
                       f"(лид #{lead.lead_id} в 'invited').")
             elif result.manual:
