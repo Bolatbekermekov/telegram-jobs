@@ -1,3 +1,5 @@
+import pytest
+
 from app.domain.candidate import KIND_JOB
 from app.infrastructure.search.remotive_search import (
     RemotiveSearcher, parse_remotive_jobs, strip_html, to_candidate,
@@ -74,14 +76,21 @@ def test_search_drops_non_matching_titles():
     assert s.search(["backend developer"], "Worldwide", limit=10) == []
 
 
-def test_search_survives_payload_error():
+def test_search_reports_a_network_failure_instead_of_returning_nothing():
+    """То же, что у RemoteOK: молчаливый `[]` на сбое сети — ложь.
+
+    Здесь она дороже, чем кажется: лента Remotive и в исправном состоянии
+    отдаёт 18 вакансий (замер 2026-08-27), из которых новых обычно ноль. То
+    есть «пусто» — ожидаемый ответ площадки, и на его фоне упавший запрос не
+    заметил бы никто и никогда."""
     s = RemotiveSearcher()
 
     def boom():
         raise RuntimeError("503 Service Unavailable")
 
     s._payload = boom
-    assert s.search(["backend"], "Worldwide", limit=5) == []
+    with pytest.raises(RuntimeError, match="503"):
+        s.search(["backend"], "Worldwide", limit=5)
 
 
 def test_start_stop_are_noops():

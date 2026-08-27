@@ -91,3 +91,36 @@ def test_done_message_names_what_the_pause_left_out():
 
 def test_done_message_without_a_pause_is_unchanged():
     assert "паузе" not in search_done_message(["hh"], 1).lower()
+
+
+# --- Chrome Wellfound не поднят ----------------------------------------------
+#
+# Замер 2026-08-27: в прогоне Wellfound отдал ноль, и единственным следом этого
+# в отчёте была строка «• wellfound: 0 с, ошибка» — без причины. В консоли
+# лежал сырой текст patchright «connect ECONNREFUSED 127.0.0.1:9222», который
+# читается как поломка кода, а не как «ты не запустил make login_wellfound».
+# Зависимость надо называть ДО поиска, а не расшифровывать после.
+
+from app.application.notify import wellfound_offline_message  # noqa: E402
+
+
+def test_offline_message_names_the_platform_and_the_command_that_fixes_it():
+    msg = wellfound_offline_message(["linkedin", "wellfound"], chrome_up=False)
+
+    assert "wellfound" in msg.lower()
+    assert "make login_wellfound" in msg
+
+
+def test_no_message_while_the_chrome_answers():
+    assert wellfound_offline_message(["wellfound"], chrome_up=True) == ""
+
+
+def test_no_message_when_wellfound_is_not_in_this_run():
+    """Порт проверяется всегда, а вот говорить о нём есть смысл только тогда,
+    когда площадку в этом прогоне собирались трогать: на паузе или в
+    `make search_hh` её в списке нет, и предупреждение было бы шумом."""
+    assert wellfound_offline_message(["hh", "remotive"], chrome_up=False) == ""
+
+
+def test_offline_message_ignores_case_and_spaces_in_platform_names():
+    assert wellfound_offline_message([" Wellfound "], chrome_up=False) != ""
