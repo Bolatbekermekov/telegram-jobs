@@ -1,7 +1,7 @@
 """Use-case: generate a personalized outreach message for a lead."""
 from app.domain.contacts import Contacts, canonicalize, parse_contacts
 from app.domain.lead import Lead
-from app.domain.message_language import detect_language, language_source
+from app.domain.message_language import language_for
 from app.domain.signature import localize_signature
 
 
@@ -42,9 +42,10 @@ class GenerateMessage:
         `vacancy_context` всегда русский: интейк суммирует русским промптом и
         сохранить язык оригинала не просит. Пока язык брали оттуда, английские
         вакансии получали русские письма — лид #441 (стажировка в Бангалоре)
-        так и ушёл через Easy Apply. Разбор источника — в `language_source`.
+        так и ушёл через Easy Apply. Разбор источника — в `language_for`: там
+        же учтено, что у одноязычной площадки язык известен и без текста.
         """
-        return detect_language(language_source(lead))
+        return language_for(lead)
 
     def execute(self, lead: Lead, cv_text: str = "") -> str:
         body = self._ai.generate(
