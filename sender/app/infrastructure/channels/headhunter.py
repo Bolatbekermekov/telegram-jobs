@@ -70,7 +70,20 @@ _LOGIN_MARKERS = ("/account/login", "/login", "captcha")
 SEL_CHAT_OPEN_BTN = ("[data-qa='open-vacancy-chat']:visible, "
                      "[data-qa='vacancy-response-link-view-topic']:visible")
 SEL_CHAT_NEWTAB_BTN = "[data-qa='chatik-open-in-new-tab-button']"
-SEL_CHAT_MSG = "textarea[data-qa='chatik-new-message-text']:visible"
+# Поле сообщения в чате. ДВА имени, и это не перестраховка: замер 2026-08-27
+# (снимок .hh_chat_debug/hh_chat_no_message_box.html) показал, что hh переехал на
+# дизайн-систему magritte и прежнее имя `chatik-new-message-text` в разметке
+# исчезло — 0 совпадений, — а поле стало родовым `text-input` внутри контейнера
+# `chatik-message-input`. Композер при этом раскрывался нормально: письмо
+# терялось ровно на опознании поля, и работодатели получали голый отклик.
+#
+# Одного `text-input` мало: такое имя носит любой текстовый ввод страницы,
+# включая поиск в шапке, а письмо, напечатанное в строку поиска, не дойдёт
+# никому и в логе не отзовётся. Поэтому обязателен контейнер чата.
+#
+# Старое имя оставлено первым: hh раскатывает интерфейс не всем сразу.
+SEL_CHAT_MSG = ("textarea[data-qa='chatik-new-message-text']:visible, "
+                "[data-qa='chatik-message-input'] textarea[data-qa='text-input']:visible")
 SEL_CHAT_FILE_INPUT = "input[data-qa='upload-file-input']"
 SEL_CHAT_SEND_ENABLED = "button[data-qa='chatik-do-send-message']:not([disabled])"
 # Чат вакансии по своей воле НЕ открывается: на странице отклика, где переписка
