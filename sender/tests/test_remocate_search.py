@@ -6,11 +6,12 @@
 """
 from app.domain.candidate import KIND_JOB, normalize_url
 from app.infrastructure.search.remocate_search import (
-    DEFAULT_PAGES, RemocateSearcher, next_page_url, parse_remocate_cards,
-    strip_html, to_candidate,
+    DEFAULT_HOME_PAGES, DEFAULT_PAGES, REMOCATE_HOME_URL, RemocateSearcher,
+    next_page_url, parse_remocate_cards, strip_html, to_candidate,
 )
 
 FEED = "https://www.remocate.app/job-categories/development"
+HOME = "https://www.remocate.app/"
 
 
 def _card(slug, title, company, location="🌎 World", salary="$115,000 – $195,500",
@@ -216,6 +217,36 @@ class _Feed:
         return self.pages[len(self.requested) - 1]
 
 
+def _feed(base, pages_cards, page_hash) -> dict:
+    """Лента как {адрес: разметка} — для проверок, где лент ДВЕ.
+
+    Хеш листалки у каждой ленты свой: у раздела `c74bbb03_page`, у главной
+    `ee7bb4b9_page` (снято с живых страниц 2026-08-27). Он и меняется при
+    пересборке сайта, поэтому парсер обязан брать ссылку со страницы, а не
+    собирать её сам — здесь это проверяется тем, что хеши разные.
+    """
+    out = {}
+    for i, cards in enumerate(pages_cards):
+        url = base if i == 0 else f"{base}?{page_hash}_page={i + 1}"
+        nxt = f"?{page_hash}_page={i + 2}" if i + 1 < len(pages_cards) else ""
+        out[url] = _page(cards, next_page=nxt)
+    return out
+
+
+class _Site:
+    """Сайт-заглушка: несколько лент сразу, ответ по адресу, порядок запросов."""
+
+    def __init__(self, *feeds):
+        self.pages = {}
+        for f in feeds:
+            self.pages.update(f)
+        self.requested = []
+
+    def __call__(self, url):
+        self.requested.append(url)
+        return self.pages[url]
+
+
 def test_search_walks_pages_and_stops_at_the_configured_depth():
     """Глубина — это ответ на замер, а не круглое число.
 
@@ -230,7 +261,7 @@ def test_search_walks_pages_and_stops_at_the_configured_depth():
         _page([_card("p2", "Frontend Developer", "B")], next_page="?c74bbb03_page=3"),
         _page([_card("p3", "QA Engineer", "C")], next_page="?c74bbb03_page=4"),
     ])
-    s = RemocateSearcher(feed_url=FEED, pages=2)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=2)
     s._page = feed
 
     found = s.search(["backend developer", "frontend developer", "qa engineer"],
@@ -242,7 +273,7 @@ def test_search_walks_pages_and_stops_at_the_configured_depth():
 
 def test_search_stops_when_the_feed_runs_out_of_pages():
     feed = _Feed([_page([_card("p1", "Backend Developer", "A")], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=5)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=5)
     s._page = feed
 
     assert len(s.search(["backend developer"], "Worldwide", limit=50)) == 1
@@ -256,7 +287,7 @@ def test_search_filters_by_role_words_in_the_title():
         _card("a", "Senior Backend Engineer", "A"),
         _card("b", "Senior Scrum Master", "B"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = feed
 
     found = s.search(["backend developer"], "Worldwide", limit=50)
@@ -277,7 +308,7 @@ def test_search_does_not_repeat_a_job_that_slid_to_the_next_page():
         _page([slid], next_page="?c74bbb03_page=2"),
         _page([slid, _card("p2", "QA Engineer", "B")], next_page=""),
     ])
-    s = RemocateSearcher(feed_url=FEED, pages=3)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
     s._page = feed
 
     found = s.search(["backend developer", "qa engineer"], "Worldwide", limit=50)
@@ -290,7 +321,7 @@ def test_search_honours_the_limit():
         _card("a", "Backend Developer", "A"),
         _card("b", "Backend Developer", "B"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=3)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
     s._page = feed
 
     assert len(s.search(["backend developer"], "Worldwide", limit=1)) == 1
@@ -301,7 +332,7 @@ def test_describe_serves_the_cached_listing_description():
         _card("a", "Backend Developer", "A",
               desc="<p>Go and <b>Postgres</b> in production.</p>"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = feed
     s.search(["backend developer"], "Worldwide", limit=50)
 
@@ -316,7 +347,7 @@ def test_describe_is_empty_for_an_unknown_url():
 def test_search_starts_from_a_clean_cache_every_run():
     # Воркер держит searcher между прогонами: без очистки кэш описаний рос бы
     # весь день и отдавал бы текст вакансии, которой в сегодняшней ленте нет.
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = _Feed([_page([_card("a", "Backend Developer", "A")], next_page="")])
     s.search(["backend developer"], "Worldwide", limit=50)
     s._page = _Feed([_page([_card("b", "QA Engineer", "B")], next_page="")])
@@ -338,7 +369,7 @@ def test_search_keeps_what_it_already_collected_when_a_page_fails():
                          next_page="?c74bbb03_page=2")
         raise RuntimeError("503 Service Unavailable")
 
-    s = RemocateSearcher(feed_url=FEED, pages=3)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
     s._page = feed
 
     assert [c.title for c in s.search(["backend developer"], "Worldwide", limit=50)] \
@@ -349,7 +380,7 @@ def test_search_survives_the_very_first_page_failing():
     def boom(url):
         raise RuntimeError("timeout")
 
-    s = RemocateSearcher(feed_url=FEED, pages=3)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
     s._page = boom
     assert s.search(["backend developer"], "Worldwide", limit=50) == []
 
@@ -364,7 +395,7 @@ def test_zero_pages_falls_back_to_the_default_depth():
     """
     feed = _Feed([_page([_card(f"p{i}", "Backend Developer", "A"),],
                         next_page=f"?c74bbb03_page={i + 1}") for i in range(1, 8)])
-    s = RemocateSearcher(feed_url=FEED, pages=0)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=0)
     s._page = feed
     s.search(["backend developer"], "Worldwide", limit=50)
 
@@ -375,6 +406,164 @@ def test_start_stop_are_noops():
     s = RemocateSearcher()
     s.start()
     s.stop()   # ни браузера, ни сессии — страницы публичные
+
+
+# --- второй проход: главная -------------------------------------------------
+#
+# Разделов у remocate 15, и вакансия лежит РОВНО в одном: попарные пересечения
+# выкачанных целиком разделов равны нулю (замер 2026-08-27, вся лента — 273
+# страницы, 5459 карточек). Значит раздел `development` физически не может
+# показать вакансию, которую в него не положили. Хуже того, у части объявлений
+# поле категории в CMS пустое вовсе, и такие видны ТОЛЬКО на главной: из первых
+# 60 карточек главной у 12 нет видимого тега категории, четыре из них проходят
+# предфильтр — Senior Security Engineer (Scorewarrior), AI Search Visibility
+# Specialist, Community / Social Media Manager, AI Motion Designer.
+
+def test_the_home_page_is_walked_as_a_second_shallower_pass():
+    """Главная — ДОПОЛНЕНИЕ к разделу, а не замена ему, и идёт после него.
+
+    При равном бюджете запросов раздел даёт вдвое больше (замер 2026-08-27, те
+    же 14 слов из SEARCH_KEYWORDS): 5 страниц development — 100 карточек, 79
+    прошли предфильтр; 5 страниц главной — те же 100 карточек, но прошли 35, и
+    только 8 из них не встретились в development. Поэтому глубокий проход —
+    раздел, а главная снимает лишь верхушку.
+    """
+    site = _Site(
+        _feed(FEED, [[_card("d1", "Backend Developer", "A")],
+                     [_card("d2", "Frontend Developer", "B")],
+                     [_card("d3", "QA Engineer", "C")]], "c74bbb03"),
+        _feed(HOME, [[_card("h1", "Python Developer", "D")],
+                     [_card("h2", "Mobile Developer", "E")],
+                     [_card("h3", "AI Engineer", "F")]], "ee7bb4b9"),
+    )
+    s = RemocateSearcher(feed_url=FEED, pages=2, home_url=HOME, home_pages=1)
+    s._page = site
+
+    found = s.search(["backend developer", "frontend developer", "qa engineer",
+                      "python developer", "mobile developer", "ai engineer"],
+                     "Worldwide", limit=50)
+
+    assert [c.title for c in found] == [
+        "Backend Developer", "Frontend Developer", "Python Developer"]
+    assert site.requested == [FEED, FEED + "?c74bbb03_page=2", HOME]
+
+
+def test_a_job_the_section_already_gave_is_not_taken_again_from_the_home_page():
+    """Главная показывает и то, что лежит в разделах, — дедуп общий на оба прохода.
+
+    Замер 2026-08-27: из 100 карточек первых пяти страниц главной 30 уже стояли
+    в первых пяти страницах раздела development (на трёх страницах — 15 из 60).
+    Без общего `seen` каждая такая вакансия заняла бы второй слот в бюджете
+    скоринга и стоила бы второго вызова модели: дедупликация в листе не спасает,
+    она сравнивает с СОХРАНЁННЫМИ строками, а два одинаковых URL внутри одной
+    выдачи для неё оба новые.
+    """
+    both = _card("shared", "Backend Developer", "Acme")
+    site = _Site(
+        _feed(FEED, [[both, _card("d2", "QA Engineer", "B")]], "c74bbb03"),
+        _feed(HOME, [[both, _card("h2", "Mobile Developer", "C")]], "ee7bb4b9"),
+    )
+    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s._page = site
+
+    found = s.search(["backend developer", "qa engineer", "mobile developer"],
+                     "Worldwide", limit=50)
+
+    assert [c.url for c in found] == [
+        "https://www.remocate.app/jobs/shared",
+        "https://www.remocate.app/jobs/d2",
+        "https://www.remocate.app/jobs/h2",
+    ]
+
+
+def test_the_home_pass_caches_its_descriptions_like_the_section_one():
+    # describe() отвечает из кэша ленты, и вакансия с главной не должна быть
+    # исключением — иначе скорер получил бы пустое описание и оценил заголовок.
+    orphan = _card("h1", "AI Engineer", "B",
+                   desc="<p>We run PyTorch and <b>Triton</b></p>")
+    site = _Site(
+        _feed(FEED, [[_card("d1", "Backend Developer", "A")]], "c74bbb03"),
+        _feed(HOME, [[orphan]], "ee7bb4b9"),
+    )
+    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s._page = site
+    s.search(["backend developer", "ai engineer"], "Worldwide", limit=50)
+
+    assert s.describe("https://www.remocate.app/jobs/h1") == "We run PyTorch and Triton"
+    assert len(site.requested) == 2     # describe() ничего не качает
+
+
+def test_the_home_pass_still_runs_when_the_section_feed_breaks():
+    """Обрыв раздела не отменяет главную — это РАЗНЫЕ ленты.
+
+    Бесхозные вакансии (поле категории в CMS пустое) видны только здесь, и
+    503-я на второй странице раздела не повод их не смотреть.
+    """
+    home = _feed(HOME, [[_card("h1", "AI Engineer", "B")]], "ee7bb4b9")
+
+    def flaky(url):
+        if url == HOME:
+            return home[HOME]
+        raise RuntimeError("503 Service Unavailable")
+
+    s = RemocateSearcher(feed_url=FEED, pages=3, home_url=HOME, home_pages=1)
+    s._page = flaky
+
+    found = s.search(["backend developer", "ai engineer"], "Worldwide", limit=50)
+    assert [c.title for c in found] == ["AI Engineer"]
+
+
+def test_the_limit_is_one_budget_for_both_passes():
+    # `limit` — потолок на площадку за прогон (SEARCH_LIMIT_PER_PLATFORM=250), а
+    # не на ленту. Если его выбрал раздел, за главной идти уже не на что.
+    site = _Site(
+        _feed(FEED, [[_card("d1", "Backend Developer", "A"),
+                      _card("d2", "QA Engineer", "B")]], "c74bbb03"),
+        _feed(HOME, [[_card("h1", "AI Engineer", "C")]], "ee7bb4b9"),
+    )
+    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s._page = site
+
+    found = s.search(["backend developer", "qa engineer", "ai engineer"],
+                     "Worldwide", limit=2)
+
+    assert [c.title for c in found] == ["Backend Developer", "QA Engineer"]
+    assert site.requested == [FEED]     # до главной бюджет не дожил
+
+
+def test_zero_home_pages_falls_back_to_the_default_home_depth():
+    """Правило то же, что у REMOCATE_PAGES: ноль и пусто = умолчание.
+
+    Две настройки глубины стоят в .env соседними строками, и разное значение
+    нуля у них было бы ловушкой. Три страницы главной — это ответ на замер
+    2026-08-27: новых (не виданных разделом) карточек, прошедших предфильтр,
+    первая страница даёт 3, вторая +2, третья +2, ЧЕТВЁРТАЯ +0, пятая +1.
+    """
+    site = _Site(
+        _feed(FEED, [[_card("d1", "Backend Developer", "A")]], "c74bbb03"),
+        _feed(HOME, [[_card(f"h{i}", "Backend Developer", "B")]
+                     for i in range(1, 7)], "ee7bb4b9"),
+    )
+    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=0)
+    s._page = site
+    s.search(["backend developer"], "Worldwide", limit=50)
+
+    assert len(site.requested) == 1 + DEFAULT_HOME_PAGES
+    assert DEFAULT_HOME_PAGES == 3
+
+
+def test_the_default_second_pass_is_the_site_root():
+    # Главная — это буквально корень сайта, а не ещё один раздел: своей
+    # настройки адреса у неё нет и указывать её некуда.
+    assert REMOCATE_HOME_URL == "https://www.remocate.app/"
+    s = RemocateSearcher(feed_url=FEED, pages=1)
+    site = _Site(_feed(FEED, [[_card("d1", "Backend Developer", "A")]], "c74bbb03"),
+                 _feed(REMOCATE_HOME_URL,
+                       [[_card("h1", "AI Engineer", "B")]], "ee7bb4b9"))
+    s._page = site
+    s.search(["backend developer", "ai engineer"], "Worldwide", limit=50)
+
+    assert site.requested[1] == REMOCATE_HOME_URL
 
 
 # --- оценка релевантности ---------------------------------------------------
@@ -418,7 +607,7 @@ def test_found_jobs_go_through_the_same_relevance_scoring_as_other_boards():
         _card("a", "Principal Software Engineer", "Zalando"),
         _card("b", "Backend Developer", "Acme", desc="<p>Go, Postgres.</p>"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = feed
     repo = _Repo()
 
@@ -451,7 +640,7 @@ def test_a_job_already_in_the_sheet_is_not_scored_again():
               "Datadog"),
         _card("b", "QA Engineer", "Acme"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = feed
     scorer = _LevelScorer()
 
@@ -468,7 +657,7 @@ def test_the_scorer_reads_the_listing_description_without_extra_requests():
     feed = _Feed([_page([
         _card("b", "Backend Developer", "Acme",
               desc="<p>Go, Postgres and <b>Kubernetes</b> here.</p>")], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
     s._page = feed
     scorer = _LevelScorer()
 

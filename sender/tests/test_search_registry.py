@@ -40,18 +40,22 @@ def test_build_remocate():
     assert isinstance(build_searcher("remocate"), RemocateSearcher)
 
 
-def test_remocate_gets_its_depth_from_config():
-    """Глубина ленты обязана доехать из .env до searcher'а, а не осесть в конфиге.
+def test_remocate_gets_both_passes_and_their_depths_from_config():
+    """Глубины обязаны доехать из .env до searcher'а, а не осесть в конфиге.
 
-    У remocate это единственная настройка, которая вообще что-то решает: в
-    ленте 102 страницы, и с десятой она на три четверти мёртвая (замер
-    2026-08-27).
+    Проходов у remocate два, и они не взаимозаменяемы: раздел `development`
+    глубоко (в нём 102 страницы, и с десятой он на три четверти мёртвый) и
+    главная мелко (в ней 273 страницы, но только там видны 102 вакансии без
+    категории). Порядок тоже часть настройки — общий бюджет `limit` должен
+    доставаться сначала более плотной ленте: 79 прошедших предфильтр на 100
+    карточек раздела против 35 на 100 карточек главной (замер 2026-08-27).
     """
     from app import config
+    from app.infrastructure.search.remocate_search import REMOCATE_HOME_URL
 
     s = build_searcher("remocate")
-    assert s._pages == config.REMOCATE_PAGES
-    assert s._feed_url == config.REMOCATE_FEED_URL
+    assert s._passes == [(config.REMOCATE_FEED_URL, config.REMOCATE_PAGES),
+                         (REMOCATE_HOME_URL, config.REMOCATE_HOME_PAGES)]
 
 
 def test_build_hh():
