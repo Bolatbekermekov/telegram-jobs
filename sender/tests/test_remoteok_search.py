@@ -1,3 +1,5 @@
+import pytest
+
 from app.domain.candidate import KIND_JOB
 from app.infrastructure.search.remoteok_search import (
     RemoteOKSearcher, format_salary, job_matches, parse_remoteok_jobs,
@@ -93,14 +95,24 @@ def test_search_filters_and_caches_description():
     assert s.describe("https://remoteok.com/remote-jobs/1") == "We use Go and Postgres."
 
 
-def test_search_survives_payload_error():
+def test_search_reports_a_network_failure_instead_of_returning_nothing():
+    """Сбой сети обязан долететь до run_search, а не превратиться в пустой список.
+
+    Раньше здесь стоял `except Exception: return []`, и 429 от площадки выглядел
+    ровно как «сегодня ничего не подошло»: та же строка «• remoteok: 1 с, пусто»
+    в отчёте, тот же ноль в таблице. Отличить одно от другого было нечем — а
+    отличать надо: пустая лента это норма (замер 2026-08-27: из 99 вакансий
+    отклик открыт на 3), а 429 значит, что нас режут и стучаться надо реже.
+
+    Ловит и называет исключение run_search — через on_error, как у соседей."""
     s = RemoteOKSearcher()
 
     def boom():
         raise RuntimeError("429 Too Many Requests")
 
     s._payload = boom
-    assert s.search(["backend"], "Worldwide", limit=5) == []
+    with pytest.raises(RuntimeError, match="429"):
+        s.search(["backend"], "Worldwide", limit=5)
 
 
 # --- откликнуться можно не на всё -------------------------------------------

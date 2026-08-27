@@ -22,6 +22,8 @@ from app.application.format_content import format_for_channel
 from app.application.generate_message import (
     GenerateMessage, generate_for, subject_for,
 )
+from app.application.login import cdp_alive
+from app.application.notify import wellfound_offline_message
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import (
@@ -265,6 +267,28 @@ def _warn_if_apply_profile_blank() -> None:
     print("   Либо выключи автоотклик: EXTERNAL_APPLY_ENABLED=false в .env\n")
 
 
+def _wellfound_offline_note(platforms) -> str:
+    """Текст про неподнятый Chrome Wellfound, или пустая строка. Сам текст и
+    правило молчания живут в notify — здесь только проверка порта.
+
+    Порт дёргается ТОЛЬКО когда площадка в списке: httpx с таймаутом 2 с на
+    каждый `make search_hh` — плата ни за что.
+    """
+    names = {(p or "").strip().lower() for p in platforms}
+    if "wellfound" not in names:
+        return ""
+    return wellfound_offline_message(
+        names, chrome_up=cdp_alive(config.WELLFOUND_CDP_URL))
+
+
+def _warn_if_wellfound_chrome_down(platforms) -> None:
+    """Сказать вслух, что Chrome Wellfound не поднят, — до того, как это станет
+    ошибкой без причины."""
+    note = _wellfound_offline_note(platforms)
+    if note:
+        print(f"\n{note}\n")
+
+
 def _followup_invited(repo, switcher, generator, classifier, cv_library,
                       paused=frozenset()) -> None:
     """Re-check everyone we invited without a cover letter, and finish the job.
@@ -435,6 +459,14 @@ def run() -> None:
 
     mode = "АВТО (без подтверждения)" if config.AUTO_SEND else "ручной"
     print(f"Новых лидов: {len(leads)}. Режим: {mode}.")
+
+    # Отклик Wellfound ходит через ТОТ ЖЕ Chrome с отладочным портом, что и поиск
+    # (channels/registry.py). Мёртвый порт превращает каждый её лид в `failed` с
+    # чужим ECONNREFUSED в «Заметке» — сказать надо до первой такой строки.
+    # Спрашиваем по очереди этого прогона, а не по списку площадок вообще:
+    # предупреждение на каждый `make run` без единого лида Wellfound —
+    # это шум, а шум перестают читать.
+    _warn_if_wellfound_chrome_down({lead.platform for lead in leads})
 
     sent_per_platform: dict[str, int] = {}
     # Сколько лидов площадка отказалась принять из-за лимита. Раньше это было
@@ -818,6 +850,15 @@ def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
                 # пометить строку `done` (см. app/domain/paused.py).
                 notify(note)
                 raise SearchPaused(note)
+        # Про мёртвый Chrome воркер обязан сказать В TELEGRAM, а не только в
+        # консоль: он живёт неделями и ищет трижды в день, а человека у ноута в
+        # этот момент нет. Предупреждения при старте процесса хватает ровно до
+        # того дня, когда Chrome закроется сам — дальше в Telegram остаётся
+        # немое «• wellfound: 0 с, ошибка».
+        offline = _wellfound_offline_note(plats)
+        if offline:
+            print(offline)
+            notify(offline)
         timings = []
         added = run_search(
             plats, searchers, candidates,
@@ -869,6 +910,11 @@ def run_worker():
     # добраться даже запросу, который каким-то образом проскочил бы проверку.
     searchers = {p: build_searcher(p) for p in SEARCH_PLATFORMS
                  if not is_paused(p, paused)}
+    # Запуск воркера — единственный момент, когда человек точно у ноута: дальше
+    # процесс живёт неделями сам. Chrome можно поднять и позже (searcher
+    # подключается заново на каждом поиске), но сказать про него надо сейчас,
+    # пока есть кому чинить.
+    _warn_if_wellfound_chrome_down(list(searchers))
     run_one = _make_run_one(searchers, candidates, paused)
 
     tz = _dt.timezone(_dt.timedelta(hours=config.AUTO_SEARCH_TZ_OFFSET))
@@ -900,8 +946,9 @@ def run_search_once(platforms):
     """One-shot search across `platforms`, write candidates, then exit.
 
     Standalone process (does not touch the worker). Wellfound rides the warm
-    Chrome from `make login_wellfound` via CDP; if it is closed, Wellfound is
-    skipped and the other platforms still run.
+    Chrome from `make login_wellfound` via CDP; if it is closed, the run says so
+    up front (_warn_if_wellfound_chrome_down), Wellfound reports an error of its
+    own, and the other platforms still run.
     """
     from pathlib import Path
 
@@ -922,6 +969,11 @@ def run_search_once(platforms):
         print(search_paused_message(held, platforms))
     if not platforms:
         return
+
+    # Раньше всего остального, что занимает время: и таблица, и вход в hh ниже
+    # ждут человека, а сказать ему про Chrome Wellfound надо ДО ожидания —
+    # иначе он узнает про мёртвый порт минут через десять и уже постфактум.
+    _warn_if_wellfound_chrome_down(platforms)
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)

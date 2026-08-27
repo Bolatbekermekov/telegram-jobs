@@ -6,6 +6,33 @@ all-category feed), so we fetch the feed once and filter to relevant roles
 ourselves on the title (app.domain.keyword_match), exactly like RemoteOK. Each
 job carries its description, so describe() is served from a cache built during
 search() — no second request, no extra AI cost on repeats.
+
+ПЛОЩАДКА ИСЧЕРПАНА: бесплатно её потолок — ДВАДЦАТЬ вакансий.
+--------------------------------------------------------------------------
+Игнорируемые параметры — половина беды; вторая в том, что и сама лента
+крошечная. Замеры 2026-08-27, всё живьём:
+
+* `/api/remote-jobs` — 18 объектов, и это не срез: сам ответ сообщает
+  `job-count: 18` и `total-job-count: 18`. По ключевым словам совпало 7,
+  новых ноль. С `?limit=200`, `?category=software-dev`, `?search=engineer` —
+  те же 18 бит в бит.
+* RSS `https://remotive.com/remote-jobs/feed` — 20 записей: ровно те же
+  вакансии плюс две, которые API прячет своей 24-часовой задержкой. Разница
+  между лентами — двое суток свежести, а не объём. Ленты по разделам
+  (`/remote-jobs/software-dev/feed`) отдают 404.
+* HTML `https://remotive.com/remote-jobs` — те же 20 карточек, и `?page=2`
+  отдаёт их же: страницы-«следующей» нет. Раздел
+  `/remote-jobs/software-development` — 7 карточек.
+
+Куда делось остальное, площадка говорит сама: на той же странице висит
+«Unlock All Jobs — 10,653 added this week», то есть лента за подпиской, а в
+юридической врезке ответа API — «We offer a private, paid-for API … (starting
+budget is $5k/mo)». Полнее бесплатно НЕТ: ни RSS, ни HTML, ни параметров.
+
+Отсюда правило чтения логов: «remotive: пусто» — это нормальный рабочий день
+площадки, а не сбой. Сбой теперь виден отдельно (см. search() ниже: сеть
+больше не гасится). Снимать площадку или нет — решение владельца; здесь
+записан только измеренный факт, чтобы его не переоткрывали каждые полгода.
 """
 import re
 
@@ -69,10 +96,11 @@ class RemotiveSearcher:
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         self._desc.clear()  # fresh per run — don't accumulate across worker loops
-        try:
-            jobs = parse_remotive_jobs(self._payload())
-        except Exception:  # noqa: BLE001 — contain our own network failures
-            return []
+        # Сбой сети не гасится — см. тот же комментарий в remoteok_search. Здесь
+        # молчание было ещё дороже: у Remotive «ничего нового» — ОЖИДАЕМЫЙ ответ
+        # (лента 18 вакансий, все уже виденные), и на его фоне упавший запрос не
+        # заметил бы никто и никогда.
+        jobs = parse_remotive_jobs(self._payload())
         found: list[Candidate] = []
         seen: set[str] = set()
         for job in jobs:

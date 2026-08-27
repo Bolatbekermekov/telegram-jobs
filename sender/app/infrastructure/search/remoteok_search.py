@@ -4,6 +4,31 @@ The API (https://remoteok.com/api) returns the latest postings as a JSON array
 whose FIRST element is a legal disclaimer (no job fields). Each job already
 includes its description, so describe() is served from a cache built during
 search() — no second request, no extra AI cost on repeats.
+
+ЛЕНТА БОЛЬШАЯ, ОТКЛИК ЗАКРЫТ: 99 вакансий, подать можно на 3.
+--------------------------------------------------------------------------
+Замер 2026-08-27 (три недели назад было то же самое, см. can_apply):
+
+* `https://remoteok.com/api` — 100 элементов, из них 99 вакансий. `original:
+  true` у ТРЁХ, то есть 96 из 99 за платной подпиской.
+* По ключевым словам совпало 7 названий. Три «совпавших и открытых» — это
+  курсы по UX от Interaction Design Foundation, поймавшиеся на слово «AI» в
+  «ai engineer»; профильных среди открытых нет.
+* Параметр `tags` площадка, в отличие от Remotive, ЧЕСТНО обрабатывает:
+  `?tags=dev|engineer|python|react|golang|backend|mobile` дают разные выдачи
+  по ~99 вакансий (несуществующий `?tags=qa` — ноль, чем себя и выдаёт).
+  Восемь запросов вместо одного дают 566 РАЗНЫХ вакансий — в шесть раз
+  больше ленты. Только упирается это в ту же стену: открытых среди 566 всего
+  СЕМЬ (1.2%) — три курса IxDF, три Lemon.io и один Product Engineer.
+* `?limit=500` и `?offset=100` игнорируются (те же 99). RSS
+  `https://remoteok.com/remote-jobs.rss` — HTTP 410 Gone.
+
+То есть узкое место здесь не размер ленты, а `can_apply`: сколько её ни
+расширяй тегами, отклик открыт на один процент. Обход по тегам — рычаг
+рабочий и измеренный (3 доступные вакансии с одного запроса против 7 с
+восьми), но платить за него надо восемью запросами в прогон ради четырёх
+вакансий. Включать его — как и снимать площадку — без слова владельца
+нельзя.
 """
 import re
 
@@ -73,6 +98,10 @@ def can_apply(job: dict) -> bool:
     повторный заход на те же три вакансии дал тот же результат бит в бит.
     `original` — это вакансии, размещённые работодателем напрямую; остальное
     RemoteOK собрал с чужих сайтов и продаёт доступ к ссылке.
+
+    Перепроверено 2026-08-27: 3 из 99 в ленте и 7 из 566 при обходе по тегам
+    (1.2%). За три недели доля не сдвинулась — это не разовая невезуха и не
+    временная акция площадки, а её бизнес-модель.
     """
     return bool(job.get("original"))
 
@@ -123,11 +152,15 @@ class RemoteOKSearcher:
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         self._desc.clear()  # fresh per run — don't accumulate across worker loops
-        try:
-            payload = self._payload()
-        except Exception:  # noqa: BLE001 — contain our own network failures
-            return []
-        jobs = parse_remoteok_jobs(payload)
+        # Сбой сети НЕ гасится: он летит наружу, run_search ловит его и называет
+        # через on_error — «⚠️ remoteok: 429 …» в консоли и «ошибка» вместо
+        # «пусто» в отчёте, ровно как у соседних площадок.
+        #
+        # Раньше здесь стоял `except Exception: return []`, и это была ложь,
+        # которую нечем было поймать: пустая выдача у RemoteOK — НОРМА (замер
+        # 2026-08-27: 99 вакансий в ленте, отклик открыт на 3), поэтому упавший
+        # запрос выглядел точно так же, как обычный день без совпадений.
+        jobs = parse_remoteok_jobs(self._payload())
         found: list[Candidate] = []
         for job in jobs:
             # Отбор ДО скоринга: вакансия, на которую нельзя подать заявку, не

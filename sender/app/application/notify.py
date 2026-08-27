@@ -1,4 +1,11 @@
-"""Build the 'search finished' Telegram message the worker sends after a run."""
+"""Тексты про поиск: что нашлось, чего не искали и что мешает искать.
+
+Изначально здесь жил один отчёт «Поиск завершён» для Telegram. Остальные тексты
+переехали сюда потому, что адресатов у них два — консоль ноута (`make search`) и
+Telegram тому, кто прислал команду из вкладки «Команды», — а формулировка обязана
+быть одна: у строки запроса в таблице колонки под причину нет, и кроме этих слов
+человеку сказать нечем.
+"""
 
 
 def format_duration(seconds) -> str:
@@ -74,3 +81,34 @@ def search_paused_message(held, remaining) -> str:
                 f"Ищу остальные: {', '.join(remaining)}.")
     return (f"⏸  На паузе: {plats} — поиск не запускал, искать больше нечего. "
             "Снять паузу: убрать площадку из PAUSED_PLATFORMS в .env.")
+
+
+def wellfound_offline_message(platforms, chrome_up: bool) -> str:
+    """Chrome с отладочным портом не отвечает, а без него Wellfound = ноль.
+
+    Пустая строка, когда говорить не о чем: порт жив или площадки в этом
+    прогоне нет вовсе (`make search_hh`, пауза).
+
+    Замер 2026-08-27: Wellfound не отдал ни одной вакансии за прогон — Chrome в
+    тот день не поднимали. Зависимость на пустом месте невидима: своим браузером
+    к площадке не пройти (Cloudflare привязывает cf_clearance к тому браузеру,
+    который решил задачу), поэтому ЕДИНСТВЕННЫЙ вход — окно, оставшееся открытым
+    после `make login_wellfound`.
+
+    Сказать об этом было некому. `start()` падает внутри run_search, и наружу
+    выходят два текста, ни один из которых не называет причину: сырой
+    «BrowserType.connect_over_cdp: connect ECONNREFUSED 127.0.0.1:9222» в консоли
+    и «• wellfound: 0 с, ошибка» в отчёте. Оба читаются как поломка кода.
+
+    Порт проверяет `app.application.login.cdp_alive` — тот же, которым `make
+    login` решает, нужен ли Wellfound вход.
+    """
+    if chrome_up:
+        return ""
+    names = {(p or "").strip().lower() for p in platforms}
+    if "wellfound" not in names:
+        return ""
+    return ("⚠️  Wellfound: Chrome с отладочным портом не отвечает — площадка "
+            "отдаст ноль (и поиск, и отклик ходят только через него).\n"
+            "   Подними и оставь окно открытым: make login_wellfound\n"
+            "   Либо убери площадку из этого прогона: PAUSED_PLATFORMS=wellfound в .env.")
