@@ -14,9 +14,16 @@ def test_search_platforms_includes_new_boards():
     assert "remotive" in SEARCH_PLATFORMS
 
 
+def test_search_platforms_includes_remocate():
+    # Имя ровно такое же, как у уже существующих лидов и у канала отправки
+    # (channels/registry.py). Так поиск, выключатель PAUSED_PLATFORMS и отправка
+    # говорят про площадку одним словом, а дедупликация листа узнаёт свои строки.
+    assert "remocate" in SEARCH_PLATFORMS
+
+
 def test_all_expands_to_every_platform():
     assert platforms_for("all") == [
-        "linkedin", "wellfound", "remoteok", "remotive", "hh"]
+        "linkedin", "wellfound", "remoteok", "remotive", "remocate", "hh"]
 
 
 def test_search_platforms_includes_hh():

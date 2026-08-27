@@ -7,7 +7,8 @@ REQ_DONE = "done"
 REQ_ERROR = "error"
 
 # Platforms searchable in sub-project C, in scrape order.
-SEARCH_PLATFORMS = ["linkedin", "wellfound", "remoteok", "remotive", "hh"]
+SEARCH_PLATFORMS = ["linkedin", "wellfound", "remoteok", "remotive", "remocate",
+                    "hh"]
 
 
 @dataclass
