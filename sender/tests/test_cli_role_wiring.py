@@ -9,11 +9,12 @@ class _Ai:
     def __init__(self):
         self.seen_cv = None
 
-    def generate(self, cv_text, profile_text, vacancy_context):
+    def generate(self, cv_text, profile_text, vacancy_context, language=""):
         self.seen_cv = cv_text
         return "письмо"
 
-    def generate_with_note(self, cv_text, profile_text, vacancy_context, note_limit):
+    def generate_with_note(self, cv_text, profile_text, vacancy_context,
+                           note_limit, language=""):
         self.seen_cv = cv_text
         return "письмо", "записка"
 

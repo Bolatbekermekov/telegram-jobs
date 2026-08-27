@@ -161,7 +161,8 @@ class OpenAIMessageGenerator:
         self._model = model
         self._max_output_tokens = max_output_tokens
 
-    def generate(self, cv_text: str, profile_text: str, vacancy_context: str) -> str:
+    def generate(self, cv_text: str, profile_text: str, vacancy_context: str,
+                 language: str = "") -> str:
         user = (
             f"=== PROFILE (правила позиционирования) ===\n{profile_text}\n\n"
             f"=== CV ===\n{cv_text}\n\n"
@@ -176,7 +177,8 @@ class OpenAIMessageGenerator:
                 # языку самого промпта, и английские вакансии получали русские
                 # письма (лиды 6, 13, 17).
                 {"role": "system",
-                 "content": _SYSTEM + language_rule(detect_language(vacancy_context))},
+                 "content": _SYSTEM + language_rule(
+                     language or detect_language(vacancy_context))},
                 {"role": "user", "content": user},
             ],
             max_completion_tokens=self._max_output_tokens,
@@ -184,7 +186,8 @@ class OpenAIMessageGenerator:
         return _clean((resp.choices[0].message.content or "").strip())
 
     def generate_with_note(self, cv_text: str, profile_text: str,
-                           vacancy_context: str, note_limit: int) -> tuple[str, str]:
+                           vacancy_context: str, note_limit: int,
+                           language: str = "") -> tuple[str, str]:
         """(письмо, записка) за ОДИН запрос.
 
         `generate()` намеренно не тронут: по нему ходят все остальные каналы, и
@@ -202,7 +205,7 @@ class OpenAIMessageGenerator:
             messages=[
                 {"role": "system",
                  "content": _SYSTEM + _note_rules(note_limit)
-                 + language_rule(detect_language(vacancy_context))},
+                 + language_rule(language or detect_language(vacancy_context))},
                 {"role": "user", "content": user},
             ],
             response_format={"type": "json_object"},

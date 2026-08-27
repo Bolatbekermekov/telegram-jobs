@@ -72,10 +72,11 @@ RU_JOB = ("Ищем backend-разработчика на Go. Удалённая
 
 
 class _Ai:
-    def generate(self, cv_text, profile_text, vacancy_context):
+    def generate(self, cv_text, profile_text, vacancy_context, language=""):
         return "Letter body."
 
-    def generate_with_note(self, cv_text, profile_text, vacancy_context, note_limit):
+    def generate_with_note(self, cv_text, profile_text, vacancy_context,
+                           note_limit, language=""):
         return "Letter body.", "Note."
 
 

@@ -1,7 +1,7 @@
 """Use-case: generate a personalized outreach message for a lead."""
 from app.domain.contacts import Contacts, canonicalize, parse_contacts
 from app.domain.lead import Lead
-from app.domain.message_language import detect_language
+from app.domain.message_language import detect_language, language_source
 from app.domain.signature import localize_signature
 
 
@@ -33,15 +33,25 @@ class GenerateMessage:
         Язык берётся из ТОГО ЖЕ текста, из которого его берёт правило для
         модели (openai_client), — иначе письмо и подпись разъедутся.
         """
-        return localize_signature(
-            self._signature_text,
-            detect_language(lead.vacancy_context or lead.raw_text))
+        return localize_signature(self._signature_text, self._language_for(lead))
+
+    @staticmethod
+    def _language_for(lead: Lead) -> str:
+        """Язык письма — по словам работодателя, а не по нашему пересказу.
+
+        `vacancy_context` всегда русский: интейк суммирует русским промптом и
+        сохранить язык оригинала не просит. Пока язык брали оттуда, английские
+        вакансии получали русские письма — лид #441 (стажировка в Бангалоре)
+        так и ушёл через Easy Apply. Разбор источника — в `language_source`.
+        """
+        return detect_language(language_source(lead))
 
     def execute(self, lead: Lead, cv_text: str = "") -> str:
         body = self._ai.generate(
             cv_text=cv_text or self._cv_text,
             profile_text=self._profile_text,
             vacancy_context=lead.vacancy_context or lead.raw_text,
+            language=self._language_for(lead),
         )
         signature = self._signature_for(lead)
         if signature:
@@ -59,6 +69,7 @@ class GenerateMessage:
             cv_text=cv_text or self._cv_text,
             profile_text=self._profile_text,
             vacancy_context=lead.vacancy_context or lead.raw_text,
+            language=self._language_for(lead),
             note_limit=note_limit,
         )
         signature = self._signature_for(lead)

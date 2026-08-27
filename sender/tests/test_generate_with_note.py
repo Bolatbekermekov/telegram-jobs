@@ -21,10 +21,11 @@ class _Ai:
         self.note_limits = []
         self._letter, self._note = letter, note
 
-    def generate(self, cv_text, profile_text, vacancy_context):
+    def generate(self, cv_text, profile_text, vacancy_context, language=""):
         return self._letter
 
-    def generate_with_note(self, cv_text, profile_text, vacancy_context, note_limit):
+    def generate_with_note(self, cv_text, profile_text, vacancy_context,
+                           note_limit, language=""):
         self.note_limits.append(note_limit)
         return self._letter, self._note
 
