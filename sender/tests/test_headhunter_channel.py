@@ -237,7 +237,7 @@ def test_apply_answers_questions_with_answerer(monkeypatch):
         {"id": "task_2", "type": "choice", "prompt": "p", "options": ["a", "b"]},
     ]
     monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
-    monkeypatch.setattr(hh, "_verify_submitted", lambda page: None)
+    monkeypatch.setattr(hh, "_verify_submitted", lambda page, debug_dir=None: None)
 
     page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_QUESTIONS: 2,
                       SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1,
@@ -721,3 +721,91 @@ def test_in_a_revealed_composer_the_cv_goes_before_the_text_and_both_ride_one_se
              if a[:2] in (("jsclick", SEL_CHAT_SEND_ENABLED),)
              or a[:2] == ("press", SEL_CHAT_MSG)]
     assert len(sends) == 1, f"отправка должна быть одна, а их {len(sends)}"
+
+
+# --- вопросы работодателя: целимся в видимое поле ---------------------------
+
+def test_question_answer_goes_into_the_visible_field(monkeypatch):
+    """Лид #461: `fill` простоял 30 с на поле, которое нашлось, но не годилось.
+
+    Сканер вопросов идёт по `document.querySelectorAll` и находит в том числе
+    скрытые, а `fill` требует видимое, включённое и редактируемое — поэтому
+    видимое поле выбирается явно.
+    """
+    import app.infrastructure.channels.headhunter as hh
+
+    questions = [{"id": "task_9", "type": "text", "prompt": "p", "options": []}]
+    monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
+    monkeypatch.setattr(hh, "_verify_submitted", lambda page, debug_dir=None: None)
+
+    page = _FakePage({SEL_APPLY: 1, SEL_QUESTIONS: 1, SEL_LETTER_INPUT: 1,
+                      SEL_SUBMIT: 1,
+                      "textarea[name='task_9_text']": 2,          # скрытая и видимая
+                      "textarea[name='task_9_text']:visible": 1})
+
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="letter"),
+                   lambda qs, vacancy: {"task_9": {"id": "task_9", "text": "ответ"}})
+
+    assert ("fill", "textarea[name='task_9_text']:visible", "ответ") in page.actions
+    assert ("fill", "textarea[name='task_9_text']", "ответ") not in page.actions
+
+
+def test_question_answer_falls_back_when_nothing_is_visible(monkeypatch):
+    """Видимых нет — причина другая, и её надо увидеть, а не замаскировать."""
+    import app.infrastructure.channels.headhunter as hh
+
+    questions = [{"id": "task_9", "type": "text", "prompt": "p", "options": []}]
+    monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
+    monkeypatch.setattr(hh, "_verify_submitted", lambda page, debug_dir=None: None)
+
+    page = _FakePage({SEL_APPLY: 1, SEL_QUESTIONS: 1, SEL_LETTER_INPUT: 1,
+                      SEL_SUBMIT: 1, "textarea[name='task_9_text']": 1})
+
+    apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="letter"),
+                   lambda qs, vacancy: {"task_9": {"id": "task_9", "text": "ответ"}})
+
+    assert ("fill", "textarea[name='task_9_text']", "ответ") in page.actions
+
+
+def test_failed_question_saves_the_page_before_giving_up(monkeypatch, tmp_path):
+    """Без снимка «Timeout 30000ms» не отвечает, ПОЧЕМУ поле не приняло ответ."""
+    import app.infrastructure.channels.headhunter as hh
+
+    questions = [{"id": "task_9", "type": "text", "prompt": "p", "options": []}]
+    monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
+
+    dumped = []
+    monkeypatch.setattr(hh, "_dump_chat_debug",
+                        lambda page, d, tag: dumped.append((d, tag)))
+
+    def boom(page, qid, value):
+        raise TimeoutError("Locator.fill: Timeout 30000ms exceeded")
+
+    monkeypatch.setattr(hh, "_fill_text_answer", boom)
+
+    page = _FakePage({SEL_APPLY: 1, SEL_QUESTIONS: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+
+    with pytest.raises(TimeoutError):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="l"),
+                       lambda qs, v: {"task_9": {"id": "task_9", "text": "a"}},
+                       debug_dir=str(tmp_path))
+
+    assert dumped == [(str(tmp_path), "hh_question_text_task_9")]
+
+
+def test_rejected_form_saves_the_page_before_giving_up(monkeypatch, tmp_path):
+    """Лид #466: «форма не принята» — причину форма пишет на себе, не в ошибке."""
+    import app.infrastructure.channels.headhunter as hh
+
+    dumped = []
+    monkeypatch.setattr(hh, "_dump_chat_debug",
+                        lambda page, d, tag: dumped.append((d, tag)))
+
+    page = _FakePage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 1,
+                      SEL_SUBMIT: 1}, submit_sticks=True)
+
+    with pytest.raises(ChannelError, match="не подтверждён"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"),
+                       debug_dir=str(tmp_path))
+
+    assert dumped == [(str(tmp_path), "hh_form_rejected")]
