@@ -2,6 +2,7 @@ import pytest
 
 from app.infrastructure.search.hh_search import (
     HHSearcher,
+    _http_vacancy_text,
     build_search_url,
     parse_hh_cards,
     valid_experience,
@@ -280,3 +281,90 @@ def test_the_generic_location_argument_is_not_used_by_hh():
     s = _searcher_with(page)
     s.search(["dev"], location="Worldwide", limit=10)
     assert "Worldwide" not in page.visited[0]
+
+
+# --- describe: дешёвое чтение вместо браузера -------------------------------
+
+class _DeadPage:
+    """Страница, которая громко падает: браузера в этих проверках быть не должно."""
+
+    def goto(self, *a, **k):
+        raise AssertionError("браузер трогать нельзя: описание пришло по HTTP")
+
+    def locator(self, *a, **k):
+        raise AssertionError("браузер трогать нельзя: описание пришло по HTTP")
+
+
+def _searcher(fetch_text):
+    s = HHSearcher("session.json", fetch_text=fetch_text)
+    s._page = _DeadPage()
+    return s
+
+
+def test_describe_reads_over_http_and_never_opens_the_browser():
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return "Frontend-разработчик. Удалённо, React."
+
+    text = _searcher(fetch).describe("https://hh.ru/vacancy/136593041")
+
+    assert text == "Frontend-разработчик. Удалённо, React."
+    assert asked == ["https://hh.ru/vacancy/136593041"]
+
+
+def test_describe_trims_http_text_to_the_scorer_budget():
+    text = _searcher(lambda url: "я" * 9000).describe("https://hh.ru/vacancy/1")
+    assert len(text) == 6000
+
+
+class _LiveLocator:
+    def __init__(self, text):
+        self.first = self
+        self._text = text
+
+    def inner_text(self, timeout=0):
+        return self._text
+
+
+class _LivePage:
+    def __init__(self, text):
+        self._text = text
+        self.visited = []
+
+    def goto(self, url, **k):
+        self.visited.append(url)
+
+    def locator(self, selector):
+        return _LiveLocator(self._text)
+
+
+def test_describe_falls_back_to_the_browser_when_http_reads_nothing():
+    """Переезд разметки не должен обнулять скоринг всей площадки."""
+    s = HHSearcher("session.json", fetch_text=lambda url: "")
+    s._page = _LivePage("  Описание со страницы  ")
+
+    assert s.describe("https://hh.ru/vacancy/7") == "Описание со страницы"
+    assert s._page.visited == ["https://hh.ru/vacancy/7"]
+
+
+def test_http_reader_swallows_network_failure(monkeypatch):
+    """Сбой сети возвращает пусто, а не роняет прогон: дальше пойдёт браузер."""
+    import app.infrastructure.vacancy_fetcher as vf
+
+    monkeypatch.setattr(vf, "fetch_vacancy_text",
+                        lambda url: (_ for _ in ()).throw(RuntimeError("нет сети")))
+    assert _http_vacancy_text("https://hh.ru/vacancy/9") == ""
+
+
+class _BrokenPage:
+    def goto(self, *a, **k):
+        raise RuntimeError("страница не открылась")
+
+
+def test_describe_returns_empty_when_both_paths_fail():
+    s = HHSearcher("session.json", fetch_text=lambda url: "")
+    s._page = _BrokenPage()
+
+    assert s.describe("https://hh.ru/vacancy/10") == ""

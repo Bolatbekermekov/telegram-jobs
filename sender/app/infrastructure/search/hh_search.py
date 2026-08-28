@@ -149,13 +149,24 @@ class _LiveCard:
         return self._href
 
 
+def _http_vacancy_text(url: str) -> str:
+    """Описание вакансии по HTTP, "" если не прочиталось. Импорт ленивый: чтение
+    страниц живёт в другом слое, и тянуть его при разборе модуля незачем."""
+    from app.infrastructure.vacancy_fetcher import fetch_vacancy_text
+    try:
+        return fetch_vacancy_text(url)
+    except Exception:  # noqa: BLE001 — сеть отвалилась: остаётся браузер
+        return ""
+
+
 class HHSearcher:
     name = "hh"
 
     def __init__(self, storage_state_path: str, headless: bool = False,
                  per_keyword: int = 25, areas=None, work_format=None,
                  experience=None, search_period: int = 0, order_by: str = "",
-                 pages: int = SEARCH_PAGES):
+                 pages: int = SEARCH_PAGES, fetch_text=None):
+        self._fetch_text = fetch_text or _http_vacancy_text
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._per_keyword = per_keyword
@@ -266,6 +277,26 @@ class HHSearcher:
         return found
 
     def describe(self, url: str) -> str:
+        """Текст вакансии для скоринга — простым HTTP, браузером только запасным ходом.
+
+        Описание hh лежит в серверной разметке и открывается БЕЗ логина: замер
+        2026-08-28, 14 случайных вакансий подряд без пауз — 14 ответов 200,
+        0,60 с на страницу, описание нашлось в 13 (четырнадцатая в архиве, там
+        блока нет и у браузера). Через браузер та же страница обходится ~38 с:
+        грузятся скрипты, стили и картинки, а нужен один блок текста.
+
+        Ценой этих 38 с и живёт потолок MATCH_SCAN_LIMIT: 150 оценок = полтора
+        часа на площадку. Дешёвое чтение снимает не сам потолок, а причину, по
+        которой он стоит так низко.
+
+        Запасной ход оставлен на случай переезда разметки: без него дрейф
+        одного `data-qa` обнулил бы скоринг всей площадки. Молчаливым он не
+        будет — время площадки печатается в отчёте прогона, и возврат к часам
+        виден там сразу.
+        """
+        text = self._fetch_text(url)
+        if text:
+            return text[:6000]
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
             text = self._page.locator(SEL_DESCRIPTION).first.inner_text(timeout=15000)
