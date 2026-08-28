@@ -246,6 +246,17 @@ def _relevance_args() -> dict:
     )
 
 
+def _say_reposts(platform: str, dropped: int, kept: int) -> None:
+    """Сказать вслух, сколько карточек оказалось одним объявлением.
+
+    Молчать здесь нельзя: одиннадцать съеденных слотов из тридцати (замер
+    2026-08-28, одно объявление LLC СП Солюшен в одиннадцати городах) в отчёте
+    выглядели как тридцать честно найденных вакансий.
+    """
+    print(f"   🔁 {platform}: {dropped} карточек — одно объявление в разных "
+          f"городах, взял по одной. Остаётся {kept}.")
+
+
 def _warn_if_apply_profile_blank() -> None:
     """Say once, up front, that external application forms have nothing to fill.
 
@@ -867,6 +878,7 @@ def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
             scored_out=_scored_out_store(),
             on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
+            on_duplicate_postings=_say_reposts,
             **_relevance_args(),
         )
         _notify_done(plats, added, timings, paused=held)
@@ -1002,6 +1014,7 @@ def run_search_once(platforms):
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
         scored_out=_scored_out_store(),
         on_platform_done=_platform_done,
+        on_duplicate_postings=_say_reposts,
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")

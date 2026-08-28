@@ -2,8 +2,12 @@ from app.application.run_search import run_search
 from app.domain.candidate import Candidate, normalize_url
 
 
-def _cand(url, platform="linkedin"):
-    return Candidate(platform=platform, kind="job", url=url, title="t", company="c",
+def _cand(url, platform="linkedin", title=None, company="c"):
+    # Название по умолчанию своё у каждого адреса: одинаковые название плюс
+    # работодатель — это признак ОДНОГО объявления, размноженного по городам
+    # (см. posting_identity), и такие карточки склеиваются намеренно.
+    return Candidate(platform=platform, kind="job", url=url,
+                     title=title or f"t {normalize_url(url)}", company=company,
                      salary="", location="x", summary="s")
 
 
@@ -88,8 +92,8 @@ def test_run_search_with_scorer_filters_and_describes():
 def test_run_search_skips_already_known_before_scoring():
     """Known URLs are filtered out BEFORE describe/score, so no OpenAI is wasted."""
     repo = _FakeRepo(known=["https://x/dup"])
-    new = Candidate("linkedin", "job", "https://x/new", "keep", "c", "", "x", "")
-    dup = Candidate("linkedin", "job", "https://x/dup", "keep", "c", "", "x", "")
+    new = Candidate("linkedin", "job", "https://x/new", "keep", "c1", "", "x", "")
+    dup = Candidate("linkedin", "job", "https://x/dup", "keep", "c2", "", "x", "")
     s = _FakeSearcher([new, dup])
     added = run_search(["linkedin"], {"linkedin": s}, repo,
                        keywords=["junior"], location="Worldwide", limit=15,
@@ -134,8 +138,8 @@ def test_a_rejected_job_is_remembered():
 
 def test_a_remembered_reject_is_never_described_again():
     store = _FakeScoredOut(known=["https://x/old"])
-    old = Candidate("linkedin", "job", "https://x/old", "keep", "c", "", "x", "")
-    new = Candidate("linkedin", "job", "https://x/new", "keep", "c", "", "x", "")
+    old = Candidate("linkedin", "job", "https://x/old", "keep", "c1", "", "x", "")
+    new = Candidate("linkedin", "job", "https://x/new", "keep", "c2", "", "x", "")
     s = _FakeSearcher([old, new])
     run_search(["linkedin"], {"linkedin": s}, _FakeRepo(),
                keywords=["junior"], location="Worldwide", limit=15,
@@ -206,3 +210,77 @@ def test_without_a_store_everything_still_works():
     added = run_search(["linkedin"], {"linkedin": _FakeSearcher([_cand("https://x/1")])},
                        _FakeRepo(), keywords=["junior"], location="Worldwide", limit=15)
     assert added == 1
+
+
+# --- одно объявление, размноженное по городам ---------------------------------
+#
+# Замер прогона 2026-08-28: из 30 набранных вакансий ОДИННАДЦАТЬ — одна и та же
+# «AI-разработчик (Python) Junior / Middle» от LLC СП Солюшен, id 136551281…304
+# подряд, одиннадцать разных городов. Адреса честно разные, поэтому ни дедуп по
+# URL, ни правило дублей на отправке их не ловят.
+
+def _repost(city, url):
+    return Candidate("hh", "job", url, "AI-разработчик (Python) Junior / Middle",
+                     "LLC СП Солюшен", "", city, "")
+
+
+def test_one_posting_spread_over_cities_is_taken_once():
+    repo = _FakeRepo()
+    cities = ["Chelyabinsk", "Novosibirsk", "Perm", "Kavkazskiy", "Krasnodar",
+              "Rostov-na-Donu", "Omsk", "Krasnoyarsk", "Nizhny Novgorod",
+              "Simferopol", "Tula"]
+    cards = [_repost(c, f"https://hh.ru/vacancy/13655128{i}")
+             for i, c in enumerate(cities)]
+    added = run_search(["hh"], {"hh": _FakeSearcher(cards)}, repo,
+                       keywords=["ai engineer"], location="Worldwide", limit=50)
+
+    assert added == 1
+    assert len(repo.added) == 1
+
+
+def test_repeats_are_reported_not_swallowed():
+    """Одиннадцать съеденных слотов выглядели в отчёте как тридцать вакансий."""
+    seen = []
+    cards = [_repost("Omsk", "https://hh.ru/vacancy/1"),
+             _repost("Tula", "https://hh.ru/vacancy/2"),
+             _cand("https://hh.ru/vacancy/3", platform="hh")]
+    run_search(["hh"], {"hh": _FakeSearcher(cards)}, _FakeRepo(),
+               keywords=["ai"], location="Worldwide", limit=50,
+               on_duplicate_postings=lambda p, dropped, kept: seen.append((p, dropped, kept)))
+
+    assert seen == [("hh", 1, 2)]
+
+
+def test_the_same_title_at_another_employer_is_a_different_job():
+    repo = _FakeRepo()
+    cards = [
+        Candidate("hh", "job", "https://hh.ru/vacancy/1", "Frontend-разработчик",
+                  "Foxible", "", "Алматы", ""),
+        Candidate("hh", "job", "https://hh.ru/vacancy/2", "Frontend-разработчик",
+                  "Другая компания", "", "Алматы", ""),
+    ]
+    assert run_search(["hh"], {"hh": _FakeSearcher(cards)}, repo,
+                      keywords=["frontend"], location="Worldwide", limit=50) == 2
+
+
+def test_another_role_at_the_same_employer_is_a_different_job():
+    repo = _FakeRepo()
+    cards = [
+        Candidate("hh", "job", "https://hh.ru/vacancy/1",
+                  "Frontend-разработчик (React / TypeScript)", "Foxible", "", "x", ""),
+        Candidate("hh", "job", "https://hh.ru/vacancy/2",
+                  "Fullstack-разработчик TypeScript / React / Go", "Foxible", "", "x", ""),
+    ]
+    assert run_search(["hh"], {"hh": _FakeSearcher(cards)}, repo,
+                      keywords=["frontend"], location="Worldwide", limit=50) == 2
+
+
+def test_nameless_cards_do_not_collapse_into_one():
+    """Без работодателя ключа нет — иначе все безымянные схлопнулись бы в одну."""
+    repo = _FakeRepo()
+    cards = [
+        Candidate("hh", "job", "https://hh.ru/vacancy/1", "Разработчик", "", "", "x", ""),
+        Candidate("hh", "job", "https://hh.ru/vacancy/2", "Разработчик", "", "", "x", ""),
+    ]
+    assert run_search(["hh"], {"hh": _FakeSearcher(cards)}, repo,
+                      keywords=["dev"], location="Worldwide", limit=50) == 2

@@ -6,7 +6,7 @@ Returns the number of new candidates written.
 import time
 
 from app.application.relevance import score_and_filter
-from app.domain.candidate import normalize_url
+from app.domain.candidate import normalize_url, posting_identity
 
 
 def _unique(candidates):
@@ -22,21 +22,37 @@ def _unique(candidates):
     Дедупликация в листе (`known_urls`) от этого не спасает: она сравнивает с
     УЖЕ СОХРАНЁННЫМИ строками, а два одинаковых URL внутри одной выдачи для неё
     оба новые.
+
+    Адреса при этом мало: одно объявление работодатель публикует отдельной
+    карточкой в каждом городе, и все они честно разные. Поэтому вакансию узнаём
+    ещё и по паре «название + работодатель» — почему именно так и чего это
+    стоило, см. `posting_identity`.
+
+    Возвращает (карточки, сколько отброшено как повтор объявления). Число
+    отдаётся наружу, а не теряется: одиннадцать съеденных слотов из тридцати
+    выглядели в отчёте как честно найденные тридцать вакансий.
     """
-    seen, out = set(), []
+    seen, postings, out = set(), set(), []
+    dropped = 0
     for c in candidates:
         key = normalize_url(c.url)
         if not key or key in seen:
             continue
+        posting = posting_identity(c.title, c.company)
+        if posting is not None and posting in postings:
+            dropped += 1
+            continue
         seen.add(key)
+        if posting is not None:
+            postings.add(posting)
         out.append(c)
-    return out
+    return out, dropped
 
 
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
                scored_out=None, on_platform_done=None, scan_limit=None,
-               on_scan_limit=None) -> int:
+               on_scan_limit=None, on_duplicate_postings=None) -> int:
     """`scored_out` — память о вакансиях, которые скорер уже отверг.
 
     Без неё отказник не сохранялся никуда (`known_urls()` читает только
@@ -55,7 +71,9 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
         gained = None
         try:
             searcher.start()
-            found = _unique(searcher.search(keywords, location, limit))
+            found, repeats = _unique(searcher.search(keywords, location, limit))
+            if repeats and on_duplicate_postings is not None:
+                on_duplicate_postings(platform, repeats, len(found))
             if scorer is not None:
                 # Drop already-saved jobs BEFORE scoring so max_jobs counts fresh
                 # ones and we never spend OpenAI calls on duplicates.
