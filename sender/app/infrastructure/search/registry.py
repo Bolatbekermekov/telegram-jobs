@@ -19,7 +19,7 @@ def build_searcher(platform: str):
             experience=config.LINKEDIN_EXPERIENCE,
             posted_within=config.LINKEDIN_POSTED_WITHIN,
             workplace=config.LINKEDIN_WORKPLACE,
-            per_keyword=config.SEARCH_PER_KEYWORD,
+            per_keyword=config.LINKEDIN_PER_KEYWORD,
             pages=config.LINKEDIN_PAGES,
             locations=config.SEARCH_LOCATIONS,
             # Сдвиг стартового запроса меняется каждый час: бюджет обрывает
