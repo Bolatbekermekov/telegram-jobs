@@ -195,9 +195,32 @@ class HHSearcher:
 
     @staticmethod
     def _text(el, selector):
-        """First match's text, or '' — fast-fail so drift doesn't hang per card."""
+        """First match's text, or "" — БЕЗ ожидания, если поля в карточке нет.
+
+        «Fast-fail» здесь раньше значило таймаут 2 с, и это оказалось самой
+        дорогой строкой поиска. Замер 2026-08-28, страница выдачи «python
+        developer»: чтение полей 20 карточек — 40,4 с, из них 40,0 с ушло на
+        ОДИН селектор зарплаты, пустой у 20 карточек из 20. Название,
+        работодатель и адрес вместе стоили 0,3 с.
+
+        Селектор при этом не «иногда пустой», а мёртвый: `vacancy-serp__compensation`
+        на живой странице находится 1 раз на весь документ и НИ РАЗУ внутри
+        карточки (проверено на двух запросах, 50 карточек в каждом). Из
+        денежной разметки в карточке осталась только частота выплат
+        (`vacancy-serp__vacancy-compensation-frequency-MONTHLY`, текст «Payments:
+        Once a month»), суммы там нет вовсе. Сумма приходит из ОПИСАНИЯ — его
+        читает `describe`, и строка «Зарплата: …» в нём есть.
+
+        Ждать же нечего по построению: карточку только что перечислили, её
+        разметка уже в документе. Поэтому сначала count() — он не ждёт, — и
+        только потом чтение. 2 с × 250 карточек — это восемь минут прогона на
+        поле, которого нет.
+        """
         try:
-            return el.locator(selector).first.inner_text(timeout=2000)
+            found = el.locator(selector)
+            if found.count() == 0:
+                return ""
+            return found.first.inner_text(timeout=2000)
         except Exception:  # noqa: BLE001
             return ""
 
