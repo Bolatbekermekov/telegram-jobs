@@ -7,6 +7,7 @@ collects "card" wrappers and hands them to the pure parsers.
 from urllib.parse import urlencode
 
 from app.domain.candidate import Candidate, KIND_JOB, KIND_PROFILE
+from app.infrastructure.search.describe_http import http_vacancy_text
 
 
 # Сколько вакансий LinkedIn отдаёт на одной странице выдачи (замер живой
@@ -232,7 +233,23 @@ class LinkedInSearcher:
         return merge_harvest(batches)
 
     def describe(self, url: str) -> str:
-        """Open a job page and return its description text (best-effort)."""
+        """Текст вакансии для скоринга — простым HTTP, браузером только запасным ходом.
+
+        То же, что на hh, и по той же причине (см. HHSearcher.describe), плюс
+        одна своя: здесь браузер ходит ПОД ЛОГИНОМ. Полторы сотни заходов на
+        страницы вакансий за прогон — ровно тот след, за который в августе
+        прилетел бан. Простой HTTP идёт анонимно, аккаунта не касается вовсе.
+
+        Замер 2026-08-28: шесть случайных вакансий из памяти скорера — 6 из 6,
+        0,78-1,05 с, описание полное, с названием компании. Через браузер та же
+        страница обходилась ~19 с.
+
+        Профили людей (`/in/…`) читалка не знает и отдаёт пусто — они уходят на
+        запасной ход, как и раньше.
+        """
+        text = http_vacancy_text(url)
+        if text:
+            return text[:6000]
         self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
         self._page.wait_for_timeout(2000)
         for sel in ["#job-details", ".jobs-description__content",

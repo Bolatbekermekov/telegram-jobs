@@ -12,6 +12,7 @@ prompting — the worker must never block on input().
 from urllib.parse import quote
 
 from app.domain.candidate import KIND_JOB, Candidate, normalize_url
+from app.infrastructure.search.describe_http import http_vacancy_text
 from app.domain.search_request import per_keyword_limit
 
 HH_BASE_URL = "https://hh.ru"
@@ -149,16 +150,6 @@ class _LiveCard:
         return self._href
 
 
-def _http_vacancy_text(url: str) -> str:
-    """Описание вакансии по HTTP, "" если не прочиталось. Импорт ленивый: чтение
-    страниц живёт в другом слое, и тянуть его при разборе модуля незачем."""
-    from app.infrastructure.vacancy_fetcher import fetch_vacancy_text
-    try:
-        return fetch_vacancy_text(url)
-    except Exception:  # noqa: BLE001 — сеть отвалилась: остаётся браузер
-        return ""
-
-
 class HHSearcher:
     name = "hh"
 
@@ -166,7 +157,7 @@ class HHSearcher:
                  per_keyword: int = 25, areas=None, work_format=None,
                  experience=None, search_period: int = 0, order_by: str = "",
                  pages: int = SEARCH_PAGES, fetch_text=None):
-        self._fetch_text = fetch_text or _http_vacancy_text
+        self._fetch_text = fetch_text or http_vacancy_text
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._per_keyword = per_keyword

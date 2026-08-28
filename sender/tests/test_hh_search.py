@@ -2,7 +2,6 @@ import pytest
 
 from app.infrastructure.search.hh_search import (
     HHSearcher,
-    _http_vacancy_text,
     build_search_url,
     parse_hh_cards,
     valid_experience,
@@ -347,15 +346,6 @@ def test_describe_falls_back_to_the_browser_when_http_reads_nothing():
 
     assert s.describe("https://hh.ru/vacancy/7") == "Описание со страницы"
     assert s._page.visited == ["https://hh.ru/vacancy/7"]
-
-
-def test_http_reader_swallows_network_failure(monkeypatch):
-    """Сбой сети возвращает пусто, а не роняет прогон: дальше пойдёт браузер."""
-    import app.infrastructure.vacancy_fetcher as vf
-
-    monkeypatch.setattr(vf, "fetch_vacancy_text",
-                        lambda url: (_ for _ in ()).throw(RuntimeError("нет сети")))
-    assert _http_vacancy_text("https://hh.ru/vacancy/9") == ""
 
 
 class _BrokenPage:
