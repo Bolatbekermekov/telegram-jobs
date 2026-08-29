@@ -34,6 +34,7 @@ def build_searcher(platform: str):
             cdp_url=config.WELLFOUND_CDP_URL,
             per_keyword=config.SEARCH_PER_KEYWORD,
             remote_only=config.WELLFOUND_REMOTE_ONLY,
+            pages=config.WELLFOUND_PAGES,
         )
     if platform == "remoteok":
         return RemoteOKSearcher(

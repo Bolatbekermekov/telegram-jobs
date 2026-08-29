@@ -77,14 +77,79 @@ def eligibility_block(page_text: str) -> str:
     return "\n".join(out)
 
 
-def build_jobs_url(keyword: str, remote_only: bool = False) -> str:
-    """remote=true раньше был вшит; человек готов к релокации, и офисные
-    вакансии отсекать незачем."""
-    qs = {"q": keyword}
-    if remote_only:
-        qs["remote"] = "true"
-    qs = urlencode(qs)
-    return f"https://wellfound.com/jobs?{qs}"
+# Слаг роли у Wellfound СВОЙ, из нашего слова он не выводится. Проверено живьём
+# 2026-08-29 по всем четырнадцати словам: восемь слагов совпали механически
+# (`golang-developer`, `backend-developer`, `python-developer`, `react-developer`,
+# `ai-engineer`, `full-stack-developer`, `qa-engineer`, `qa-automation-engineer`),
+# а шесть страниц не существует вовсе — `nodejs-developer`, `nextjs-developer`,
+# `vue-developer`, `react-native-developer`, `mobile-developer`, `llm-engineer`
+# отдают ноль вакансий. Поэтому здесь таблица, а не только механика.
+# Найденные замены (замер того же дня, число — счётчик самой площадки):
+#   node.js developer      -> node-js-developer            12
+#   next.js developer      -> javascript-developer        523   (замена по смыслу:
+#       страниц next-js-developer, nextjs-engineer и даже frontend-developer у
+#       Wellfound нет вовсе — последнее неожиданно, но проверено)
+#   vue developer          -> vue-js-developer               5
+#   react native developer -> mobile-engineer              847
+#   mobile developer       -> mobile-engineer              847   (тот же слаг!)
+#   llm engineer           -> machine-learning-engineer    833
+# Два слова, ведущие на одну страницу, — не ошибка таблицы, а свойство
+# справочника Wellfound. Второй запрос за ней не идёт: слаги в search()
+# опрашиваются по одному разу.
+_ROLE_SLUGS: dict[str, str] = {
+    "node.js developer": "node-js-developer",
+    "next.js developer": "javascript-developer",
+    "vue developer": "vue-js-developer",
+    "react native developer": "mobile-engineer",
+    "mobile developer": "mobile-engineer",
+    "llm engineer": "machine-learning-engineer",
+}
+
+
+def role_slug(keyword: str) -> str:
+    """Слаг страницы роли Wellfound для нашего ключевого слова."""
+    kw = (keyword or "").strip().lower()
+    if kw in _ROLE_SLUGS:
+        return _ROLE_SLUGS[kw]
+    out, prev_dash = [], True
+    for ch in kw.replace(".", ""):
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-")
+
+
+def build_jobs_url(keyword: str, remote_only: bool = False, page: int = 1) -> str:
+    """Адрес выдачи Wellfound. СТРАНИЦА РОЛИ, а не `/jobs?q=`.
+
+    `/jobs` не слышит ни одного параметра запроса. Замер 2026-08-29: `?q=`,
+    `?keywords=`, `job_search[keywords]` и `&page=2` дают ПОБАЙТНО один и тот же
+    набор — 17 вакансий и счётчик «192 results», — и он же выдаётся на голый
+    `/jobs`. Это не наша выдача, а СОХРАНЁННЫЙ ПОИСК владельца («Software
+    Engineer | Europe | Full Time»), который площадка показывает вошедшему.
+    Отсюда и вечный ноль: все четырнадцать слов ходили за одной и той же
+    страницей, её 17 вакансий скорер отверг ещё в июле и запомнил.
+
+    Три РАЗНЫХ слова («qa engineer», «golang developer», «react native
+    developer») дали пересечение 17 из 17 — то есть выдача не сужалась, она
+    просто не менялась.
+
+    Страница роли слышит и слово, и номер страницы. Те же 14 слов через неё:
+    ai engineer — 4757 вакансий, backend developer — 955, python — 836,
+    full stack — 721, react — 697, qa engineer — 509, qa automation — 229,
+    golang — 56; на первых страницах восьми рабочих слагов 245 РАЗНЫХ вакансий
+    против сегодняшних 17. Вторая страница `golang-developer` дала 22 карточки,
+    из них новых против первой — все 22.
+
+    `/role/r/<slug>` — та же роль, но уже, и это подмножество: 26 против 56 у
+    `/role/<slug>`, пересечение 17. Отсюда `remote_only` и адресуется им.
+    """
+    slug = role_slug(keyword)
+    base = f"https://wellfound.com/role/{'r/' if remote_only else ''}{slug}"
+    return f"{base}?{urlencode({'page': page})}" if page and page > 1 else base
 
 
 def parse_job_cards(cards, limit: int) -> list[Candidate]:
@@ -122,12 +187,13 @@ class WellfoundSearcher:
 
     def __init__(self, storage_state_path: str, headless: bool = True,
                  cdp_url: str | None = None, per_keyword: int = 25,
-                 remote_only: bool = False):
+                 remote_only: bool = False, pages: int = 2):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._cdp_url = cdp_url
         self._per_keyword = per_keyword
         self._remote_only = remote_only
+        self._pages = max(1, pages)
         self._pw = None
         self._browser = None
         self._page = None
@@ -236,13 +302,42 @@ class WellfoundSearcher:
         return eligibility
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
+        """Обход «страница снаружи, слово внутри» — как у LinkedIn и по той же
+        причине: бюджет обрывает перебор, и при обратном порядке первое слово
+        выбирало бы его целиком, а до QA и мобилок очередь не доходила бы.
+
+        Слово, не давшее НИ ОДНОЙ карточки, дальше не опрашивается: у Wellfound
+        свой справочник ролей, страницы для шести наших слов в нём нет вовсе
+        (см. role_slug), а пустая страница стоит пятнадцати секунд ожидания
+        `StartupResult` — на каждом следующем проходе заново.
+        """
         from app.domain.search_request import per_keyword_limit
         per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         found: list[Candidate] = []
+        empty: set[str] = set()
+        # По одному запросу на СЛАГ, а не на слово: «react native developer» и
+        # «mobile developer» ведут на одну и ту же страницу роли, и второй заход
+        # за ней вернул бы те же карточки за ту же цену.
+        seen_slugs = {role_slug(kw) for kw in keywords_list}
+        queries = []
         for kw in keywords_list:
-            self._page.goto(build_jobs_url(kw, self._remote_only),
-                            wait_until="domcontentloaded")
-            found += parse_job_cards(self._job_cards(), limit=per_kw)
+            sl = role_slug(kw)
+            if sl in seen_slugs:
+                seen_slugs.discard(sl)
+                queries.append(kw)
+        for page in range(1, max(1, self._pages) + 1):
+            for kw in queries:
+                if kw in empty:
+                    continue
+                self._page.goto(build_jobs_url(kw, self._remote_only, page),
+                                wait_until="domcontentloaded")
+                cards = self._job_cards()
+                if not cards:
+                    empty.add(kw)
+                    continue
+                found += parse_job_cards(cards, limit=per_kw)
+                if len(found) >= limit:
+                    return found[:limit]
         return found[:limit]
 
 

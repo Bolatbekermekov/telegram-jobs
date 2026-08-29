@@ -231,6 +231,10 @@ LINKEDIN_PAGES = int(os.environ.get("LINKEDIN_PAGES", "2"))
 # Wellfound: у него в ссылке поиска тоже был вшит remote=true.
 WELLFOUND_REMOTE_ONLY = os.environ.get(
     "WELLFOUND_REMOTE_ONLY", "false").lower() == "true"
+# Страниц выдачи на одну роль Wellfound. Страница отдаёт ~30 карточек, и вторая
+# несёт новое: замер 2026-08-29 на `golang-developer` — 22 карточки на второй
+# странице, из них новых против первой ВСЕ 22.
+WELLFOUND_PAGES = int(os.environ.get("WELLFOUND_PAGES", "2"))
 
 # RemoteOK / Remotive (HTTP-only platforms — no browser, no login).
 HTTP_USER_AGENT = os.environ.get(

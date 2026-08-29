@@ -1,4 +1,4 @@
-from app.infrastructure.search.wellfound_search import build_jobs_url, parse_job_cards
+from app.infrastructure.search.wellfound_search import build_jobs_url, parse_job_cards, role_slug
 
 
 def test_build_jobs_url_contains_query():
@@ -114,3 +114,49 @@ def test_eligibility_block_is_empty_when_the_page_has_no_such_fields():
     from app.infrastructure.search.wellfound_search import eligibility_block
     assert eligibility_block("Just a job description with no eligibility fields.") == ""
     assert eligibility_block("") == ""
+
+
+# --- адрес выдачи: страница роли, а не /jobs?q= -------------------------------
+#
+# Замер 2026-08-29: `/jobs` не слышит НИ ОДНОГО параметра запроса. `?q=`,
+# `?keywords=`, `job_search[keywords]` и `&page=2` дают побайтно один набор —
+# 17 вакансий, счётчик «192 results», — и это сохранённый поиск владельца, а не
+# наша выдача. Три разных слова дали пересечение 17 из 17.
+
+def test_search_url_is_a_role_page_not_a_query():
+    url = build_jobs_url("golang developer")
+    assert url == "https://wellfound.com/role/golang-developer"
+    assert "?q=" not in url
+
+
+def test_remote_only_uses_the_narrower_role_page():
+    """`/role/r/<slug>` — подмножество: 26 против 56, пересечение 17."""
+    assert build_jobs_url("golang developer", True) == \
+        "https://wellfound.com/role/r/golang-developer"
+
+
+def test_page_number_reaches_the_url():
+    assert build_jobs_url("golang developer", False, 3) == \
+        "https://wellfound.com/role/golang-developer?page=3"
+
+
+def test_first_page_has_no_page_parameter():
+    assert build_jobs_url("golang developer", False, 1).endswith("golang-developer")
+
+
+def test_slug_is_measured_not_guessed_where_the_page_does_not_exist():
+    """Страниц nodejs-developer, nextjs-developer и llm-engineer у Wellfound нет."""
+    assert role_slug("node.js developer") == "node-js-developer"
+    assert role_slug("next.js developer") == "javascript-developer"
+    assert role_slug("llm engineer") == "machine-learning-engineer"
+
+
+def test_slug_falls_back_to_plain_kebab_for_unmapped_words():
+    assert role_slug("Golang Developer") == "golang-developer"
+    assert role_slug("qa automation engineer") == "qa-automation-engineer"
+    assert role_slug("  python   developer  ") == "python-developer"
+
+
+def test_two_words_can_share_one_role_page():
+    """Не ошибка таблицы, а свойство справочника Wellfound."""
+    assert role_slug("react native developer") == role_slug("mobile developer")
