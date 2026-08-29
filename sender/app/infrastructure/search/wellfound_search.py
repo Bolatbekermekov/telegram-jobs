@@ -27,6 +27,33 @@ _ELIGIBILITY_FIELDS = (
 _ELIGIBILITY_STOP = _ELIGIBILITY_FIELDS + ("Skills", "Reposted", "Posted", "Apply")
 
 
+# Что видно в окне входа, пока человек его проходит. Три состояния, и различать
+# их надо, потому что ждём мы по-разному: Cloudflare сам уходит через несколько
+# секунд, а форма входа — только когда человек введёт пароль.
+_CLOUDFLARE_MARKERS = ("момент", "moment", "just a", "checking your browser",
+                       "attention required")
+
+
+def login_state(url: str, title: str) -> str:
+    """«cloudflare» | «login» | «ready» — по адресу и заголовку вкладки.
+
+    Нужна отдельной функцией, потому что вход в Wellfound нельзя дождаться через
+    `input()`: команду запускают из оболочки без stdin, и `input()` там падает с
+    EOFError, не дав человеку залогиниться вовсе (живьём 2026-08-29, ровно как
+    раньше с `make login_browser`). Значит ждать надо опросом, а решение об
+    ожидании — чистое и проверяемое.
+    """
+    t = (title or "").strip().lower()
+    u = (url or "").strip().lower()
+    if any(m in t for m in _CLOUDFLARE_MARKERS):
+        return "cloudflare"
+    if "/login" in u or "/signin" in u or "/join" in u:
+        return "login"
+    if not u or not u.startswith("http"):
+        return "cloudflare"          # about:blank — вкладка ещё не доехала
+    return "ready"
+
+
 def eligibility_block(page_text: str) -> str:
     """Условия найма со страницы вакансии, одной короткой выжимкой.
 
