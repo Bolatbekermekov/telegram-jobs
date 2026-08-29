@@ -156,3 +156,64 @@ def test_external_apply_falls_back_to_the_legacy_cv_path_without_an_attachment()
     ch._page = page
     ch._external_apply("https://www.linkedin.com/jobs/view/123", OutreachContent(body="hi"))
     assert calls["cv_path"] == "/legacy/cv.pdf"
+
+
+# --- «нет ссылки внешнего отклика» должно называть ПРИЧИНУ --------------------
+#
+# Живьём 2026-08-29 (вакансия 4422296042) сообщение вернулось снова, хотя бакет
+# считался закрытым починкой от 22 августа. Разбирать его было нечем: ноль от
+# Voyager и упавший запрос к Voyager выглядели в заметке одинаково.
+
+class _BoomPage:
+    def evaluate(self, script, *args):
+        raise RuntimeError("Execution context was destroyed")
+
+    def goto(self, *a, **k):
+        pass
+
+    def locator(self, *a, **k):
+        raise AssertionError("до страницы дело дойти не должно")
+
+
+def test_a_failed_voyager_call_is_not_reported_as_easy_apply_alone():
+    url, why = li.company_apply_url_or_reason(_BoomPage(), "https://x/jobs/view/1")
+    assert url is None
+    assert "Voyager не прошёл" in why or "не прошёл" in why
+
+
+class _EmptyPage:
+    def evaluate(self, script, *args):
+        return None
+
+
+def test_an_honest_absence_says_so():
+    url, why = li.company_apply_url_or_reason(_EmptyPage(), "https://x/jobs/view/1")
+    assert url is None
+    assert why == "Voyager не дал companyApplyUrl"
+
+
+def test_a_found_url_carries_no_reason():
+    class _Ok:
+        def evaluate(self, script, *args):
+            return "https://boards.greenhouse.io/x/jobs/1"
+
+    url, why = li.company_apply_url_or_reason(_Ok(), "https://x/jobs/view/1")
+    assert url == "https://boards.greenhouse.io/x/jobs/1"
+    assert why == ""
+
+
+def test_the_note_keeps_the_easy_apply_hint_and_adds_what_the_page_showed():
+    """Подсказка «возможно Easy Apply» — то, ЧТО человеку делать; причина — почему."""
+    page = JobPage(company_url=None)
+    ch = li.LinkedInChannel("state.json", headless=True,
+                            external_apply_deps={"enabled": True, "fn": lambda *a, **k: None})
+    ch._page = page
+    try:
+        ch._external_apply("https://www.linkedin.com/jobs/view/123",
+                           OutreachContent(body="hi"),
+                           "точек входа 3, из них без href 2 — ни одна не называет эту вакансию")
+        assert False, "ожидался ManualApplyRequired"
+    except ManualApplyRequired as exc:
+        said = str(exc)
+        assert "возможно Easy Apply" in said
+        assert "точек входа 3" in said
