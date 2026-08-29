@@ -1,9 +1,13 @@
-from app.infrastructure.search.wellfound_search import build_jobs_url, parse_job_cards, role_slug
+from app.infrastructure.search.wellfound_search import (
+    WellfoundSearcher, build_jobs_url, parse_job_cards, role_slug,
+)
 
 
-def test_build_jobs_url_contains_query():
+def test_build_jobs_url_carries_the_role():
+    # Имя «contains_query» было верно, пока адрес строился как /jobs?q=. Запроса
+    # там больше нет: Wellfound его не слышит, роль едет слагом пути.
     url = build_jobs_url("junior")
-    assert "wellfound.com" in url and "junior" in url
+    assert url == "https://wellfound.com/role/junior"
 
 
 class _FakeCard:
@@ -160,3 +164,54 @@ def test_slug_falls_back_to_plain_kebab_for_unmapped_words():
 def test_two_words_can_share_one_role_page():
     """Не ошибка таблицы, а свойство справочника Wellfound."""
     assert role_slug("react native developer") == role_slug("mobile developer")
+
+
+# --- сбор карточек: опора на ссылку и h2, а не на контейнер -------------------
+
+class _FakePage:
+    """Страница, отвечающая на wait_for_selector и evaluate."""
+
+    def __init__(self, rows, has_links=True):
+        self._rows = rows
+        self._has_links = has_links
+        self.waited = []
+
+    def wait_for_selector(self, selector, timeout=None):
+        self.waited.append(selector)
+        if not self._has_links:
+            raise TimeoutError(f"no {selector}")
+
+    def evaluate(self, script):
+        return self._rows
+
+
+def _searcher(page):
+    s = WellfoundSearcher("wf.json")
+    s._page = page
+    return s
+
+
+def test_cards_are_built_from_job_links_not_from_a_container():
+    """На `/role/<slug>` элементов StartupResult РОВНО НОЛЬ — опора другая."""
+    page = _FakePage([
+        {"title": "AI Engineer", "company": "Mosaic", "href": "/jobs/4592877-ai-engineer"},
+    ])
+    cards = _searcher(page).job_cards_for_test()
+
+    assert page.waited == ["a[href*='/jobs/']"]
+    assert cards[0].get_text("title") == "AI Engineer"
+    assert cards[0].get_text("company") == "Mosaic"
+    assert cards[0].get_href() == "https://wellfound.com/jobs/4592877-ai-engineer"
+
+
+def test_absolute_hrefs_are_left_alone():
+    page = _FakePage([{"title": "QA", "company": "Cloaked",
+                       "href": "https://wellfound.com/jobs/1-qa"}])
+    assert _searcher(page).job_cards_for_test()[0].get_href() == \
+        "https://wellfound.com/jobs/1-qa"
+
+
+def test_a_role_page_that_does_not_exist_reads_as_no_cards():
+    """Шести наших слов в справочнике Wellfound нет — это пусто, а не сбой."""
+    page = _FakePage([], has_links=False)
+    assert _searcher(page).job_cards_for_test() == []

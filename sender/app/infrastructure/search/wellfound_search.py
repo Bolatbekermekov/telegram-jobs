@@ -237,37 +237,65 @@ class WellfoundSearcher:
         if self._pw:
             self._pw.stop()
 
-    def _job_cards(self):
-        """Flatten Wellfound's company-grouped results into one card per role.
+    # Карточки снимаются ОДНИМ вызовом в странице, а не локаторами по одной:
+    # сорок пять ссылок × несколько обращений каждая — это сотни round-trip'ов
+    # по CDP (тот же урок, что на карточках hh).
+    #
+    # Опора — ссылка на вакансию и ближайший h2 сверху, а не разметка контейнера.
+    # Причина замерена 2026-08-29: на `/role/<slug>` элементов
+    # `[data-test='StartupResult']` РОВНО НОЛЬ — их вообще нет на странице, там
+    # только tailwind-классы вида `mb-6 w-full rounded border border-gray-400`.
+    # Прежний сбор ждал этот контейнер по 15 секунд и возвращал пусто, отчего
+    # прогон длился 3 м 34 с и находил ноль при 45 ссылках на странице.
+    # Классы верстки в опору не годятся — они меняются с каждой пересборкой;
+    # ссылка `/jobs/<цифры>-…` и заголовок компании держатся.
+    _CARDS_JS = """() => {
+      const out = [];
+      for (const a of document.querySelectorAll("a[href*='/jobs/']")) {
+        const href = a.getAttribute('href') || '';
+        const slug = href.split('/jobs/')[1] || '';
+        if (!/^\\d/.test(slug)) continue;          // /jobs/home и прочая навигация
+        const title = (a.textContent || '').trim().split('\\n')[0].trim();
+        if (!title) continue;
+        let company = '';
+        let node = a;
+        for (let i = 0; i < 8 && node; i++) {
+          const h = node.querySelector && node.querySelector('h2');
+          if (h && (h.textContent || '').trim()) {
+            company = h.textContent.trim().split('\\n')[0].trim();
+            break;
+          }
+          node = node.parentElement;
+        }
+        out.push({ title, company, href });
+      }
+      return out;
+    }"""
 
-        Each [data-test='StartupResult'] is a startup (company name in its h2)
-        with one or more role links (a[href*='/jobs/<id>-...']). The page is a SPA,
-        so wait for the cards to render first. Salary/location render as a run-on
-        blob per role, so they are left empty (title/company/url are reliable).
+    def _job_cards(self):
+        """Одна карточка на роль, компания — из ближайшего h2 над ссылкой.
+
+        Зарплата и локация приходят слипшимся комом на роль, поэтому остаются
+        пустыми: надёжны название, компания и адрес.
         """
         try:
-            self._page.wait_for_selector("[data-test='StartupResult']", timeout=15000)
-        except Exception:  # noqa: BLE001 — genuinely no results
+            self._page.wait_for_selector("a[href*='/jobs/']", timeout=15000)
+        except Exception:  # noqa: BLE001 — роли с таким слагом у площадки нет
             return []
-        cards = []
-        for startup in self._page.locator("[data-test='StartupResult']").all():
-            try:
-                company = startup.locator("h2").first.inner_text(timeout=2000)
-            except Exception:  # noqa: BLE001
-                company = ""
-            for a in startup.locator("a[href*='/jobs/']").all():
-                href = a.get_attribute("href") or ""
-                slug = href.split("/jobs/", 1)[1] if "/jobs/" in href else ""
-                if not slug[:1].isdigit():   # skip /jobs/home and other nav links
-                    continue
-                title = a.inner_text().strip()
-                if not title:
-                    continue
-                cards.append(_LiveCard(
-                    title=title, company=company, salary="", location="",
-                    href=href if href.startswith("http") else f"https://wellfound.com{href}",
-                ))
-        return cards
+        try:
+            raw = self._page.evaluate(self._CARDS_JS)
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            _LiveCard(title=r["title"], company=r["company"], salary="", location="",
+                      href=(r["href"] if r["href"].startswith("http")
+                            else f"https://wellfound.com{r['href']}"))
+            for r in raw
+        ]
+
+    def job_cards_for_test(self):
+        """Тот же сбор, что в прогоне. Отдельное имя — чтобы тест не лез в _job_cards."""
+        return self._job_cards()
 
     def describe(self, url: str) -> str:
         """Open a job page and return its description text (best-effort).
