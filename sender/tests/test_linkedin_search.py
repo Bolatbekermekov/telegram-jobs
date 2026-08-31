@@ -1,5 +1,5 @@
 from app.infrastructure.search.linkedin_search import (
-    build_jobs_url, parse_job_cards, parse_people_cards,
+    LinkedInSearcher, build_jobs_url, parse_job_cards, parse_people_cards,
 )
 
 
@@ -263,3 +263,68 @@ def test_parse_people_cards_maps_profiles():
     assert out[0].title == "Jane Recruiter"
     assert out[0].company == "Tech Recruiter @ Acme"
     assert out[0].url == "https://www.linkedin.com/in/jane"
+
+
+# --- describe: дешёвое чтение вместо браузера под логином -------------------
+
+class _DeadPage:
+    """Браузер здесь ходит ПОД ЛОГИНОМ — в этих проверках его быть не должно."""
+
+    def goto(self, *a, **k):
+        raise AssertionError("описание пришло по HTTP, аккаунт трогать нельзя")
+
+    def locator(self, *a, **k):
+        raise AssertionError("описание пришло по HTTP, аккаунт трогать нельзя")
+
+
+class _LiveLocator:
+    def __init__(self, text):
+        self.first = self
+        self._text = text
+
+    def inner_text(self, timeout=0):
+        return self._text
+
+
+class _LivePage:
+    def __init__(self, text):
+        self._text = text
+        self.visited = []
+
+    def goto(self, url, **k):
+        self.visited.append(url)
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def locator(self, selector):
+        return _LiveLocator(self._text)
+
+
+def test_describe_reads_over_http_and_never_opens_the_browser(monkeypatch):
+    monkeypatch.setattr("app.infrastructure.search.linkedin_search.http_vacancy_text",
+                        lambda url: "Junior AI Engineer\nКомпания: Discovered MENA")
+    s = LinkedInSearcher("li.json")
+    s._page = _DeadPage()
+
+    assert s.describe("https://www.linkedin.com/jobs/view/4453438157/").startswith("Junior AI")
+
+
+def test_describe_trims_http_text_to_the_scorer_budget(monkeypatch):
+    monkeypatch.setattr("app.infrastructure.search.linkedin_search.http_vacancy_text",
+                        lambda url: "a" * 9000)
+    s = LinkedInSearcher("li.json")
+    s._page = _DeadPage()
+
+    assert len(s.describe("https://www.linkedin.com/jobs/view/1/")) == 6000
+
+
+def test_describe_falls_back_to_the_browser_for_a_profile(monkeypatch):
+    """Профиль человека читалка не знает — за ним по-прежнему идёт браузер."""
+    monkeypatch.setattr("app.infrastructure.search.linkedin_search.http_vacancy_text",
+                        lambda url: "")
+    s = LinkedInSearcher("li.json")
+    s._page = _LivePage("  Текст со страницы  ")
+
+    assert s.describe("https://www.linkedin.com/in/someone/") == "Текст со страницы"
+    assert s._page.visited == ["https://www.linkedin.com/in/someone/"]

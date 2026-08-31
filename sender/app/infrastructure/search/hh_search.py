@@ -12,6 +12,7 @@ prompting — the worker must never block on input().
 from urllib.parse import quote
 
 from app.domain.candidate import KIND_JOB, Candidate, normalize_url
+from app.infrastructure.search.describe_http import http_vacancy_text
 from app.domain.search_request import per_keyword_limit
 
 HH_BASE_URL = "https://hh.ru"
@@ -155,7 +156,8 @@ class HHSearcher:
     def __init__(self, storage_state_path: str, headless: bool = False,
                  per_keyword: int = 25, areas=None, work_format=None,
                  experience=None, search_period: int = 0, order_by: str = "",
-                 pages: int = SEARCH_PAGES):
+                 pages: int = SEARCH_PAGES, fetch_text=None):
+        self._fetch_text = fetch_text or http_vacancy_text
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._per_keyword = per_keyword
@@ -193,9 +195,32 @@ class HHSearcher:
 
     @staticmethod
     def _text(el, selector):
-        """First match's text, or '' — fast-fail so drift doesn't hang per card."""
+        """First match's text, or "" — БЕЗ ожидания, если поля в карточке нет.
+
+        «Fast-fail» здесь раньше значило таймаут 2 с, и это оказалось самой
+        дорогой строкой поиска. Замер 2026-08-28, страница выдачи «python
+        developer»: чтение полей 20 карточек — 40,4 с, из них 40,0 с ушло на
+        ОДИН селектор зарплаты, пустой у 20 карточек из 20. Название,
+        работодатель и адрес вместе стоили 0,3 с.
+
+        Селектор при этом не «иногда пустой», а мёртвый: `vacancy-serp__compensation`
+        на живой странице находится 1 раз на весь документ и НИ РАЗУ внутри
+        карточки (проверено на двух запросах, 50 карточек в каждом). Из
+        денежной разметки в карточке осталась только частота выплат
+        (`vacancy-serp__vacancy-compensation-frequency-MONTHLY`, текст «Payments:
+        Once a month»), суммы там нет вовсе. Сумма приходит из ОПИСАНИЯ — его
+        читает `describe`, и строка «Зарплата: …» в нём есть.
+
+        Ждать же нечего по построению: карточку только что перечислили, её
+        разметка уже в документе. Поэтому сначала count() — он не ждёт, — и
+        только потом чтение. 2 с × 250 карточек — это восемь минут прогона на
+        поле, которого нет.
+        """
         try:
-            return el.locator(selector).first.inner_text(timeout=2000)
+            found = el.locator(selector)
+            if found.count() == 0:
+                return ""
+            return found.first.inner_text(timeout=2000)
         except Exception:  # noqa: BLE001
             return ""
 
@@ -266,6 +291,26 @@ class HHSearcher:
         return found
 
     def describe(self, url: str) -> str:
+        """Текст вакансии для скоринга — простым HTTP, браузером только запасным ходом.
+
+        Описание hh лежит в серверной разметке и открывается БЕЗ логина: замер
+        2026-08-28, 14 случайных вакансий подряд без пауз — 14 ответов 200,
+        0,60 с на страницу, описание нашлось в 13 (четырнадцатая в архиве, там
+        блока нет и у браузера). Через браузер та же страница обходится ~38 с:
+        грузятся скрипты, стили и картинки, а нужен один блок текста.
+
+        Ценой этих 38 с и живёт потолок MATCH_SCAN_LIMIT: 150 оценок = полтора
+        часа на площадку. Дешёвое чтение снимает не сам потолок, а причину, по
+        которой он стоит так низко.
+
+        Запасной ход оставлен на случай переезда разметки: без него дрейф
+        одного `data-qa` обнулил бы скоринг всей площадки. Молчаливым он не
+        будет — время площадки печатается в отчёте прогона, и возврат к часам
+        виден там сразу.
+        """
+        text = self._fetch_text(url)
+        if text:
+            return text[:6000]
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
             text = self._page.locator(SEL_DESCRIPTION).first.inner_text(timeout=15000)

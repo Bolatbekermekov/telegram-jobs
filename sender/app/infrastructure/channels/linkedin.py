@@ -709,14 +709,37 @@ def fetch_company_apply_url(page, job_url):
     """Return an offsite LinkedIn job's real company apply URL, or None if it is
     not an offsite apply (e.g. Easy Apply) or cannot be read. Uses LinkedIn's
     Voyager API via an in-page fetch, so it runs with the logged-in session."""
+    return company_apply_url_or_reason(page, job_url)[0]
+
+
+def company_apply_url_or_reason(page, job_url) -> tuple[str | None, str]:
+    """(ссылка, причина её отсутствия). Причина пустая, когда ссылка есть.
+
+    Ноль и сбой — РАЗНЫЕ вещи, а в сообщении лида они выглядели одинаково.
+    «Нет ссылки внешнего отклика (возможно Easy Apply)» значит либо что вакансия
+    и правда Easy Apply (Voyager отдаёт ComplexOnsiteApply без companyApplyUrl),
+    либо что сам запрос к Voyager не прошёл — сессия, разметка, что угодно.
+    Лечатся они по-разному, поэтому теперь называются по-разному.
+    """
     try:
-        return page.evaluate(_VOYAGER_APPLY_JS, job_url)
-    except Exception:  # noqa: BLE001
-        return None
+        url = page.evaluate(_VOYAGER_APPLY_JS, job_url)
+    except Exception as exc:  # noqa: BLE001
+        return (None, f"запрос к Voyager не прошёл: {str(exc)[:120]}")
+    return (url, "") if url else (None, "Voyager не дал companyApplyUrl")
 
 
 class _ExternalApplyNeeded(Exception):
-    """Internal: this LinkedIn job has no Easy Apply; the caller runs external apply."""
+    """Internal: this LinkedIn job has no Easy Apply; the caller runs external apply.
+
+    Несёт с собой то, что видно было на странице: сколько точек входа нашлось и
+    сколько из них без href. Без этого «возможно Easy Apply» — догадка, а с этим
+    видно, что именно случилось: точек не было вовсе или их было несколько и мы
+    отказались выбирать.
+    """
+
+    def __init__(self, detail: str = ""):
+        super().__init__(detail)
+        self.detail = detail
 
 
 def _open_apply_flow(page, job_url: str):
@@ -747,7 +770,7 @@ def _open_apply_flow(page, job_url: str):
     entry = page.locator(SEL_EASY_APPLY)
     count = entry.count()
     if count == 0:
-        raise _ExternalApplyNeeded()
+        raise _ExternalApplyNeeded("точек входа Easy Apply на странице нет")
 
     job_id = _job_id(job_url)
     hrefless = []
@@ -787,7 +810,8 @@ def _open_apply_flow(page, job_url: str):
         _click_via_dom(hrefless[0])
         _settle(page)
         return hrefless[0]
-    raise _ExternalApplyNeeded()
+    raise _ExternalApplyNeeded(
+        f"точек входа {count}, из них без href {len(hrefless)} — ни одна не называет эту вакансию")
 
 
 def _job_id(url: str) -> str:
@@ -1009,8 +1033,8 @@ class LinkedInChannel:
                     cv_path=content.attachment_path or self._ext.get("cv_path", ""),
                     answerer=self._ext.get("answerer"),
                     dry_run=self._ext.get("dry_run", False))
-            except _ExternalApplyNeeded:
-                self._external_apply(target, content)
+            except _ExternalApplyNeeded as need:
+                self._external_apply(target, content, need.detail)
             return
         if action == "post":
             target = self._post_author(target)   # пишем автору поста
@@ -1071,7 +1095,8 @@ class LinkedInChannel:
             target = self._post_author(target)
         return read_invite_state(self._page, target)
 
-    def _external_apply(self, job_url: str, content: OutreachContent) -> None:
+    def _external_apply(self, job_url: str, content: OutreachContent,
+                        easy_apply_detail: str = "") -> None:
         if not self._ext.get("enabled") or self._ext.get("fn") is None:
             raise ChannelError(
                 f"внешний отклик LinkedIn (не Easy Apply), нужен ручной отклик: {job_url}")
@@ -1084,10 +1109,12 @@ class LinkedInChannel:
         # Read the company's real apply URL from LinkedIn's Voyager API and go
         # straight there — the on-page "apply on the company site" button does not
         # navigate under automation, so we never rely on clicking it.
-        company_url = fetch_company_apply_url(page, job_url)
+        company_url, why = company_apply_url_or_reason(page, job_url)
         if not company_url:
             raise ManualApplyRequired(
-                f"LinkedIn: нет ссылки внешнего отклика (возможно Easy Apply): {job_url}")
+                f"LinkedIn: нет ссылки внешнего отклика (возможно Easy Apply) — {why}"
+                + (f"; Easy Apply: {easy_apply_detail}" if easy_apply_detail else "")
+                + f": {job_url}")
         page.goto(company_url, wait_until="domcontentloaded")
         fn = self._ext["fn"]
         fn(page, job_url, content,

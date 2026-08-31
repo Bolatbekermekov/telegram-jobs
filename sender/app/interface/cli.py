@@ -246,6 +246,17 @@ def _relevance_args() -> dict:
     )
 
 
+def _say_reposts(platform: str, dropped: int, kept: int) -> None:
+    """Сказать вслух, сколько карточек оказалось одним объявлением.
+
+    Молчать здесь нельзя: одиннадцать съеденных слотов из тридцати (замер
+    2026-08-28, одно объявление LLC СП Солюшен в одиннадцати городах) в отчёте
+    выглядели как тридцать честно найденных вакансий.
+    """
+    print(f"   🔁 {platform}: {dropped} карточек — одно объявление в разных "
+          f"городах, взял по одной. Остаётся {kept}.")
+
+
 def _warn_if_apply_profile_blank() -> None:
     """Say once, up front, that external application forms have nothing to fill.
 
@@ -867,6 +878,7 @@ def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
             on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
             scored_out=_scored_out_store(),
             on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
+            on_duplicate_postings=_say_reposts,
             **_relevance_args(),
         )
         _notify_done(plats, added, timings, paused=held)
@@ -1002,6 +1014,7 @@ def run_search_once(platforms):
         on_error=lambda p, e: print(f"⚠️ {p}: {e}"),
         scored_out=_scored_out_store(),
         on_platform_done=_platform_done,
+        on_duplicate_postings=_say_reposts,
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
@@ -1053,24 +1066,66 @@ def run_login_wellfound():
 
     print("\n1) Пройди проверку Cloudflare и залогинься в Wellfound в открывшемся Chrome.")
     print("2) Дождись, пока загрузится твоя лента (не страница «Один момент…»).")
-    input("3) Потом вернись сюда и нажми Enter — проверю сессию...")
+    print(f"Жду до {LOGIN_WAIT_SECONDS // 60} минут, проверяю сам. Enter жать не нужно.\n")
+    _await_wellfound_login()
 
+
+# Ждать входа приходится ОПРОСОМ, а не по Enter: команду запускают из оболочки
+# без stdin, и `input()` там падает с EOFError, не дав человеку залогиниться
+# вовсе — живьём 2026-08-29, ровно как раньше с `make login_browser`. Окно при
+# этом уже открыто, то есть падение отнимало не удобство, а весь смысл команды.
+LOGIN_WAIT_SECONDS = 600
+LOGIN_POLL_SECONDS = 3
+
+
+def _await_wellfound_login(wait_seconds: int = LOGIN_WAIT_SECONDS,
+                           poll_seconds: int = LOGIN_POLL_SECONDS,
+                           read_state=None, sleep=None) -> bool:
+    """Дождаться, пока во вкладке появится залогиненный Wellfound. True — дождались."""
+    import time as _time
+
+    read_state = read_state or _read_wellfound_state
+    sleep = sleep or _time.sleep
+    said = None
+    for step in range(max(1, wait_seconds // max(1, poll_seconds))):
+        state, detail = read_state()
+        if state == "ready":
+            print("✅ Сессия готова. Chrome НЕ закрывай — поиск Wellfound пойдёт через него.")
+            return True
+        if state != said:
+            said = state
+            print({
+                "cloudflare": "   … проверка Cloudflare, жду.",
+                "login": "   … страница входа открыта, жду логина.",
+                "unreachable": f"   … Chrome по CDP пока недоступен ({detail}).",
+            }.get(state, f"   … {state}"))
+        sleep(poll_seconds)
+    print("⏱  Не дождался входа. Chrome оставь открытым и запусти команду снова — "
+          "она подхватит уже пройденный Cloudflare.")
+    return False
+
+
+def _read_wellfound_state():
+    """(состояние, подробность) вкладки Wellfound через CDP. Ничего не меняет."""
+    from app.infrastructure.search.wellfound_search import login_state
     try:
         from patchright.sync_api import sync_playwright
         with sync_playwright() as pw:
             browser = pw.chromium.connect_over_cdp(config.WELLFOUND_CDP_URL)
-            ctx = browser.contexts[0] if browser.contexts else None
-            page = ctx.pages[0] if ctx and ctx.pages else None
-            title = page.title() if page else ""
-            browser.close()  # disconnect only — leaves Chrome running
+            try:
+                ctx = browser.contexts[0] if browser.contexts else None
+                pages = list(ctx.pages) if ctx else []
+                # Вкладок у настоящего Chrome много, и нужная — та, что на
+                # wellfound: искать по первой значило бы ждать чужую страницу.
+                page = next((p for p in pages if "wellfound.com" in (p.url or "")),
+                            pages[0] if pages else None)
+                if page is None:
+                    return ("unreachable", "нет открытых вкладок")
+                return (login_state(page.url, page.title()), page.url)
+            finally:
+                browser.close()      # только отключение — Chrome остаётся жить
     except Exception as exc:  # noqa: BLE001
-        print(f"⚠️ Не смог проверить сессию по CDP: {exc}. Chrome всё равно оставь открытым.")
-        return
-
-    if "момент" in title.lower() or "moment" in title.lower():
-        print("⚠️ Похоже, ещё на проверке Cloudflare. Доделай вход и запусти команду снова.")
-    else:
-        print("✅ Сессия готова. Chrome НЕ закрывай — поиск Wellfound пойдёт через него.")
+        return ("unreachable", str(exc)[:80])
 
 
 def run_login_hh():

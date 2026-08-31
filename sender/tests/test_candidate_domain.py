@@ -1,6 +1,7 @@
 from app.domain.candidate import (
     Candidate, CANDIDATE_COLUMNS, normalize_url, linkedin_action_for_url,
     is_company_actor, post_actor_profile_url, post_author_profile_url,
+    posting_identity,
 )
 
 
@@ -104,3 +105,27 @@ def test_candidate_is_a_dataclass_with_fields():
     c = Candidate(platform="linkedin", kind="job", url="u", title="t",
                   company="c", salary="", location="Remote", summary="s")
     assert c.platform == "linkedin" and c.kind == "job" and c.salary == ""
+
+
+# --- опознание объявления помимо адреса ---------------------------------------
+
+def test_posting_identity_ignores_case_and_extra_spaces():
+    assert (posting_identity("AI-разработчик  (Python)", "LLC СП Солюшен")
+            == posting_identity("ai-разработчик (python)", "llc сп солюшен"))
+
+
+def test_posting_identity_separates_employers():
+    assert posting_identity("Frontend-разработчик", "Foxible") != \
+           posting_identity("Frontend-разработчик", "Другая компания")
+
+
+def test_posting_identity_separates_roles():
+    assert posting_identity("Frontend-разработчик", "Foxible") != \
+           posting_identity("Fullstack-разработчик", "Foxible")
+
+
+def test_posting_identity_needs_both_halves():
+    """Пустая половина ключа не образует: иначе безымянные карточки схлопнутся."""
+    assert posting_identity("", "Foxible") is None
+    assert posting_identity("Разработчик", "") is None
+    assert posting_identity("  ", "  ") is None

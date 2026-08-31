@@ -147,21 +147,59 @@ def _click_choice(page, qid: str, index: int) -> None:
         page.locator(f"input[name='{qid}']").nth(index).check()
 
 
-def _fill_questions(page, questions, answers_by_id) -> None:
+def _fill_text_answer(page, qid: str, value: str) -> None:
+    """Ответ в свободное поле вопроса работодателя — в ВИДИМОЕ поле.
+
+    Лид #461 (вакансия 136546314, 2026-08-26): `fill` по
+    `textarea[name='task_374517342_text']` простоял 30 с и отвалился. Элемент
+    при этом НАШЁЛСЯ — Playwright написал в лог его разметку, — значит ждал он
+    не появления, а пригодности: `fill` требует, чтобы поле было видимым,
+    включённым и редактируемым.
+
+    Негодным поле может быть по двум причинам, и по логу они НЕ различаются:
+    либо на странице таких полей несколько и `.first` берёт скрытое (сканер
+    вопросов идёт по `document.querySelectorAll` и находит в том числе скрытые,
+    а `.first` затем выбирает первое в разметке), либо поле одно и оно само
+    скрыто, выключено или только для чтения. Замера, который бы их развёл, у нас
+    нет — страницу с этим полем никто не сохранил.
+
+    Поэтому здесь не догадка о причине, а порядок предпочтения: целимся в
+    ВИДИМОЕ поле — если верна первая причина, этого достаточно, и ровно это
+    вылечило поле сообщения в чате (`f6541f3`). Если видимых нет вовсе, остаётся
+    прежнее поведение, и падение сохранит страницу (`hh_question_*`) — тогда
+    вторая причина будет видна глазами, а не угадана.
+    """
+    sel = f"textarea[name='{qid}_text']"
+    visible = page.locator(f"{sel}:visible")
+    box = visible.first if visible.count() > 0 else page.locator(sel).first
+    box.fill(value)
+
+
+def _fill_questions(page, questions, answers_by_id, debug_dir=None) -> None:
     from app.application.hh_questions import fill_plan
 
     for kind, qid, value in fill_plan(questions, answers_by_id):
-        if kind == "text":
-            page.locator(f"textarea[name='{qid}_text']").first.fill(value)
-        else:
-            _click_choice(page, qid, value)
+        try:
+            if kind == "text":
+                _fill_text_answer(page, qid, value)
+            else:
+                _click_choice(page, qid, value)
+        except Exception:  # noqa: BLE001 — снимок ДО того, как страница закроется
+            _dump_chat_debug(page, debug_dir, f"hh_question_{kind}_{qid}")
+            raise
 
 
-def _verify_submitted(page) -> None:
+def _verify_submitted(page, debug_dir=None) -> None:
     """After submit, the response form closes; if the submit button is still
-    there the form was rejected (unanswered/invalid) — fail instead of lying."""
+    there the form was rejected (unanswered/invalid) — fail instead of lying.
+
+    Причину отказа форма называет на себе же, а не в исключении (лид #466,
+    вакансия 136364474): без снимка «форма не принята» неотличимо от «не поняли
+    вопрос», «не заполнили обязательное» и «сервер отказал».
+    """
     page.wait_for_timeout(3000)
     if page.locator(SEL_SUBMIT).count() > 0:
+        _dump_chat_debug(page, debug_dir, "hh_form_rejected")
         raise ChannelError("hh: отклик не подтверждён (форма не принята)")
 
 
@@ -464,7 +502,8 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
             raise ChannelError(
                 f"вакансия с обязательными вопросами работодателя, нужен ручной отклик: {url}")
         questions = collect_questions(page)
-        _fill_questions(page, questions, answerer(questions, vacancy_context))
+        _fill_questions(page, questions, answerer(questions, vacancy_context),
+                        debug_dir)
     # Ask "did the response already go through?" BEFORE touching the letter form.
     # hh's quick apply submits on the apply click itself and only then offers an
     # optional cover-letter popup, whose submit control is NOT
@@ -496,7 +535,7 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
         raise ChannelError(
             f"кнопка отправки отклика не найдена ({exc.__class__.__name__}) — "
             f"проверь вручную: {url}") from exc
-    _verify_submitted(page)
+    _verify_submitted(page, debug_dir)
     # The application is now sent (online resume included). Optionally attach the
     # PDF as an extra in the chat — never letting its failure fail the application.
     _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir)
