@@ -52,7 +52,8 @@ def _unique(candidates):
 def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
                scored_out=None, on_platform_done=None, scan_limit=None,
-               on_scan_limit=None, on_duplicate_postings=None) -> int:
+               on_scan_limit=None, on_duplicate_postings=None,
+               on_dead_dropped=None) -> int:
     """`scored_out` — память о вакансиях, которые скорер уже отверг.
 
     Без неё отказник не сохранялся никуда (`known_urls()` читает только
@@ -74,6 +75,12 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
             found, repeats = _unique(searcher.search(keywords, location, limit))
             if repeats and on_duplicate_postings is not None:
                 on_duplicate_postings(platform, repeats, len(found))
+            # Снятые вакансии, отсеянные самим searcher'ом. Читается через
+            # getattr: это умеет пока одна площадка, и заводить ради неё общий
+            # метод в протоколе searcher'ов рано.
+            dead = getattr(searcher, "dropped_dead", 0)
+            if dead and on_dead_dropped is not None:
+                on_dead_dropped(platform, dead)
             if scorer is not None:
                 # Drop already-saved jobs BEFORE scoring so max_jobs counts fresh
                 # ones and we never spend OpenAI calls on duplicates.

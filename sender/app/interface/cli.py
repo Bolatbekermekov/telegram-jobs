@@ -257,6 +257,16 @@ def _say_reposts(platform: str, dropped: int, kept: int) -> None:
           f"городах, взял по одной. Остаётся {kept}.")
 
 
+def _say_dead_dropped(platform: str, dropped: int) -> None:
+    """Сколько снятых вакансий не доехало до листа.
+
+    Молчать нельзя по той же причине, что и с повторами: без этой строки
+    короткая выдача читается как «на площадке ничего нет», хотя карточки были —
+    просто вакансий за ними уже не существует.
+    """
+    print(f"   🪦 {platform}: {dropped} вакансий уже сняты — в лист не пишу.")
+
+
 def _warn_if_apply_profile_blank() -> None:
     """Say once, up front, that external application forms have nothing to fill.
 
@@ -879,6 +889,7 @@ def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
             scored_out=_scored_out_store(),
             on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
             on_duplicate_postings=_say_reposts,
+            on_dead_dropped=_say_dead_dropped,
             **_relevance_args(),
         )
         _notify_done(plats, added, timings, paused=held)
@@ -1015,6 +1026,7 @@ def run_search_once(platforms):
         scored_out=_scored_out_store(),
         on_platform_done=_platform_done,
         on_duplicate_postings=_say_reposts,
+        on_dead_dropped=_say_dead_dropped,
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")

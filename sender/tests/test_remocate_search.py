@@ -1,3 +1,5 @@
+import pytest
+
 """Разбор ленты remocate.app. Разметка снята с живой страницы 2026-08-27.
 
 Фикстуры ниже — не выдумка: это сокращённые до одного-двух объявлений куски
@@ -69,6 +71,19 @@ def _page(cards, next_page="?c74bbb03_page=2") -> str:
 # --- разбор карточки --------------------------------------------------------
 
 QA = "https://www.remocate.app/job-categories/qa"
+
+
+
+@pytest.fixture(autouse=True)
+def _no_network_liveness_check(monkeypatch):
+    """Проверка живости ходит в сеть — в юнит-тестах её быть не должно.
+
+    По умолчанию отвечает «не знаю» ("") ровно как настоящий `vacancy_gone` при
+    недоступном сайте, то есть карточка идёт дальше. Тест, которому нужна другая
+    реакция, передаёт свой `is_gone` в конструктор.
+    """
+    import app.infrastructure.search.remocate_search as rc
+    monkeypatch.setattr(rc, "_default_is_gone", lambda url: "")
 
 
 def test_parse_reads_title_company_url_and_location():
@@ -751,3 +766,71 @@ def test_a_vacancy_seen_in_development_is_not_taken_again_from_qa():
 
     assert feed.requested == [FEED, QA]      # обе ленты опрошены
     assert len(found) == 1                   # но вакансия взята один раз
+
+
+# --- снятые вакансии не доезжают до листа ------------------------------------
+#
+# Замер прогона 2026-08-29 с включённым разделом qa: из 19 записанных лидов
+# ДЕВЯТЬ оказались снятыми. Перед отправкой их ловит dead_vacancy_reason, но к
+# тому времени они уже заняли слот в бюджете скоринга, стоили вызова модели и
+# легли человеку в лист как `manual` — девять строк шума на десять настоящих.
+
+def test_a_dead_vacancy_is_dropped_before_it_costs_a_scoring():
+    feed = _Feed([_page([_card("live-1", "QA Engineer", "White Circle"),
+                         _card("dead-2", "QA Engineer", "Termius")], next_page="")])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url="", home_url="",
+                         is_gone=lambda url: "https://x/gone" if "dead-2" in url else "")
+    s._page = feed
+    found = s.search(["qa", "engineer"], "Worldwide", limit=50)
+
+    assert [c.company for c in found] == ["White Circle"]
+    assert s.dropped_dead == 1
+
+
+def test_an_unreachable_site_does_not_bury_a_live_vacancy():
+    """"" значит «не знаю», а не «жива» — правило то же, что у vacancy_gone."""
+    feed = _Feed([_page([_card("x-1", "QA Engineer", "Arival Bank")], next_page="")])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url="", home_url="",
+                         is_gone=lambda url: "")
+    s._page = feed
+
+    assert len(s.search(["qa", "engineer"], "Worldwide", limit=50)) == 1
+    assert s.dropped_dead == 0
+
+
+def test_a_crash_in_the_liveness_check_is_read_as_unknown():
+    """Сбой проверки не хоронит вакансию и НЕ роняет площадку целиком.
+
+    Без этого исключение ушло бы в `on_error` run_search и обнулило бы весь
+    прогон remocate из-за одной недоступной страницы работодателя.
+    """
+    def boom(url):
+        raise RuntimeError("сеть отвалилась")
+
+    feed = _Feed([_page([_card("x-1", "QA Engineer", "Arival Bank")], next_page="")])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url="", home_url="", is_gone=boom)
+    s._page = feed
+
+    assert len(s.search(["qa", "engineer"], "Worldwide", limit=50)) == 1
+    assert s.dropped_dead == 0
+
+
+def test_the_default_checker_swallows_network_failures(monkeypatch):
+    import app.infrastructure.vacancy_alive as va
+    import app.infrastructure.search.remocate_search as rc
+
+    monkeypatch.setattr(va, "vacancy_gone",
+                        lambda url: (_ for _ in ()).throw(RuntimeError("нет сети")))
+    assert rc._default_is_gone("https://www.remocate.app/jobs/x") == ""
+
+
+def test_the_dead_counter_resets_between_runs():
+    feed = _Feed([_page([_card("d-1", "QA Engineer", "Termius")], next_page=""),
+                  _page([_card("d-2", "QA Engineer", "Movavi")], next_page="")])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url="", home_url="",
+                         is_gone=lambda url: "https://x/gone")
+    s._page = feed
+    s.search(["qa", "engineer"], "Worldwide", limit=50)
+    s.search(["qa", "engineer"], "Worldwide", limit=50)
+
+    assert s.dropped_dead == 1        # второй прогон не суммируется с первым

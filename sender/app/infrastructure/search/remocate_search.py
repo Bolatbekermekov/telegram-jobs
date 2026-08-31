@@ -225,6 +225,15 @@ def next_page_url(html: str, current_url: str) -> str:
     return urljoin(current_url, _html.unescape(href.group(1))) if href else ""
 
 
+def _default_is_gone(url: str) -> str:
+    """Адрес, доказавший смерть вакансии, или "". Импорт ленивый — сеть в другом слое."""
+    from app.infrastructure.vacancy_alive import vacancy_gone
+    try:
+        return vacancy_gone(url)
+    except Exception:  # noqa: BLE001 — «не знаю» безопаснее, чем похоронить живую
+        return ""
+
+
 class RemocateSearcher:
     name = "remocate"
 
@@ -234,7 +243,8 @@ class RemocateSearcher:
                  home_pages: int = DEFAULT_HOME_PAGES,
                  user_agent: str = DEFAULT_UA, timeout: int = 20,
                  qa_url: str = REMOCATE_QA_URL,
-                 qa_pages: int = DEFAULT_QA_PAGES):
+                 qa_pages: int = DEFAULT_QA_PAGES,
+                 is_gone=None):
         # Проходы в порядке УБЫВАНИЯ плотности: сначала раздел (79 прошедших
         # предфильтр на 100 карточек), потом главная (35 на 100, из них новых 8).
         # Порядок решает, кому достанется общий бюджет `limit`, если он мал.
@@ -262,6 +272,20 @@ class RemocateSearcher:
         self._ua = user_agent
         self._timeout = timeout
         self._desc: dict[str, str] = {}
+        # Проверка живости ЗДЕСЬ, а не только перед отправкой. Замер прогона
+        # 2026-08-29 с включённым разделом qa: из 19 записанных лидов девять
+        # оказались снятыми вакансиями. Перед отправкой их ловит
+        # `dead_vacancy_reason`, но к тому времени они уже заняли слот в бюджете
+        # скоринга, стоили вызова модели и легли человеку в лист как `manual`
+        # «страница недоступна» — девять строк шума на десять настоящих.
+        #
+        # Тот же `vacancy_gone`, что стоит в прогоне отправки, и с тем же
+        # правилом: "" значит «не знаю», а не «жива». Севший на секунду сайт,
+        # 403 от антибота, сбитый DNS — всё это пропускает карточку дальше.
+        # Пропущенная мёртвая стоит одной оценки; похороненная живая стоит самой
+        # вакансии, и эти цены несравнимы.
+        self._is_gone = is_gone or _default_is_gone
+        self.dropped_dead = 0
 
     def start(self) -> None:
         pass
@@ -280,6 +304,7 @@ class RemocateSearcher:
         # ленты у remocate общие на всех, страны в них перечислены тегом карточки
         # («🇩🇪 Germany»), а фильтра по стране в адресе нет.
         self._desc.clear()  # fresh per run — don't accumulate across worker loops
+        self.dropped_dead = 0
         found: list[Candidate] = []
         # `seen` — ОДИН на все проходы, потому что ленты пересекаются: главная
         # показывает и то, что лежит в разделах. Замер 2026-08-27: из 100
@@ -327,6 +352,16 @@ class RemocateSearcher:
                     # одинаковых URL внутри одной выдачи для него оба новые.
                     continue
                 seen.add(key)
+                try:
+                    gone = self._is_gone(job["url"])
+                except Exception:  # noqa: BLE001
+                    # Сбой проверки — «не знаю», а не «мертва» и не повод ронять
+                    # площадку целиком: исключение отсюда ушло бы в on_error
+                    # run_search и обнулило бы весь прогон remocate.
+                    gone = ""
+                if gone:
+                    self.dropped_dead += 1
+                    continue
                 self._desc[key] = job["description"]
                 found.append(to_candidate(job))
                 if len(found) >= limit:
