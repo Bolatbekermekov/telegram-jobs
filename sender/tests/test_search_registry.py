@@ -40,21 +40,26 @@ def test_build_remocate():
     assert isinstance(build_searcher("remocate"), RemocateSearcher)
 
 
-def test_remocate_gets_both_passes_and_their_depths_from_config():
+def test_remocate_gets_all_three_passes_and_their_depths_from_config():
     """Глубины обязаны доехать из .env до searcher'а, а не осесть в конфиге.
 
-    Проходов у remocate два, и они не взаимозаменяемы: раздел `development`
-    глубоко (в нём 102 страницы, и с десятой он на три четверти мёртвый) и
-    главная мелко (в ней 273 страницы, но только там видны 102 вакансии без
-    категории). Порядок тоже часть настройки — общий бюджет `limit` должен
-    доставаться сначала более плотной ленте: 79 прошедших предфильтр на 100
-    карточек раздела против 35 на 100 карточек главной (замер 2026-08-27).
+    Проходов у remocate ТРИ, и они не взаимозаменяемы: раздел `development`
+    глубоко (в нём 102 страницы, и с десятой он на три четверти мёртвый),
+    раздел `qa` неглубоко (его содержимое в development не попадает вовсе —
+    пересечение нулевое, замер 2026-08-29) и главная мелко (в ней 273 страницы,
+    но только там видны 102 вакансии без категории).
+
+    Порядок тоже часть настройки — общий бюджет `limit` должен доставаться
+    сначала более плотной ленте: 79 прошедших предфильтр на 100 карточек
+    development, 19 живых-и-мёртвых из 20 у qa (живых из них 7), 35 на 100 у
+    главной, и лишь 8 из них новые.
     """
     from app import config
     from app.infrastructure.search.remocate_search import REMOCATE_HOME_URL
 
     s = build_searcher("remocate")
     assert s._passes == [(config.REMOCATE_FEED_URL, config.REMOCATE_PAGES),
+                         (config.REMOCATE_QA_URL, config.REMOCATE_QA_PAGES),
                          (REMOCATE_HOME_URL, config.REMOCATE_HOME_PAGES)]
 
 

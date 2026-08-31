@@ -8,6 +8,7 @@ from app.domain.candidate import KIND_JOB, normalize_url
 from app.infrastructure.search.remocate_search import (
     DEFAULT_HOME_PAGES, DEFAULT_PAGES, REMOCATE_HOME_URL, RemocateSearcher,
     next_page_url, parse_remocate_cards, strip_html, to_candidate,
+    DEFAULT_QA_PAGES,
 )
 
 FEED = "https://www.remocate.app/job-categories/development"
@@ -66,6 +67,9 @@ def _page(cards, next_page="?c74bbb03_page=2") -> str:
 
 
 # --- разбор карточки --------------------------------------------------------
+
+QA = "https://www.remocate.app/job-categories/qa"
+
 
 def test_parse_reads_title_company_url_and_location():
     cards = parse_remocate_cards(_page([
@@ -261,7 +265,7 @@ def test_search_walks_pages_and_stops_at_the_configured_depth():
         _page([_card("p2", "Frontend Developer", "B")], next_page="?c74bbb03_page=3"),
         _page([_card("p3", "QA Engineer", "C")], next_page="?c74bbb03_page=4"),
     ])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=2)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=2)
     s._page = feed
 
     found = s.search(["backend developer", "frontend developer", "qa engineer"],
@@ -273,7 +277,7 @@ def test_search_walks_pages_and_stops_at_the_configured_depth():
 
 def test_search_stops_when_the_feed_runs_out_of_pages():
     feed = _Feed([_page([_card("p1", "Backend Developer", "A")], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=5)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=5)
     s._page = feed
 
     assert len(s.search(["backend developer"], "Worldwide", limit=50)) == 1
@@ -287,7 +291,7 @@ def test_search_filters_by_role_words_in_the_title():
         _card("a", "Senior Backend Engineer", "A"),
         _card("b", "Senior Scrum Master", "B"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = feed
 
     found = s.search(["backend developer"], "Worldwide", limit=50)
@@ -308,7 +312,7 @@ def test_search_does_not_repeat_a_job_that_slid_to_the_next_page():
         _page([slid], next_page="?c74bbb03_page=2"),
         _page([slid, _card("p2", "QA Engineer", "B")], next_page=""),
     ])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=3)
     s._page = feed
 
     found = s.search(["backend developer", "qa engineer"], "Worldwide", limit=50)
@@ -321,7 +325,7 @@ def test_search_honours_the_limit():
         _card("a", "Backend Developer", "A"),
         _card("b", "Backend Developer", "B"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=3)
     s._page = feed
 
     assert len(s.search(["backend developer"], "Worldwide", limit=1)) == 1
@@ -332,7 +336,7 @@ def test_describe_serves_the_cached_listing_description():
         _card("a", "Backend Developer", "A",
               desc="<p>Go and <b>Postgres</b> in production.</p>"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = feed
     s.search(["backend developer"], "Worldwide", limit=50)
 
@@ -347,7 +351,7 @@ def test_describe_is_empty_for_an_unknown_url():
 def test_search_starts_from_a_clean_cache_every_run():
     # Воркер держит searcher между прогонами: без очистки кэш описаний рос бы
     # весь день и отдавал бы текст вакансии, которой в сегодняшней ленте нет.
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = _Feed([_page([_card("a", "Backend Developer", "A")], next_page="")])
     s.search(["backend developer"], "Worldwide", limit=50)
     s._page = _Feed([_page([_card("b", "QA Engineer", "B")], next_page="")])
@@ -369,7 +373,7 @@ def test_search_keeps_what_it_already_collected_when_a_page_fails():
                          next_page="?c74bbb03_page=2")
         raise RuntimeError("503 Service Unavailable")
 
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=3)
     s._page = feed
 
     assert [c.title for c in s.search(["backend developer"], "Worldwide", limit=50)] \
@@ -380,7 +384,7 @@ def test_search_survives_the_very_first_page_failing():
     def boom(url):
         raise RuntimeError("timeout")
 
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=3)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=3)
     s._page = boom
     assert s.search(["backend developer"], "Worldwide", limit=50) == []
 
@@ -395,7 +399,7 @@ def test_zero_pages_falls_back_to_the_default_depth():
     """
     feed = _Feed([_page([_card(f"p{i}", "Backend Developer", "A"),],
                         next_page=f"?c74bbb03_page={i + 1}") for i in range(1, 8)])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=0)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=0)
     s._page = feed
     s.search(["backend developer"], "Worldwide", limit=50)
 
@@ -403,7 +407,7 @@ def test_zero_pages_falls_back_to_the_default_depth():
 
 
 def test_start_stop_are_noops():
-    s = RemocateSearcher()
+    s = RemocateSearcher(qa_url="")
     s.start()
     s.stop()   # ни браузера, ни сессии — страницы публичные
 
@@ -436,7 +440,7 @@ def test_the_home_page_is_walked_as_a_second_shallower_pass():
                      [_card("h2", "Mobile Developer", "E")],
                      [_card("h3", "AI Engineer", "F")]], "ee7bb4b9"),
     )
-    s = RemocateSearcher(feed_url=FEED, pages=2, home_url=HOME, home_pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=2, home_url=HOME, home_pages=1)
     s._page = site
 
     found = s.search(["backend developer", "frontend developer", "qa engineer",
@@ -463,7 +467,7 @@ def test_a_job_the_section_already_gave_is_not_taken_again_from_the_home_page():
         _feed(FEED, [[both, _card("d2", "QA Engineer", "B")]], "c74bbb03"),
         _feed(HOME, [[both, _card("h2", "Mobile Developer", "C")]], "ee7bb4b9"),
     )
-    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=1, home_url=HOME, home_pages=1)
     s._page = site
 
     found = s.search(["backend developer", "qa engineer", "mobile developer"],
@@ -485,7 +489,7 @@ def test_the_home_pass_caches_its_descriptions_like_the_section_one():
         _feed(FEED, [[_card("d1", "Backend Developer", "A")]], "c74bbb03"),
         _feed(HOME, [[orphan]], "ee7bb4b9"),
     )
-    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=1, home_url=HOME, home_pages=1)
     s._page = site
     s.search(["backend developer", "ai engineer"], "Worldwide", limit=50)
 
@@ -506,7 +510,7 @@ def test_the_home_pass_still_runs_when_the_section_feed_breaks():
             return home[HOME]
         raise RuntimeError("503 Service Unavailable")
 
-    s = RemocateSearcher(feed_url=FEED, pages=3, home_url=HOME, home_pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=3, home_url=HOME, home_pages=1)
     s._page = flaky
 
     found = s.search(["backend developer", "ai engineer"], "Worldwide", limit=50)
@@ -521,7 +525,7 @@ def test_the_limit_is_one_budget_for_both_passes():
                       _card("d2", "QA Engineer", "B")]], "c74bbb03"),
         _feed(HOME, [[_card("h1", "AI Engineer", "C")]], "ee7bb4b9"),
     )
-    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=1, home_url=HOME, home_pages=1)
     s._page = site
 
     found = s.search(["backend developer", "qa engineer", "ai engineer"],
@@ -544,7 +548,7 @@ def test_zero_home_pages_falls_back_to_the_default_home_depth():
         _feed(HOME, [[_card(f"h{i}", "Backend Developer", "B")]
                      for i in range(1, 7)], "ee7bb4b9"),
     )
-    s = RemocateSearcher(feed_url=FEED, pages=1, home_url=HOME, home_pages=0)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=1, home_url=HOME, home_pages=0)
     s._page = site
     s.search(["backend developer"], "Worldwide", limit=50)
 
@@ -556,7 +560,7 @@ def test_the_default_second_pass_is_the_site_root():
     # Главная — это буквально корень сайта, а не ещё один раздел: своей
     # настройки адреса у неё нет и указывать её некуда.
     assert REMOCATE_HOME_URL == "https://www.remocate.app/"
-    s = RemocateSearcher(feed_url=FEED, pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", pages=1)
     site = _Site(_feed(FEED, [[_card("d1", "Backend Developer", "A")]], "c74bbb03"),
                  _feed(REMOCATE_HOME_URL,
                        [[_card("h1", "AI Engineer", "B")]], "ee7bb4b9"))
@@ -607,7 +611,7 @@ def test_found_jobs_go_through_the_same_relevance_scoring_as_other_boards():
         _card("a", "Principal Software Engineer", "Zalando"),
         _card("b", "Backend Developer", "Acme", desc="<p>Go, Postgres.</p>"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = feed
     repo = _Repo()
 
@@ -640,7 +644,7 @@ def test_a_job_already_in_the_sheet_is_not_scored_again():
               "Datadog"),
         _card("b", "QA Engineer", "Acme"),
     ], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = feed
     scorer = _LevelScorer()
 
@@ -657,7 +661,7 @@ def test_the_scorer_reads_the_listing_description_without_extra_requests():
     feed = _Feed([_page([
         _card("b", "Backend Developer", "Acme",
               desc="<p>Go, Postgres and <b>Kubernetes</b> here.</p>")], next_page="")])
-    s = RemocateSearcher(feed_url=FEED, home_url="", pages=1)
+    s = RemocateSearcher(feed_url=FEED, qa_url="", home_url="", pages=1)
     s._page = feed
     scorer = _LevelScorer()
 
@@ -693,3 +697,57 @@ def test_the_written_row_keeps_our_labels_but_stays_english():
 
     assert "Локация: 🇩🇪 Germany" in vacancy, "подпись читает человек — она остаётся"
     assert detect_language(vacancy) == "en"
+
+
+# --- раздел QA: третья лента, которой в development нет ----------------------
+#
+# Замер 2026-08-29: 20 карточек, 19 проходят предфильтр, и НИ ОДНА не
+# встречается в development. Это отменяет прежнюю запись «в qa ничего свежее
+# 21 мая». Мёртвых там 63-68% против 20% в development — цена названа в
+# докстринге REMOCATE_QA_URL.
+
+def test_the_qa_section_is_walked_after_development_and_before_the_home():
+    feed = _Feed([
+        _page([_card("be-1", "Backend Developer", "Acme")], next_page=""),
+        _page([_card("qa-2", "QA Engineer", "White Circle")], next_page=""),
+        _page([_card("fe-3", "Frontend Developer", "Foxible")], next_page=""),
+    ])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url=QA, qa_pages=1,
+                         home_url=HOME, home_pages=1)
+    s._page = feed
+    found = s.search(["developer", "qa", "engineer"], "Worldwide", limit=50)
+
+    assert feed.requested == [FEED, QA, HOME]
+    assert [c.title for c in found] == [
+        "Backend Developer", "QA Engineer", "Frontend Developer"]
+
+
+def test_the_qa_section_can_be_turned_off_by_an_empty_url():
+    feed = _Feed([
+        _page([_card("be-1", "Backend Developer", "Acme")], next_page=""),
+        _page([_card("fe-3", "Frontend Developer", "Foxible")], next_page=""),
+    ])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url="",
+                         home_url=HOME, home_pages=1)
+    s._page = feed
+    s.search(["developer"], "Worldwide", limit=50)
+
+    assert feed.requested == [FEED, HOME]
+
+
+def test_zero_qa_pages_falls_back_to_the_default_depth():
+    """Ноль значит «умолчание», как у двух соседних глубин, а не «без предела»."""
+    s = RemocateSearcher(feed_url=FEED, qa_url=QA, qa_pages=0, home_url="")
+    assert (QA, DEFAULT_QA_PAGES) in s._passes
+
+
+def test_a_vacancy_seen_in_development_is_not_taken_again_from_qa():
+    """`seen` один на все проходы — иначе повтор занял бы второй слот скоринга."""
+    same = _card("qa-9", "Fullstack QA Engineer", "Apicworld")
+    feed = _Feed([_page([same], next_page=""), _page([same], next_page="")])
+    s = RemocateSearcher(feed_url=FEED, pages=1, qa_url=QA, qa_pages=1, home_url="")
+    s._page = feed
+    found = s.search(["qa", "engineer"], "Worldwide", limit=50)
+
+    assert feed.requested == [FEED, QA]      # обе ленты опрошены
+    assert len(found) == 1                   # но вакансия взята один раз

@@ -297,6 +297,14 @@ REMOCATE_PAGES = int(os.environ.get("REMOCATE_PAGES", "5"))
 # Адреса у этого прохода своей настройки нет: главная — корень сайта, указывать
 # её некуда. Ноль и пусто, как и у REMOCATE_PAGES, значат «умолчание».
 REMOCATE_HOME_PAGES = int(os.environ.get("REMOCATE_HOME_PAGES", "3"))
+# Раздел QA — отдельная лента remocate, в development её содержимое не попадает
+# (замер 2026-08-29: 20 карточек, 19 проходят предфильтр, пересечение с
+# development НУЛЕВОЕ). Мёртвых там 63-68% против 20% в разделе разработки, зато
+# живых по 6-7 на страницу и деградации по глубине нет — отсюда две.
+# Пустой REMOCATE_QA_URL выключает проход целиком.
+REMOCATE_QA_URL = os.environ.get(
+    "REMOCATE_QA_URL", "https://www.remocate.app/job-categories/qa")
+REMOCATE_QA_PAGES = int(os.environ.get("REMOCATE_QA_PAGES", "2"))
 # Раздел `manager` НЕ добавлен третьим проходом, хотя он живой — 1.73 новых
 # вакансии в сутки. Живой он не теми ролями: из 160 его карточек (8 страниц,
 # замер 2026-08-27) слово «engineer» стоит РОВНО в одном заголовке — «Product

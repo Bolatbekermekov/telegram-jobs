@@ -57,6 +57,8 @@ def build_searcher(platform: str):
             # Второй проход — по главной: разделы не пересекаются, а у 102
             # вакансий категории нет вовсе, и видны они только там.
             home_pages=config.REMOCATE_HOME_PAGES,
+            qa_url=config.REMOCATE_QA_URL,
+            qa_pages=config.REMOCATE_QA_PAGES,
             user_agent=config.HTTP_USER_AGENT,
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )

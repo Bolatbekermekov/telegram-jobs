@@ -88,6 +88,27 @@ from app.domain.keyword_match import title_matches
 
 REMOCATE_BASE_URL = "https://www.remocate.app"
 REMOCATE_FEED_URL = "https://www.remocate.app/job-categories/development"
+# Раздел QA — ОТДЕЛЬНАЯ лента, и в development её содержимое не попадает.
+# Замер 2026-08-29: 20 карточек на странице, 19 проходят предфильтр, и НИ ОДНА
+# не встречается в development. Это отменяет прежнюю запись «в qa ничего свежее
+# 21 мая, новые QA-роли кладут в development» — сегодня там QA Engineer
+# (middle) White Circle, QA Engineer Arival Bank, Fullstack QA Engineer
+# Apicworld, QA Engineer Exness, Senior QA Automation Playson, Senior QA
+# Smartcat, QA Manual Tester Your Bourse.
+#
+# Цена названа честно: мёртвых там 63-68% против 20% в development (проверено
+# тем же vacancy_alive, что стоит в прогоне, на трёх страницах подряд — 12 из
+# 19, 13 из 20, 13 из 19). Живых при этом по 6-7 на страницу, деградации по
+# глубине нет. Отсюда две страницы: ~14 живых QA-вакансий за прогон при том,
+# что вся площадка за свою жизнь дала 20 лидов.
+#
+# ЧТО ЭТО СТОИТ: мёртвые карточки доезжают до листа и отсеиваются только перед
+# отправкой (dead_vacancy_reason), то есть человек увидит их как `manual`
+# «страница недоступна». В development такой утечки 20%, здесь будет ~65%.
+# Фильтровать живость прямо в поиске — отдельное решение владельца: это ещё
+# один GET на карточку (~2,7 с) и разное поведение у проходов одной площадки.
+REMOCATE_QA_URL = "https://www.remocate.app/job-categories/qa"
+DEFAULT_QA_PAGES = 2
 # Вторая лента — буквально корень сайта, а не ещё один раздел, поэтому своей
 # настройки адреса у неё нет: указывать её некуда. Настраивается только глубина
 # (REMOCATE_HOME_PAGES), как и у раздела.
@@ -211,7 +232,9 @@ class RemocateSearcher:
                  pages: int = DEFAULT_PAGES,
                  home_url: str = REMOCATE_HOME_URL,
                  home_pages: int = DEFAULT_HOME_PAGES,
-                 user_agent: str = DEFAULT_UA, timeout: int = 20):
+                 user_agent: str = DEFAULT_UA, timeout: int = 20,
+                 qa_url: str = REMOCATE_QA_URL,
+                 qa_pages: int = DEFAULT_QA_PAGES):
         # Проходы в порядке УБЫВАНИЯ плотности: сначала раздел (79 прошедших
         # предфильтр на 100 карточек), потом главная (35 на 100, из них новых 8).
         # Порядок решает, кому достанется общий бюджет `limit`, если он мал.
@@ -225,6 +248,12 @@ class RemocateSearcher:
         # у них было бы ловушкой.
         self._passes: list[tuple[str, int]] = [
             (feed_url, pages if pages > 0 else DEFAULT_PAGES)]
+        # Второй по плотности — раздел QA: 19 подходящих карточек из 20, но
+        # живых из них 7. Идёт после development и до главной. Пустой адрес
+        # выключает проход, как и у главной.
+        if qa_url:
+            self._passes.append(
+                (qa_url, qa_pages if qa_pages > 0 else DEFAULT_QA_PAGES))
         # Пустой адрес выключает второй проход. Настройки под это нет и быть не
         # должно: без главной бесхозные вакансии не видны вообще ничем.
         if home_url:
