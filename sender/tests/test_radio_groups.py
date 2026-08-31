@@ -103,9 +103,13 @@ def _spy_choice(monkeypatch):
 
     def fake(page, locator, value="", index=None):
         calls.append({"value": value, "index": index})
-        return True
+        return (True, "")
 
-    monkeypatch.setattr(ea, "_pick_choice", fake)
+    # Подменяется `_pick_choice_reason`, а не `_pick_choice`: с 2026-08-29
+    # `fill_fields` зовёт версию с причиной, и подмена старого имени просто
+    # переставала действовать — тест уходил в настоящий виджет с фальшивым
+    # локатором и падал на «'_Loc' object has no attribute 'evaluate'».
+    monkeypatch.setattr(ea, "_pick_choice_reason", fake)
     return calls
 
 
@@ -125,7 +129,8 @@ def test_a_refused_required_choice_becomes_a_manual_apply(monkeypatch):
     """Виджет отвечает False, а не исключением. Молча пройти мимо нельзя:
     обязательный вопрос без ответа — это форма, которая не отправится, и лучше
     узнать об этом здесь, чем по «ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА» после сабмита."""
-    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
     with pytest.raises(ManualApplyRequired, match="не выбрался вариант"):
         ea.fill_fields(_Page(), _plan_with(1))
 
@@ -134,7 +139,8 @@ def test_a_refused_optional_choice_is_skipped(monkeypatch):
     optional = FieldObs(tag="input", type="radio", name="q", label="Newsletter?",
                         required=False, options=["Yes", "No"], ref="9")
     plan = ApplyPlan(actions=[FillAction(field=optional, choice_index=1, value="No")])
-    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
     ea.fill_fields(_Page(), plan)          # не бросает
 
 
@@ -167,7 +173,8 @@ def test_a_consent_checkbox_goes_through_the_widget_too(monkeypatch):
 def test_a_consent_the_widget_could_not_tick_is_not_passed_over(monkeypatch):
     consent = FieldObs(tag="input", type="checkbox", name="c", label="I consent",
                        required=False, ref="7")
-    monkeypatch.setattr(ea, "_pick_choice", lambda *a, **k: False)
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
     plan = build_plan(PageObservation(fields=[consent]), PROFILE, "cv.pdf")
     with pytest.raises(ManualApplyRequired, match="не поставилась галочка"):
         ea.fill_fields(_Page(), plan)

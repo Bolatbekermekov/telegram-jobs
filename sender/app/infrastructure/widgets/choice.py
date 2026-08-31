@@ -187,6 +187,12 @@ def _fn(body: str) -> str:
 
 
 def pick_choice(page, locator, value: str = "", index: int | None = None) -> bool:
+    """Совместимая обёртка: True/False без причины. Причина — в pick_choice_reason."""
+    return pick_choice_reason(page, locator, value, index)[0]
+
+
+def pick_choice_reason(page, locator, value: str = "",
+                       index: int | None = None) -> tuple[bool, str]:
     """Выбрать вариант ответа. True — только если выбор ПОДТВЕРЖДЁН страницей.
 
     `locator` — контрол, найденный скрапером (он метит их `data-af=<индекс>`);
@@ -201,35 +207,50 @@ def pick_choice(page, locator, value: str = "", index: int | None = None) -> boo
     False — это честный отказ («страница ответ не приняла»), а не поломка:
     исключения наружу не выходят, потому что для обязательного поля решение
     принимает вызывающая сторона, и её собственный диагноз затирать нельзя.
+
+    Вторым значением возвращается ПРИЧИНА отказа. Без неё заметка лида говорила
+    только «не выбрался вариант «Yes»», а за этим стоят четыре разных случая, и
+    чинятся они по-разному: варианта нет в группе, контрол выключен страницей,
+    контрол не найден вовсе (форму перерисовало), или все три способа клика
+    отработали, а страница ответ так и не засчитала. Живьём 2026-08-29 этот
+    отказ пришёл ЧЕТЫРЕ раза за один прогон на LinkedIn Easy Apply («Do you have
+    experience with GO?», «valid driver's license», «comfortable commuting»), и
+    разобрать его было нечем.
     """
     try:
         found = locator.first.evaluate(
             _fn(_RESOLVE_JS),
             {"value": value or "", "index": -1 if index is None else int(index)},
             timeout=_RESOLVE_TIMEOUT_MS)
-    except Exception:  # noqa: BLE001 — контрола нет / страница перерисовалась
-        return False
+    except Exception as exc:  # noqa: BLE001 — контрола нет / страница перерисовалась
+        return (False, f"контрол не найден: {str(exc)[:70]}")
     if not isinstance(found, dict) or not found.get("found"):
-        return False
+        return (False, "варианта нет среди кнопок группы")
     # Выключенный контрол в данные формы не попадает, сколько по нему ни бей —
     # и трогать его незачем: страница сама сказала, что ответ тут не берут.
     if found.get("disabled"):
         _unstamp(page)
-        return False
+        return (False, f"страница держит вариант «{found.get('label') or ''}» выключенным")
     if found.get("accepted"):
         # Уже выбран. Для ЧЕКБОКСА повторный клик снял бы галочку, то есть
         # ответ на противоположный, поэтому выходим до всяких кликов.
         _unstamp(page)
-        return True
+        return (True, "")
     try:
+        tried = []
         for attempt in (_native_click, _label_click, _force_check):
+            name = attempt.__name__.strip("_")
+            if attempt is _label_click and not found.get("has_label"):
+                tried.append(f"{name}: метки нет")
+                continue
             try:
                 attempt(page, found)
-            except Exception:  # noqa: BLE001 — следующий способ важнее причины
-                pass
+                tried.append(name)
+            except Exception as exc:  # noqa: BLE001 — следующий способ важнее причины
+                tried.append(f"{name}: {str(exc).splitlines()[0][:50]}")
             if _accepted(page):
-                return True
-        return False
+                return (True, "")
+        return (False, "клик прошёл, но страница ответ не засчитала — " + "; ".join(tried))
     finally:
         _unstamp(page)
 

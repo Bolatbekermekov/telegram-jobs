@@ -195,8 +195,10 @@ def test_an_affirmative_answer_still_ticks_the_box(monkeypatch):
     что при утвердительном ответе он вообще зовёт виджет; как тот нажимает,
     закреплено в tests/test_choice_widget.py."""
     called = []
-    monkeypatch.setattr(ea, "_pick_choice",
+    # Имя подмены — `_pick_choice_reason`: с 2026-08-29 `fill_fields` зовёт
+    # версию, возвращающую (успех, причина), чтобы отказ называл себя.
+    monkeypatch.setattr(ea, "_pick_choice_reason",
                         lambda page, loc, value="", index=None:
-                        called.append(index) or True)
+                        (called.append(index), (True, ""))[1])
     ea.fill_fields(_Page(), _relocation_plan(True))
     assert called == [0]

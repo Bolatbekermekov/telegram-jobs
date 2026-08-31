@@ -17,7 +17,7 @@ from app.application.auto_apply import (
 )
 from app.application.classify_apply import classify, known_ats_iframe
 from app.domain.ats_embed import greenhouse_embed_url, vendor_apply_url
-from app.infrastructure.widgets.choice import pick_choice as _pick_choice
+from app.infrastructure.widgets.choice import pick_choice_reason as _pick_choice_reason
 from app.infrastructure.widgets.combobox import (
     _best, combobox_options as _combobox_options, fill_combobox as _fill_combobox,
 )
@@ -412,13 +412,18 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                 # checkbox did not change its state». В headless тот же вызов
                 # проходит, поэтому тесты молчали, а прогон (BROWSER_HEADLESS по
                 # умолчанию false) падал на лиде #418.
-                if not _pick_choice(page, loc, value=a.value,
-                                    index=a.choice_index):
+                picked, why = _pick_choice_reason(page, loc, value=a.value,
+                                                  index=a.choice_index)
+                if not picked:
                     if _required(a.field):
+                        # Причина обязательна: за одной фразой стоят четыре
+                        # разных случая (варианта нет, контрол выключен, контрол
+                        # исчез, клик не засчитан), и чинятся они по-разному.
                         raise ManualApplyRequired(
                             f"{where}: не выбрался вариант "
                             f"«{a.value or a.choice_index}» в обязательном поле "
-                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
+                            f"«{a.field.label or a.field.name}» — {why}, "
+                            "нужен ручной отклик")
                     continue
             elif a.field.type in ("checkbox", "radio"):
                 if _is_affirmative(a.value):
@@ -428,10 +433,12 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                     # 126, замер 2026-07-29). LinkedIn помечает эту галочку
                     # `required=false` и требует всё равно, поэтому отказ здесь
                     # виден только по самой форме — молчать о нём нельзя.
-                    if not _pick_choice(page, loc, index=0):
+                    ticked, why = _pick_choice_reason(page, loc, index=0)
+                    if not ticked:
                         raise ManualApplyRequired(
                             f"{where}: не поставилась галочка "
-                            f"«{a.field.label or a.field.name}», нужен ручной отклик")
+                            f"«{a.field.label or a.field.name}» — {why}, "
+                            "нужен ручной отклик")
             elif a.field.combobox and a.value:
                 # Прежний путь искал подсказки ПО ВСЕЙ СТРАНИЦЕ, а на каждой
                 # форме Greenhouse рядом с «Phone» висит intl-tel-input со

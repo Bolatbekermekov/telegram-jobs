@@ -31,7 +31,7 @@
 import pytest
 
 from app.infrastructure.channels.external_apply import scrape_form
-from app.infrastructure.widgets.choice import pick_choice
+from app.infrastructure.widgets.choice import pick_choice, pick_choice_reason
 
 
 @pytest.fixture(scope="module")
@@ -346,3 +346,64 @@ def test_live_recruitee_form_headed():
             assert data[VISA] == "false" and data[RELOCATE] == "true"
         finally:
             browser.close()
+
+
+# --- отказ обязан называть причину -------------------------------------------
+#
+# Живьём 2026-08-29 отказ «не выбрался вариант «Yes»» пришёл ЧЕТЫРЕ раза за один
+# прогон на LinkedIn Easy Apply («Do you have experience with GO?», «valid
+# driver\'s license», «comfortable commuting»), и разобрать его было нечем: за
+# одной фразой стоят четыре разных случая, и чинятся они по-разному.
+
+_YESNO = """
+  <form><fieldset>
+    <legend>Do you have experience with GO?</legend>
+    <label for="q-0"><input type="radio" id="q-0" data-af="0" name="q" value="Yes">Yes</label>
+    <label for="q-1"><input type="radio" id="q-1" name="q" value="No">No</label>
+  </fieldset></form>
+"""
+
+
+def test_a_missing_option_says_so(page):
+    show(page, _YESNO)
+    ok, why = pick_choice_reason(page, af(page, "0"), value="Maybe", index=None)
+
+    assert ok is False
+    assert "нет среди кнопок группы" in why
+
+
+def test_a_disabled_control_says_so(page):
+    show(page, _YESNO.replace('id="q-0"', 'id="q-0" disabled'))
+    ok, why = pick_choice_reason(page, af(page, "0"), value="Yes", index=0)
+
+    assert ok is False
+    assert "выключенным" in why
+    assert checked(page, "q") == []          # выключенное не жмём вовсе
+
+
+def test_a_working_pick_carries_no_reason(page):
+    show(page, _YESNO)
+    assert pick_choice_reason(page, af(page, "0"), value="Yes", index=0) == (True, "")
+    assert checked(page, "q") == ["Yes"]
+
+
+def test_a_pick_the_page_undoes_lists_what_was_tried(page):
+    """Все три способа отработали, а состояние не изменилось — самый частый случай.
+
+    Разметка тут нарочно враждебная: обработчик снимает выбор сразу после любого
+    клика, ровно как ведёт себя форма, которая ответ не принимает.
+    """
+    show(page, _YESNO + """
+      <script>document.querySelectorAll('input[name=q]').forEach(
+        e => e.addEventListener('click', () => { e.checked = false; }));</script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), value="Yes", index=0)
+
+    assert ok is False
+    assert "страница ответ не засчитала" in why
+    assert "native_click" in why and "force_check" in why
+
+
+def test_the_plain_wrapper_still_returns_a_bool(page):
+    show(page, _YESNO)
+    assert pick_choice(page, af(page, "0"), value="Yes", index=0) is True
