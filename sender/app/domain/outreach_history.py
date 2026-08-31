@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.domain.candidate import posting_identity
 from app.domain.lead import STATUS_SKIPPED
 
 # Мусор, который площадки клеят к ссылке и который меняется от показа к показу.
@@ -91,6 +92,36 @@ def vacancy_similarity(a, b) -> float | None:
     return len(wa & wb) / min(len(wa), len(wb))
 
 
+# Адреса мало. У hh отклик уходит НА ВАКАНСИЮ, то есть «получатель» — это ссылка,
+# а работодатель публикует одно объявление отдельной карточкой в каждом городе:
+# ссылки честно разные, и правило «тот же адрес + та же вакансия» их не видит.
+#
+# Замер листа 2026-08-29, по всей истории отправок: LLC СП Солюшен получил ОДНУ И
+# ТУ ЖЕ «AI-разработчик (Python) Junior / Middle» ДВАДЦАТЬ ЧЕТЫРЕ раза за три дня;
+# Andersen — 12 откликов, из них по три на «QA Manual Trainee» и «Full Stack Test
+# Engineer Trainee»; Т-Банк — четыре раза одну «Frontend-разработчик React».
+# Всего правило ниже остановило бы 43 повтора из 94 опознанных объявлений, все на
+# hh, и ни одного ложного срабатывания на других площадках.
+#
+# Дедупликация в поиске (`_unique` -> posting_identity) от этого не спасает: она
+# живёт ВНУТРИ одного прогона, а эти копии расползлись по трём дням.
+#
+# Первая строка «Вакансии» имеет вид «Название — Работодатель»; её пишет поиск.
+# Старый формат клал в ту же строку оценку («AI Intern — 92/100: …»), и тогда за
+# работодателя принималась проза — поэтому строки с «/100» и слишком длинные
+# хвосты в ключ не идут вовсе: пропустить повтор дешевле, чем склеить две разные
+# вакансии.
+def vacancy_posting(vacancy_text) -> tuple[str, str] | None:
+    """(название, работодатель) из первой строки описания, или None."""
+    head = (str(vacancy_text or "").strip().splitlines() or [""])[0].strip()
+    if "/100" in head or "—" not in head:
+        return None
+    title, _, company = head.rpartition("—")
+    if len(company.strip()) > 60 or len(title.strip()) > 120:
+        return None
+    return posting_identity(title, company)
+
+
 def duplicate_reason(lead, history, now: datetime,
                      window_days: int) -> tuple[str, str] | None:
     """Почему этому лиду писать не надо, как (статус, заметка), или None.
@@ -108,6 +139,20 @@ def duplicate_reason(lead, history, now: datetime,
         return None
 
     platform = (lead.platform or "").strip().lower()
+
+    # То же объявление у того же работодателя — не писать НИКОГДА, каким бы ни
+    # был адрес. Проверяется до адресного правила: у копий по городам адреса
+    # разные, и до сравнения вакансий дело просто не доходило.
+    mine = vacancy_posting(lead.vacancy_context or lead.raw_text)
+    if mine is not None:
+        for past in history:
+            if (past.platform or "").strip().lower() != platform:
+                continue
+            if vacancy_posting(past.vacancy) == mine:
+                return (STATUS_SKIPPED,
+                        _note("already applied: то же объявление у того же работодателя",
+                              past))
+
     for past in history:
         if past.address != address or (past.platform or "").strip().lower() != platform:
             continue

@@ -11,6 +11,7 @@ from app.domain.outreach_history import (
     SentRecord,
     duplicate_reason,
     normalize_address,
+    vacancy_posting,
     vacancy_similarity,
 )
 
@@ -196,3 +197,77 @@ def test_the_note_names_the_lead_we_already_wrote_to():
                            history, NOW, 5)
     assert got is not None
     assert "75" in got[1]
+
+
+# --- одно объявление у одного работодателя, разные адреса ---------------------
+#
+# Замер листа 2026-08-29: LLC СП Солюшен получил одну и ту же «AI-разработчик
+# (Python) Junior / Middle» ДВАДЦАТЬ ЧЕТЫРЕ раза за три дня. У hh отклик уходит
+# на вакансию, то есть «получатель» — это ссылка, а копии по городам имеют
+# честно разные ссылки. Правило по адресу их не видело.
+
+_V = "AI-разработчик (Python) Junior / Middle — LLC СП Солюшен\nЛокация: Омск\n78/100: ок"
+_V_OTHER_CITY = ("AI-разработчик (Python) Junior / Middle — LLC СП Солюшен\n"
+                 "Локация: Тула\n82/100: ок")
+
+
+def _hh_lead(url, vacancy, platform="hh", lead_id="2"):
+    return Lead(row=2, lead_id=lead_id, platform=platform, target=url,
+                vacancy_context=vacancy, raw_text="", status="new", sent_at=None)
+
+
+def _hh_past(url, vacancy, platform="hh", lead_id="1"):
+    return SentRecord(platform=platform, address=normalize_address(url),
+                      vacancy=vacancy, sent_at=datetime(2026, 8, 26, 10, 0),
+                      lead_id=lead_id)
+
+
+def test_the_same_posting_at_another_url_is_not_written_again():
+    verdict = duplicate_reason(
+        _hh_lead("https://hh.ru/vacancy/136551284", _V_OTHER_CITY),
+        [_hh_past("https://hh.ru/vacancy/136551281", _V)],
+        datetime(2026, 8, 29, 12, 0), window_days=14)
+
+    assert verdict is not None
+    status, note = verdict
+    assert status == STATUS_SKIPPED
+    assert "то же объявление" in note
+    assert "#1" in note          # человеку видно, какой лид повторяется
+
+
+def test_another_role_at_the_same_employer_still_goes():
+    other = "Go-разработчик — LLC СП Солюшен\nЛокация: Омск\n80/100: ок"
+    assert duplicate_reason(
+        _hh_lead("https://hh.ru/vacancy/2", other),
+        [_hh_past("https://hh.ru/vacancy/1", _V)],
+        datetime(2026, 8, 29, 12, 0), window_days=14) is None
+
+
+def test_the_same_title_at_another_employer_still_goes():
+    other = "AI-разработчик (Python) Junior / Middle — Другая Компания\n78/100: ок"
+    assert duplicate_reason(
+        _hh_lead("https://hh.ru/vacancy/2", other),
+        [_hh_past("https://hh.ru/vacancy/1", _V)],
+        datetime(2026, 8, 29, 12, 0), window_days=14) is None
+
+
+def test_another_platform_is_not_blocked_by_it():
+    assert duplicate_reason(
+        _hh_lead("https://linkedin.com/jobs/view/9", _V, platform="linkedin"),
+        [_hh_past("https://hh.ru/vacancy/1", _V)],
+        datetime(2026, 8, 29, 12, 0), window_days=14) is None
+
+
+def test_the_old_combined_format_is_not_parsed_at_all():
+    """«AI Intern — 92/100: …» — тут за работодателя принималась бы проза."""
+    old = "AI Intern — 92/100: AI Intern, работа с LLM — хорошо совпадает с поиском"
+    assert vacancy_posting(old) is None
+
+
+def test_a_prose_summary_without_a_head_line_is_not_parsed():
+    assert vacancy_posting("Ищут Frontend-разработчика (React / TypeScript).") is None
+
+
+def test_a_long_tail_is_not_taken_for_an_employer():
+    long_tail = "Роль — " + "очень длинное описание вместо названия компании" * 2
+    assert vacancy_posting(long_tail) is None
