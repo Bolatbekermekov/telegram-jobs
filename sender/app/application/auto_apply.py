@@ -7,7 +7,7 @@ No Playwright, no network — fully testable.
 import re
 from dataclasses import dataclass, field
 
-from app.domain.apply_profile import ApplyProfile
+from app.domain.apply_profile import ApplyProfile, work_authorized_in
 from app.domain.availability import availability_iso
 from app.domain.page_observation import FieldObs, PageObservation
 
@@ -355,6 +355,28 @@ def _experience_answer(f: FieldObs, years: int) -> FillAction:
                       source="profile")
 
 
+_NEEDED_RE = re.compile(
+    r"(?:требу\w*|нужн\w*|понадоб\w*|will you (?:require|need)|do you (?:require|need))"
+    r"[^?]{0,40}(?:разрешени\w*|виз\w*|спонсор\w*|sponsorship|visa|work permit)", re.I)
+
+
+def _asks_whether_needed(question: str) -> bool:
+    """Спрашивают ли, НУЖНО ли разрешение (а не есть ли оно).
+
+    «Требуется ли вам разрешение на работу в Казахстане?» — ответ «нет», и это
+    хорошая новость. «Есть ли у вас разрешение на работу в Казахстане?» — ответ
+    «да», и это та же хорошая новость. Слова почти одни, смысл обратный.
+    """
+    return bool(_NEEDED_RE.search(question or ""))
+
+
+def _names_no_country(question: str) -> bool:
+    """Названа ли в вопросе страна. Без неё правило про спонсорство падает
+    обратно на флаг анкеты, а не выдумывает ответ."""
+    from app.domain.apply_profile import country_in_question
+    return not country_in_question(question)
+
+
 def _yes_no(f: FieldObs, yes: bool, source: str = "profile") -> FillAction:
     if f.options:
         idx = _match_choice(f.options, "yes" if yes else "no")
@@ -403,10 +425,33 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
             return FillAction(field=f, choice_index=idx, value=f.options[idx], source="eeo")
         return FillAction(field=f, value=EEO_ANSWER, source="eeo")
 
-    if re.search(r"sponsor|visa", low):
-        return _yes_no(f, profile.needs_visa_sponsorship)
-    if re.search(r"authori[sz]ed to work|work authori|eligible to work|right to work", low):
-        return _yes_no(f, not profile.needs_visa_sponsorship)
+    # Обе половины одного факта, и обе теперь читают СТРАНУ из вопроса, а не
+    # один глобальный флаг: право работать в Швеции и потребность в спонсорстве
+    # для Швеции — это про Швецию, а не про Казахстан. Чем это обернулось до
+    # починки, см. `work_authorized_in`.
+    # Триггеры двуязычные: без русских форма на hh.kz или в русскоязычном ATS
+    # до этого правила просто не доходила и уезжала к модели, которая про
+    # правовой статус ничего не знает.
+    #
+    # «ТРЕБУЕТСЯ ли вам разрешение на работу» и «ЕСТЬ ли у вас разрешение на
+    # работу» — противоположные вопросы из одних слов, и разводит их только
+    # глагол. Вопрос о НУЖДЕ уходит в правило про спонсорство ниже: там ответ
+    # «да» означает «нужна виза», а здесь «да» означало бы «право есть».
+    if _asks_whether_needed(low):
+        pass
+    elif re.search(r"authori[sz]ed to work|work authori|eligible to work|right to work"
+                   r"|право работать|правом работать|разрешение на работу", low):
+        return _yes_no(f, work_authorized_in(f.label or low, profile.country))
+    if re.search(r"sponsor|visa|work permit|спонсор|виз[ауы]\b|разрешени\w*\s+на\s+работу",
+                 low):
+        authorized = work_authorized_in(f.label or low, profile.country)
+        # Спонсорство нужно там, где права работать нет. Когда страна в вопросе
+        # не названа, остаётся прежний флаг из анкеты — трактовать «нужна ли вам
+        # виза?» как «да» для домашней страны было бы такой же неправдой,
+        # только в другую сторону.
+        needs = profile.needs_visa_sponsorship if _names_no_country(f.label or low) \
+            else not authorized
+        return _yes_no(f, needs)
     if re.search(r"relocat", low):
         return _yes_no(f, profile.open_to_relocation)
 
