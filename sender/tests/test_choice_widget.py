@@ -407,3 +407,24 @@ def test_a_pick_the_page_undoes_lists_what_was_tried(page):
 def test_the_plain_wrapper_still_returns_a_bool(page):
     show(page, _YESNO)
     assert pick_choice(page, af(page, "0"), value="Yes", index=0) is True
+
+
+def test_a_lost_stamp_is_reported_and_not_read_as_a_click(page):
+    """`el.click()` при null не бросает ничего, и «native_click» в отчёте значил
+    сразу два разных случая. Живьём 2026-09-01 на LinkedIn Easy Apply оба
+    локатора после него отваливались по таймауту — подпись того, что метки на
+    странице уже нет."""
+    show(page, _YESNO + """
+      <script>
+        // Перерисовка, снимающая метку: React заменяет узлы, атрибут не переживает.
+        const box = document.querySelector('fieldset');
+        new MutationObserver(() => {
+          document.querySelectorAll('[data-af-pick]').forEach(
+            e => e.removeAttribute('data-af-pick'));
+        }).observe(box, {attributes: true, subtree: true});
+      </script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), value="Yes", index=0)
+
+    assert ok is False
+    assert "метка не дожила" in why

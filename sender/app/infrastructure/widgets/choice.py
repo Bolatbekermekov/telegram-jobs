@@ -170,9 +170,16 @@ _STATE_JS = _HELPERS + r"""
 # Нативный клик: событие настоящее для страницы (React его видит и обновляет
 # своё состояние), но точка попадания не нужна — поэтому спрятанная,
 # накрытая или не разложенная кнопка ему не помеха.
+# Возвращает, НАШЁЛСЯ ли помеченный элемент. Без этого «native_click» в отчёте
+# значил и «кликнули, страница не приняла», и «кликать было уже не по чему»:
+# `el.click()` при null не бросает ничего. Живьём 2026-09-01 на LinkedIn Easy
+# Apply оба локатора Playwright после него отваливались по таймауту — а это
+# ровно то, что бывает, когда метку снял перерисовавший форму React.
 _NATIVE_CLICK_JS = _HELPERS + r"""
   const el = find();
-  if (el) el.click();
+  if (!el) return {found: false};
+  el.click();
+  return {found: true};
 """
 
 _UNSTAMP_JS = r"""() => document.querySelectorAll('[data-af-pick],[data-af-pick-label]')
@@ -256,7 +263,9 @@ def pick_choice_reason(page, locator, value: str = "",
 
 
 def _native_click(page, found) -> None:
-    page.evaluate(_fn(_NATIVE_CLICK_JS))
+    res = page.evaluate(_fn(_NATIVE_CLICK_JS))
+    if isinstance(res, dict) and not res.get("found"):
+        raise RuntimeError("метка не дожила до клика (страницу перерисовало?)")
 
 
 def _label_click(page, found) -> None:
