@@ -221,3 +221,66 @@ def test_a_personal_status_group_is_answered_prefer_not_to_say():
     assert action.source == "eeo"
     assert action.value == "I prefer not to say"
     assert action.needs_ai is False
+
+
+# --- разметка формы сохраняется, когда вариант не выбрался -------------------
+#
+# Отказ «не выбрался вариант» пришёл пять раз за три прогона, диагностика сузила
+# его до «страница клик получает и не засчитывает», а дальше без живой разметки
+# хода нет. Достать её вручную нельзя: надёжно зайти в форму можно только так,
+# как это делает канал, то есть рискуя отправить заявку. Значит разметка должна
+# прийти сама, из настоящего прогона.
+
+def test_a_refused_required_choice_saves_the_form(monkeypatch, tmp_path):
+    from app import config
+
+    monkeypatch.setattr(config, "APPLY_DEBUG_DIR", str(tmp_path))
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
+
+    class _ContentPage(_Page):
+        def content(self):
+            return "<html>форма</html>"
+
+        def screenshot(self, path=None):
+            pass
+
+    with pytest.raises(ManualApplyRequired):
+        ea.fill_fields(_ContentPage(), _plan_with(1))
+
+    saved = sorted(p.name for p in tmp_path.iterdir())
+    assert any(n.endswith(".html") for n in saved), saved
+    # Имя говорит, на каком вопросе застряли, — иначе дампы затирают друг друга.
+    assert any("onsite" in n for n in saved), saved
+
+
+def test_an_optional_choice_that_was_skipped_saves_nothing(monkeypatch, tmp_path):
+    """Дамп пишется только там, где иначе остаётся гадать."""
+    from app import config
+    from app.domain.page_observation import FieldObs
+
+    monkeypatch.setattr(config, "APPLY_DEBUG_DIR", str(tmp_path))
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
+    optional = FieldObs(tag="input", type="radio", name="q", label="Newsletter?",
+                        required=False, options=["Yes", "No"], ref="9")
+    ea.fill_fields(_Page(), ApplyPlan(actions=[
+        FillAction(field=optional, choice_index=1, value="No")]))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_broken_dump_never_breaks_the_apply(monkeypatch, tmp_path):
+    """Диагностика не имеет права ронять отклик — падает молча."""
+    from app import config
+
+    monkeypatch.setattr(config, "APPLY_DEBUG_DIR", str(tmp_path))
+    monkeypatch.setattr(ea, "_pick_choice_reason",
+                        lambda *a, **k: (False, "страница ответ не засчитала"))
+
+    class _NoContent(_Page):
+        def content(self):
+            raise RuntimeError("страница закрылась")
+
+    with pytest.raises(ManualApplyRequired, match="не выбрался вариант"):
+        ea.fill_fields(_NoContent(), _plan_with(1))

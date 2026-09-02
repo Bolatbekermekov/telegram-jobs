@@ -338,6 +338,76 @@ def _attached_count(loc) -> int:
         return -1
 
 
+# Снимок формы, на которой отклик застрял. Пишется ТОЛЬКО при отказе.
+#
+# Понадобился из-за «не выбрался вариант» в LinkedIn Easy Apply: отказ пришёл
+# пять раз за три прогона, диагностика сузила его до «страница клик получает и
+# не засчитывает», а дальше без живой разметки хода нет. Достать её вручную
+# нельзя — надёжно зайти в форму можно только так, как это делает канал, то есть
+# рискуя отправить заявку. Значит разметка должна прийти сама, из настоящего
+# прогона. Тот же приём уже применён к вопросам hh (`hh_question_*`).
+#
+# Кроме DOM снимаются ВЫЧИСЛЕННЫЕ стили группы: именно они отвечают на вопрос,
+# почему клик не доходит (`pointer-events: none`, метка 0×0, нулевая
+# прозрачность), а в разметке их не видно.
+_GROUP_PROBE_JS = """(el) => {
+  const g = (() => {
+    const t = (el.type || '').toLowerCase();
+    if ((t === 'radio' || t === 'checkbox') && el.name)
+      return [...document.querySelectorAll('input[type=' + t + ']')]
+               .filter(r => r.name === el.name);
+    const box = el.closest('fieldset,[role=radiogroup],[role=group]');
+    return box ? [...box.querySelectorAll('input,[role=radio]')] : [el];
+  })();
+  const shot = e => {
+    const cs = getComputedStyle(e), r = e.getBoundingClientRect();
+    let lab = e.closest('label');
+    if (!lab && e.id) lab = document.querySelector('label[for="' + CSS.escape(e.id) + '"]');
+    const lcs = lab ? getComputedStyle(lab) : null, lr = lab ? lab.getBoundingClientRect() : null;
+    return {
+      tag: e.tagName, type: e.type, name: (e.name || '').slice(0, 70),
+      checked: e.checked, ariaChecked: e.getAttribute('aria-checked'),
+      disabled: !!e.disabled, html: e.outerHTML.slice(0, 400),
+      style: {display: cs.display, visibility: cs.visibility, opacity: cs.opacity,
+              pointerEvents: cs.pointerEvents, position: cs.position, clip: cs.clip,
+              w: Math.round(r.width), h: Math.round(r.height)},
+      label: lab ? {text: (lab.textContent || '').trim().slice(0, 60),
+                    w: Math.round(lr.width), h: Math.round(lr.height),
+                    pointerEvents: lcs.pointerEvents, display: lcs.display,
+                    html: lab.outerHTML.slice(0, 400)} : null,
+    };
+  };
+  return {size: g.length, inForm: !!(el.form || el.closest('form')),
+          inDialog: !!el.closest('[role=dialog]'), options: g.slice(0, 6).map(shot)};
+}"""
+
+
+def _slug(text: str) -> str:
+    out = [c if c.isalnum() else "-" for c in (text or "")[:40].lower()]
+    return "".join(out).strip("-").replace("--", "-") or "no-label"
+
+
+def _dump_form_debug(page, tag: str, locator=None) -> None:
+    """DOM, снимок экрана и вычисленные стили группы. Никогда не роняет отклик."""
+    from app import config
+    from pathlib import Path
+    try:
+        d = Path(config.APPLY_DEBUG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{tag}.html").write_text(page.content(), encoding="utf-8")
+        try:
+            page.screenshot(path=str(d / f"{tag}.png"))
+        except Exception:  # noqa: BLE001 — снимок необязателен, разметка важнее
+            pass
+        if locator is not None:
+            import json
+            probe = locator.first.evaluate(_GROUP_PROBE_JS, timeout=2000)
+            (d / f"{tag}.json").write_text(
+                json.dumps(probe, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — диагностика не имеет права ломать прогон
+        pass
+
+
 def fill_fields(page, plan, where: str = "внешняя форма", profile=None) -> None:
     """Type every planned value into the page. Submits nothing.
 
@@ -416,6 +486,8 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                                                   index=a.choice_index)
                 if not picked:
                     if _required(a.field):
+                        _dump_form_debug(
+                            page, f"choice_{_slug(a.field.label or a.field.name)}", loc)
                         # Причина обязательна: за одной фразой стоят четыре
                         # разных случая (варианта нет, контрол выключен, контрол
                         # исчез, клик не засчитан), и чинятся они по-разному.

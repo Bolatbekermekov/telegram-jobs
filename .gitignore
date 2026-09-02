@@ -56,3 +56,5 @@ sender/.scored_out.json
 
 # subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
+# Разметка форм, на которых застрял отклик (пишется только при отказе).
+sender/.apply_debug/

@@ -348,6 +348,13 @@ SEARCH_PROFILE_PATH = os.environ.get(
 # потерять его значит один раз переоценить отказников, не больше.
 SCORED_OUT_PATH = os.environ.get(
     "SCORED_OUT_PATH", str(_ROOT / "sender" / ".scored_out.json"))
+# Куда складывать разметку формы, на которой отклик застрял. Пишется ТОЛЬКО при
+# отказе и только на путях, где иначе остаётся гадать: замер 2026-09-02 показал,
+# что «не выбрался вариант» в LinkedIn Easy Apply нельзя разобрать без живой
+# разметки, а зайти в форму руками значит рискнуть лишней заявкой.
+APPLY_DEBUG_DIR = os.environ.get(
+    "APPLY_DEBUG_DIR", str(_ROOT / "sender" / ".apply_debug"))
+
 # Human-like delay between scrape actions.
 PACING_MIN_SECONDS = int(os.environ.get("PACING_MIN_SECONDS", "2"))
 PACING_MAX_SECONDS = int(os.environ.get("PACING_MAX_SECONDS", "6"))
