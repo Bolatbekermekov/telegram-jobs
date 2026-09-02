@@ -420,6 +420,28 @@ def _already_applied(page) -> bool:
     return any(m in body for m in _APPLIED_MARKERS)
 
 
+def _applied_after_reload(page, url: str) -> bool:
+    """Переспросить страницу заново: не прошёл ли отклик всё-таки.
+
+    hh НЕ перерисовывает вакансию после отклика — отметка «вы откликались»
+    появляется только на свежей загрузке. Замер 2026-09-01: лиды #733
+    (vacancy/135035753) и #738 (136597256) упали с «поле письма не появилось и
+    отклик не подтверждён», в сохранённом дампе стояла кнопка отклика и НЕ было
+    отметки; а на следующий день hh на обе ответил «already applied» — то есть
+    заявки тогда ушли, и сообщение врало в самую опасную сторону: человек
+    считает, что не откликнулся, и идёт откликаться заново.
+
+    Стоит одну загрузку и только на пути к неудаче — то есть там, где мы и так
+    собирались сдаться.
+    """
+    try:
+        page.goto(vacancy_url(url), wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(2000)
+    except Exception:  # noqa: BLE001 — не смогли переспросить: считаем, что нет
+        return False
+    return _already_applied(page)
+
+
 def _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=None) -> None:
     """Deliver the cover `letter` and/or the CV PDF through the vacancy chat.
 
@@ -516,9 +538,18 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
         _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=content.body)
         return
     if page.locator(SEL_LETTER_INPUT).count() == 0:
+        # Прежде чем сдаться — перезагрузить и переспросить: отметку об отклике
+        # hh показывает только на свежей загрузке (см. _applied_after_reload).
+        if _applied_after_reload(page, url):
+            print(f"ℹ️  hh: поле письма не появилось, но отклик прошёл; "
+                  f"письмо и CV — в чат: {url}")
+            _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir,
+                             letter=content.body)
+            return
         _dump_chat_debug(page, debug_dir, "hh_no_letter_field")
         raise ChannelError(
-            f"hh: поле письма не появилось и отклик не подтверждён — проверь вручную: {url}")
+            f"hh: поле письма не появилось, и отклика на вакансии нет даже после "
+            f"перезагрузки — проверь вручную: {url}")
     page.locator(SEL_LETTER_INPUT).first.fill(content.body)
     try:
         # Only reached when the response has NOT already gone through — quick-apply

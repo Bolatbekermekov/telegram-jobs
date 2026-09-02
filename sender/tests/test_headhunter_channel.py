@@ -809,3 +809,64 @@ def test_rejected_form_saves_the_page_before_giving_up(monkeypatch, tmp_path):
                        debug_dir=str(tmp_path))
 
     assert dumped == [(str(tmp_path), "hh_form_rejected")]
+
+
+# --- отклик прошёл, а мы объявляли неудачу -----------------------------------
+#
+# Замер 2026-09-01/02: лиды #733 (vacancy/135035753) и #738 (136597256) упали с
+# «поле письма не появилось и отклик не подтверждён». В сохранённом дампе стояла
+# кнопка отклика и НЕ было отметки «вы откликались». На следующий день hh на обе
+# вакансии ответил «already applied» — заявки тогда УШЛИ. Сообщение врало в
+# самую опасную сторону: человек считает, что не откликнулся, и идёт снова.
+#
+# Причина: hh не перерисовывает страницу после отклика, отметка появляется
+# только на свежей загрузке.
+
+class _ReloadPage(_FakePage):
+    """Страница, которая показывает отметку об отклике только после goto."""
+
+    def __init__(self, counts, applied_after_reload=True):
+        super().__init__(counts)
+        self._gotos = 0
+        self._applies = applied_after_reload
+
+    def goto(self, url, **kw):
+        super().goto(url, **kw)
+        self._gotos += 1
+        # Отметка появляется со ВТОРОГО захода: первый — это открытие вакансии
+        # в начале отклика, и на нём её ещё нет, иначе сработал бы верхний
+        # страж «already applied» и до письма дело бы не дошло.
+        if self._applies and self._gotos >= 2:
+            self._counts[SEL_ALREADY_APPLIED] = 1
+
+    def inner_text(self, selector):
+        return ""
+
+
+def test_a_letterless_apply_is_rechecked_before_being_called_a_failure():
+    page = _ReloadPage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 0,
+                        SEL_ALREADY_APPLIED: 0})
+    apply_via_page(page, "https://hh.ru/vacancy/135035753",
+                   OutreachContent(body="Здравствуйте"))
+
+    # Перезагрузка была, и вердикт «не отправлено» не прозвучал.
+    assert ("goto", "https://hh.ru/vacancy/135035753") in page.actions
+
+
+def test_a_genuinely_unsent_application_still_fails_loudly():
+    """Перезагрузка не должна превращать настоящую неудачу в тихий успех."""
+    page = _ReloadPage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1, SEL_LETTER_INPUT: 0,
+                        SEL_ALREADY_APPLIED: 0}, applied_after_reload=False)
+
+    with pytest.raises(ChannelError, match="даже после перезагрузки"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="hi"))
+
+
+def test_the_recheck_costs_nothing_when_the_letter_field_is_there():
+    """Лишняя загрузка только на пути к неудаче, а не на каждом отклике."""
+    page = _ReloadPage({SEL_APPLY: 1, SEL_LETTER_TOGGLE: 1,
+                        SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1})
+    apply_via_page(page, "https://hh.ru/vacancy/2", OutreachContent(body="hi"))
+
+    assert [a for a in page.actions if a[0] == "goto"] == [
+        ("goto", "https://hh.ru/vacancy/2")]        # только первый заход
