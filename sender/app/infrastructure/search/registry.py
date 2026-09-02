@@ -32,7 +32,7 @@ def build_searcher(platform: str):
             config.WELLFOUND_STATE_PATH,
             headless=config.BROWSER_HEADLESS,
             cdp_url=config.WELLFOUND_CDP_URL,
-            per_keyword=config.SEARCH_PER_KEYWORD,
+            per_keyword=config.WELLFOUND_PER_KEYWORD,
             remote_only=config.WELLFOUND_REMOTE_ONLY,
             pages=config.WELLFOUND_PAGES,
         )

@@ -1,6 +1,7 @@
 import pytest
 
 from app.infrastructure.search.registry import build_searcher
+from app.infrastructure.search.wellfound_search import role_slug
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
 from app.infrastructure.search.wellfound_search import WellfoundSearcher
 
@@ -82,3 +83,24 @@ def test_hh_gets_its_filters_from_config():
     assert s._areas == config.HH_AREAS
     assert s._search_period == config.HH_SEARCH_PERIOD
     assert s._pages == config.HH_PAGES
+
+
+def test_wellfound_gets_its_own_per_query_cap_from_config():
+    """У Wellfound запрос — это «роль × страница», а слагов ролей 13.
+
+    Замер 2026-09-02: с общим SEARCH_PER_KEYWORD=25 бюджет площадки (250) давал
+    10 запросов, и обход «страница снаружи, слово внутри» кончался на первой
+    странице десятого слага — мобилка, Vue и node не опрашивались НИКОГДА.
+    Настройка WELLFOUND_PAGES при этом ни на что не влияла: до второй страницы
+    дело не доходило.
+    """
+    from app import config
+
+    s = build_searcher("wellfound")
+    assert s._per_keyword == config.WELLFOUND_PER_KEYWORD
+    assert s._per_keyword != config.SEARCH_PER_KEYWORD      # именно СВОЙ потолок
+
+    slugs = {role_slug(k) for k in config.SEARCH_KEYWORDS}
+    queries = config.SEARCH_LIMIT_PER_PLATFORM // config.WELLFOUND_PER_KEYWORD
+    assert queries >= len(slugs), (
+        f"{queries} запросов на {len(slugs)} ролей — снова не все роли за прогон")
