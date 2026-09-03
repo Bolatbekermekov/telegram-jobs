@@ -149,11 +149,20 @@ _HELPERS = r"""
       const i = sameName(t, el.name).indexOf(el);
       if (i >= 0) return {by: 'name', name: el.name, type: t, i: i};
     }
+    // Одиночная галочка «I consent» имени не имеет вовсе — там переискивать
+    // приходится по `id`. Он тоже реактовский `useId` и тоже переживает
+    // перерисовку, пока жив сам компонент (живьём 2026-09-03, лид #805).
+    if (el.id) return {by: 'id', id: el.id};
     return {by: 'stamp'};
   };
   const byKey = k => {
-    if (!k || k.by !== 'name') return null;
-    return sameName(k.type, k.name)[k.i] || null;
+    if (!k) return null;
+    if (k.by === 'name') return sameName(k.type, k.name)[k.i] || null;
+    // Сравнением, а не селектором: id вида «rn» содержит кавычки-ёлочки, и
+    // подставлять такое в CSS — напрашиваться на SyntaxError вместо элемента.
+    if (k.by === 'id') return [...document.querySelectorAll('[id]')]
+                                 .find(e => e.id === k.id) || null;
+    return null;
   };
   // Ключ главнее метки: метка могла остаться на узле, который уже выброшен из
   // документа, а ключ всегда указывает на живой.

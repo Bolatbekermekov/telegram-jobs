@@ -485,6 +485,36 @@ def test_the_react_rerender_that_replaces_the_node_outright(page):
     assert page.get_attribute("[componentkey]", "aria-checked") == "true"
 
 
+def test_a_nameless_consent_box_is_refound_by_its_id(page):
+    """Одиночная галочка «I consent» имени группы не имеет, и первая правка её
+    не спасла: живьём 2026-09-03 (лид #805) причина сменилась с двух таймаутов
+    на «метка не дожила до клика» — переискать было не по чему. Реактовский
+    `id` перерисовку переживает; кавычки-ёлочки внутри него подставлять в CSS
+    нельзя, поэтому поиск идёт сравнением."""
+    show(page, """
+      <div id="box">
+        <input type="checkbox" id="consent-\u00abr3\u00bb" data-af="0">
+        <label for="consent-\u00abr3\u00bb"></label><p>I consent</p>
+      </div>
+      <script>
+        document.querySelector('input').addEventListener('click', () => {
+          const box = document.getElementById('box');
+          const fresh = box.cloneNode(true);
+          fresh.querySelectorAll('[data-af],[data-af-pick],[data-af-pick-label]')
+            .forEach(e => { e.removeAttribute('data-af');
+                            e.removeAttribute('data-af-pick');
+                            e.removeAttribute('data-af-pick-label'); });
+          fresh.querySelector('input').checked = true;
+          box.replaceWith(fresh);
+        });
+      </script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), index=0)
+
+    assert (ok, why) == (True, "")
+    assert page.evaluate("() => document.querySelector('input').checked") is True
+
+
 def test_a_variant_that_left_the_page_is_still_an_honest_refusal(page):
     """Пропажу метки больше не путаем с отказом — но и отказ не должен теперь
     читаться как успех. Здесь переискать нечего: варианты нарисованы div-ами,

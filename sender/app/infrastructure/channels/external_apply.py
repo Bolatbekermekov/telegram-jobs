@@ -508,6 +508,11 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                     # виден только по самой форме — молчать о нём нельзя.
                     ticked, why = _pick_choice_reason(page, loc, index=0)
                     if not ticked:
+                        # Разметку сюда тоже: без неё отказ на одиночной галочке
+                        # разбирать нечем, а он приходит ровно так же часто, как
+                        # на группе (лид #805, 2026-09-03).
+                        _dump_form_debug(
+                            page, f"choice_{_slug(a.field.label or a.field.name)}", loc)
                         raise ManualApplyRequired(
                             f"{where}: не поставилась галочка "
                             f"«{a.field.label or a.field.name}» — {why}, "
