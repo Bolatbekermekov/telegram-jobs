@@ -485,6 +485,46 @@ def test_the_react_rerender_that_replaces_the_node_outright(page):
     assert page.get_attribute("[componentkey]", "aria-checked") == "true"
 
 
+def test_a_remounted_consent_box_is_refound_by_the_question_text(page):
+    """Живьём 2026-09-03, лид #805, второй заход: блок не перерисовался, а
+    ПЕРЕМОНТИРОВАЛСЯ. В сохранённой странице у галочки стоит `checked` и
+    `aria-checked="true"`, но `data-af` нет вовсе, а id стал другим — React
+    выдал новому компоненту новый `useId`. Ни имя, ни id такого не переживают.
+
+    Переживает подпись вопроса. По ней блок и находится заново, а внутри —
+    номер варианта. Разметка снята с дампа: подпись лежит СОСЕДОМ `fieldset`,
+    поэтому опорой служит его родитель."""
+    show(page, """
+      <div id="q">
+        <p>You declare that you have read and agree to the privacy notice.*</p>
+        <fieldset>
+          <div role="checkbox" aria-checked="false">
+            <input type="checkbox" id="\u00abr35\u00bb" data-af="0" tabindex="-1">
+            <label for="\u00abr35\u00bb"></label><p>I consent</p>
+          </div>
+        </fieldset>
+      </div>
+      <script>
+        document.querySelector('input').addEventListener('click', () => {
+          const q = document.getElementById('q');
+          // Перемонтирование: новый узел, новый useId, ни метки, ни data-af.
+          q.innerHTML = `
+            <p>You declare that you have read and agree to the privacy notice.*</p>
+            <fieldset>
+              <div role="checkbox" aria-checked="true">
+                <input type="checkbox" id="\u00abr36\u00bb" tabindex="-1" checked>
+                <label for="\u00abr36\u00bb"></label><p>I consent</p>
+              </div>
+            </fieldset>`;
+        });
+      </script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), index=0)
+
+    assert (ok, why) == (True, "")
+    assert page.evaluate("() => document.querySelector('input').checked") is True
+
+
 def test_a_nameless_consent_box_is_refound_by_its_id(page):
     """Одиночная галочка «I consent» имени группы не имеет, и первая правка её
     не спасла: живьём 2026-09-03 (лид #805) причина сменилась с двух таймаутов

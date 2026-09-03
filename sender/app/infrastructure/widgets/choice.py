@@ -59,10 +59,18 @@ React заменил ровно ту ветку, по которой пришё�
 и лид ушёл в ручные при ПРИНЯТОМ ответе. Это тот же обман, что и «отклик не
 подтверждён» на hh, и цена та же: человек делает вручную уже сделанное.
 
-Поэтому вариант переискивается ЗАНОВО по тому, что перерисовку переживает: имя
-группы (`useId` компонента — одно и то же до и после) плюс номер варианта среди
-кнопок с этим именем. Пометка осталась запасным путём — для вариантов без имени
-(нарисованных div-ами с `role=radio`), где переискать не по чему.
+Поэтому вариант переискивается ЗАНОВО, тремя опорами по убыванию надёжности:
+имя группы плюс номер среди кнопок с этим именем; `id`; подпись вопроса плюс
+номер варианта внутри её блока. Три, а не одна, потому что каждая из первых
+двух живьём отказала: у одиночной галочки «I consent» имени нет вовсе, а на
+втором заходе (тот же лид, тот же вопрос) блок не перерисовался, а
+ПЕРЕМОНТИРОВАЛСЯ — новый компонент получил новый `useId`, и прежний id тоже
+перестал что-либо находить. Подпись вопроса пережила и это.
+
+Сравниваются первые 60 знаков подписи, а не вся: форма дописывает в тот же блок
+текст ошибки, и точное равенство отказало бы ровно тогда, когда переиск нужнее
+всего. Пометка осталась последним запасным путём — для вариантов, нарисованных
+div-ами без единого `input`, где переискать не по чему.
 
 Наружу исключения не выходят: вызывающая сторона получает False и сама решает,
 что это значит для обязательного поля.
@@ -143,25 +151,59 @@ _HELPERS = r"""
   // перерисовки.
   const sameName = (t, n) => [...document.querySelectorAll('input[type=' + t + ']')]
                                .filter(r => r.name === n);
+  // Текст вопроса целиком — последняя опора, когда не пережили ни имя, ни id.
+  const deepNorm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // Блок вопроса: LinkedIn держит подпись СОСЕДОМ `fieldset`, поэтому берётся
+  // родитель, а не сам `fieldset` — иначе текстом группы будет «yes no», и на
+  // форме с двумя вопросами Yes/No он укажет не на тот.
+  const blockOf = el => {
+    const fs = el.closest && el.closest('fieldset,[role=radiogroup],[role=group]');
+    if (fs) return fs.parentElement || fs;
+    return (el.closest && el.closest('label')) || el.parentElement;
+  };
+  // Сравниваются первые 60 знаков: страница дописывает в блок текст ошибки
+  // («Select checkbox to proceed»), и точное равенство сломалось бы ровно
+  // тогда, когда переиск нужнее всего. Подпись вопроса стоит первой.
+  const blockKey = n => deepNorm(n && n.textContent).slice(0, 60);
   const keyOf = el => {
     const t = (el.type || '').toLowerCase();
+    const k = {type: t};
     if ((t === 'radio' || t === 'checkbox') && el.name) {
       const i = sameName(t, el.name).indexOf(el);
-      if (i >= 0) return {by: 'name', name: el.name, type: t, i: i};
+      if (i >= 0) { k.name = el.name; k.nameIndex = i; }
     }
-    // Одиночная галочка «I consent» имени не имеет вовсе — там переискивать
-    // приходится по `id`. Он тоже реактовский `useId` и тоже переживает
-    // перерисовку, пока жив сам компонент (живьём 2026-09-03, лид #805).
-    if (el.id) return {by: 'id', id: el.id};
-    return {by: 'stamp'};
+    if (el.id) k.id = el.id;
+    const b = blockOf(el);
+    if (b && t) {
+      const i = [...b.querySelectorAll('input[type=' + t + ']')].indexOf(el);
+      if (i >= 0) { k.block = blockKey(b); k.blockIndex = i; }
+    }
+    return k;
   };
   const byKey = k => {
     if (!k) return null;
-    if (k.by === 'name') return sameName(k.type, k.name)[k.i] || null;
-    // Сравнением, а не селектором: id вида «rn» содержит кавычки-ёлочки, и
+    if (k.name) {
+      const g = sameName(k.type, k.name);
+      if (g[k.nameIndex]) return g[k.nameIndex];
+    }
+    // Сравнением, а не селектором: id вида «r36» содержит кавычки-ёлочки, и
     // подставлять такое в CSS — напрашиваться на SyntaxError вместо элемента.
-    if (k.by === 'id') return [...document.querySelectorAll('[id]')]
-                                 .find(e => e.id === k.id) || null;
+    if (k.id) {
+      const e = [...document.querySelectorAll('[id]')].find(x => x.id === k.id);
+      if (e) return e;
+    }
+    // Перемонтирование: живьём 2026-09-03 (лид #805) у новой галочки не было
+    // ни `data-af`, ни прежнего id — React выдал новый `useId`. Пережил только
+    // текст вопроса, и номер варианта внутри его блока.
+    if (k.block) {
+      const boxes = [...document.querySelectorAll(
+        'fieldset,[role=radiogroup],[role=group]')].map(f => f.parentElement || f);
+      for (const b of boxes) {
+        if (blockKey(b) !== k.block) continue;
+        const g = [...b.querySelectorAll('input[type=' + k.type + ']')];
+        if (g[k.blockIndex]) return g[k.blockIndex];
+      }
+    }
     return null;
   };
   // Ключ главнее метки: метка могла остаться на узле, который уже выброшен из
