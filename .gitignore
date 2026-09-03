@@ -58,3 +58,4 @@ sender/.scored_out.json
 .superpowers/
 # Разметка форм, на которых застрял отклик (пишется только при отказе).
 sender/.apply_debug/
+logs/

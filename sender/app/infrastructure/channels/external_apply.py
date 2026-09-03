@@ -5,6 +5,7 @@ in app.application (classify_apply / auto_apply) and is tested without a browser
 Automating third-party ATS violates their ToS and risks bans (accepted by user).
 """
 import re
+import time
 from urllib.parse import unquote, urlsplit
 
 from app.application.apply_guard import (
@@ -1219,6 +1220,11 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
             f"эту заявку можно подать только вручную: {url}")
     if said:
         raise ManualApplyRequired(f"форма не приняла: {said} — {url}")
+    # Единственный случай, где мы уходим, НЕ ЗНАЯ ответа, — значит страницу надо
+    # сохранить. Без неё вопрос «ушла заявка или нет» решается только письмом в
+    # почте владельца, а на 2026-09-03 таких лидов накопилось девять и ни один
+    # не закрыт. Снимок и разметка отвечают на него без чужого ящика.
+    _dump_form_debug(page, f"unknown-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
     raise ManualApplyRequired(
         "кнопка отправки нажата, но подтверждения не видно — ВОЗМОЖНО, ЗАЯВКА "
         f"УЖЕ УШЛА, проверь почту прежде чем откликаться повторно: {url}")

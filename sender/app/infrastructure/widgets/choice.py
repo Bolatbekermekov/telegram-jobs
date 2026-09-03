@@ -48,6 +48,22 @@
 `candidate.openQuestionAnswers.6703065.flag` в FormData нет вовсе, после клика
 по метке появляется `"false"`, и она переживает перерисовку React.
 
+Чем НЕ доказывается. Тем, что наша собственная пометка на узле пережила клик.
+Живьём 2026-09-03 (лид #800, LinkedIn Easy Apply, «Will you now or in the future
+require sponsorship…»): в сохранённой странице «No» стоит `checked`, у его
+обёртки появился `componentkey="auto-component-…"`, которого нет у соседней, —
+React заменил ровно ту ветку, по которой пришёл клик. Пометка живёт на СТАРОМ
+узле и в документ уже не входит, поэтому проверка не нашла ничего, а оба клика
+мышью следом отвалились по таймауту 3 с (`[data-af-pick=…]` не находит
+заменённый узел). Отчёт сказал «клик прошёл, но страница ответ не засчитала» —
+и лид ушёл в ручные при ПРИНЯТОМ ответе. Это тот же обман, что и «отклик не
+подтверждён» на hh, и цена та же: человек делает вручную уже сделанное.
+
+Поэтому вариант переискивается ЗАНОВО по тому, что перерисовку переживает: имя
+группы (`useId` компонента — одно и то же до и после) плюс номер варианта среди
+кнопок с этим именем. Пометка осталась запасным путём — для вариантов без имени
+(нарисованных div-ами с `role=radio`), где переискать не по чему.
+
 Наружу исключения не выходят: вызывающая сторона получает False и сама решает,
 что это значит для обязательного поля.
 """
@@ -121,11 +137,27 @@ _HELPERS = r"""
     return false;
   };
   const accepted = el => isPicked(el) && inFormData(el) !== false;
-  const find = () => {
-    const stamped = document.querySelector('[data-af-pick="1"]');
-    if (stamped) return stamped;
-    return null;
+  // Как найти ТОТ ЖЕ вариант ЗАНОВО, если наш узел заменили. Атрибут-метка это
+  // не переживает: она живёт на узле, а React после клика подставляет новый.
+  // Имя группы переживает — это `useId` компонента, оно одно и то же до и после
+  // перерисовки.
+  const sameName = (t, n) => [...document.querySelectorAll('input[type=' + t + ']')]
+                               .filter(r => r.name === n);
+  const keyOf = el => {
+    const t = (el.type || '').toLowerCase();
+    if ((t === 'radio' || t === 'checkbox') && el.name) {
+      const i = sameName(t, el.name).indexOf(el);
+      if (i >= 0) return {by: 'name', name: el.name, type: t, i: i};
+    }
+    return {by: 'stamp'};
   };
+  const byKey = k => {
+    if (!k || k.by !== 'name') return null;
+    return sameName(k.type, k.name)[k.i] || null;
+  };
+  // Ключ главнее метки: метка могла остаться на узле, который уже выброшен из
+  // документа, а ключ всегда указывает на живой.
+  const find = k => byKey(k) || document.querySelector('[data-af-pick="1"]') || null;
 """
 
 # Найти нужный вариант, пометить его и рассказать, что с ним. Пометка своя
@@ -159,12 +191,26 @@ _RESOLVE_JS = _HELPERS + r"""
   const lab = ownLabel(target);
   if (lab) lab.setAttribute('data-af-pick-label', '1');
   return {found: true, disabled: !!target.disabled, accepted: accepted(target),
-          label: labelFor(target), has_label: !!lab};
+          label: labelFor(target), has_label: !!lab, key: keyOf(target)};
 """
 
 _STATE_JS = _HELPERS + r"""
-  const el = find();
+  const el = find(arguments[0]);
   return el ? {found: true, accepted: accepted(el)} : {found: false};
+"""
+
+# Поставить метку заново на живой узел. Нужна кликам мышью: они ходят по CSS
+# `[data-af-pick=…]`, и после перерисовки этот селектор не находит ничего —
+# оба способа съедали по 3 секунды таймаута и сообщали не о том.
+_RESTAMP_JS = _HELPERS + r"""
+  const el = find(arguments[0]);
+  if (!el) return {found: false};
+  document.querySelectorAll('[data-af-pick],[data-af-pick-label]').forEach(
+    e => { e.removeAttribute('data-af-pick'); e.removeAttribute('data-af-pick-label'); });
+  el.setAttribute('data-af-pick', '1');
+  const lab = ownLabel(el);
+  if (lab) lab.setAttribute('data-af-pick-label', '1');
+  return {found: true, has_label: !!lab};
 """
 
 # Нативный клик: событие настоящее для страницы (React его видит и обновляет
@@ -176,7 +222,7 @@ _STATE_JS = _HELPERS + r"""
 # Apply оба локатора Playwright после него отваливались по таймауту — а это
 # ровно то, что бывает, когда метку снял перерисовавший форму React.
 _NATIVE_CLICK_JS = _HELPERS + r"""
-  const el = find();
+  const el = find(arguments[0]);
   if (!el) return {found: false};
   el.click();
   return {found: true};
@@ -243,6 +289,7 @@ def pick_choice_reason(page, locator, value: str = "",
         # ответ на противоположный, поэтому выходим до всяких кликов.
         _unstamp(page)
         return (True, "")
+    key = found.get("key")
     try:
         tried = []
         for attempt in (_native_click, _label_click, _force_check):
@@ -251,41 +298,55 @@ def pick_choice_reason(page, locator, value: str = "",
                 tried.append(f"{name}: метки нет")
                 continue
             try:
-                attempt(page, found)
+                attempt(page, found, key)
                 tried.append(name)
             except Exception as exc:  # noqa: BLE001 — следующий способ важнее причины
                 tried.append(f"{name}: {str(exc).splitlines()[0][:50]}")
-            if _accepted(page):
+            if _accepted(page, key):
                 return (True, "")
         return (False, "клик прошёл, но страница ответ не засчитала — " + "; ".join(tried))
     finally:
         _unstamp(page)
 
 
-def _native_click(page, found) -> None:
-    res = page.evaluate(_fn(_NATIVE_CLICK_JS))
+def _native_click(page, found, key=None) -> None:
+    res = page.evaluate(_fn(_NATIVE_CLICK_JS), key)
     if isinstance(res, dict) and not res.get("found"):
         raise RuntimeError("метка не дожила до клика (страницу перерисовало?)")
 
 
-def _label_click(page, found) -> None:
+def _label_click(page, found, key=None) -> None:
     """Клик мышью по видимой метке — путь человека. Нужен там, где страница
     смотрит на `event.isTrusted` и нативный клик ей не годится."""
     if not found.get("has_label"):
         return
+    if not _restamp(page, key):
+        raise RuntimeError("метка не дожила до клика (страницу перерисовало?)")
     page.locator('[data-af-pick-label="1"]').first.click(timeout=_CLICK_TIMEOUT_MS)
 
 
-def _force_check(page, found) -> None:
+def _force_check(page, found, key=None) -> None:
     """Ровно то, что делает `fill_fields` сегодня. Остаётся последним: на живой
     Recruitee в headed он и не сработал, но на разметке, где страница ждёт
     настоящий ввод именно в контрол, он единственный подходит."""
+    if not _restamp(page, key):
+        raise RuntimeError("метка не дожила до клика (страницу перерисовало?)")
     page.locator('[data-af-pick="1"]').first.check(force=True, timeout=_CLICK_TIMEOUT_MS)
 
 
-def _accepted(page) -> bool:
+def _restamp(page, key) -> bool:
+    """Вернуть метку на живой узел перед кликом мышью. False — вариант исчез и
+    по имени группы не нашёлся; тогда кликать не по чему и ждать таймаут незачем."""
     try:
-        state = page.evaluate(_fn(_STATE_JS))
+        res = page.evaluate(_fn(_RESTAMP_JS), key)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(isinstance(res, dict) and res.get("found"))
+
+
+def _accepted(page, key=None) -> bool:
+    try:
+        state = page.evaluate(_fn(_STATE_JS), key)
     except Exception:  # noqa: BLE001
         return False
     return bool(isinstance(state, dict) and state.get("accepted"))

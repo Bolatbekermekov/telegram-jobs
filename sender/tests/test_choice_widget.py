@@ -409,22 +409,97 @@ def test_the_plain_wrapper_still_returns_a_bool(page):
     assert pick_choice(page, af(page, "0"), value="Yes", index=0) is True
 
 
-def test_a_lost_stamp_is_reported_and_not_read_as_a_click(page):
-    """`el.click()` при null не бросает ничего, и «native_click» в отчёте значил
-    сразу два разных случая. Живьём 2026-09-01 на LinkedIn Easy Apply оба
-    локатора после него отваливались по таймауту — подпись того, что метки на
-    странице уже нет."""
+def test_a_lost_stamp_no_longer_hides_an_accepted_answer(page):
+    """Перерисовка после клика — это НЕ отказ. Живьём 2026-09-03, лид #800,
+    LinkedIn Easy Apply, «Will you now or in the future require sponsorship…»:
+    в сохранённой странице «No» стоит `checked`, а у его обёртки появился
+    `componentkey="auto-component-…"`, которого нет у соседа, — React заменил
+    ровно ту ветку, по которой мы кликнули. Метка живёт на узле и до нового
+    узла не доезжает, поэтому `_accepted` не находил ничего, а оба клика мышью
+    съедали по 3 секунды таймаута. Ответ при этом был принят.
+
+    Имя группы перерисовку переживает (это `useId` компонента), и состояние
+    читается по нему. Проверяется не «не упало», а само `checked` в браузере."""
     show(page, _YESNO + """
       <script>
-        // Перерисовка, снимающая метку: React заменяет узлы, атрибут не переживает.
         const box = document.querySelector('fieldset');
         new MutationObserver(() => {
-          document.querySelectorAll('[data-af-pick]').forEach(
-            e => e.removeAttribute('data-af-pick'));
+          document.querySelectorAll('[data-af-pick],[data-af-pick-label]').forEach(
+            e => { e.removeAttribute('data-af-pick');
+                   e.removeAttribute('data-af-pick-label'); });
         }).observe(box, {attributes: true, subtree: true});
       </script>
     """)
     ok, why = pick_choice_reason(page, af(page, "0"), value="Yes", index=0)
 
+    assert (ok, why) == (True, "")
+    assert checked(page, "q") == ["Yes"]
+
+
+# Разметка LinkedIn Easy Apply, снятая с живой страницы (лид #800, 2026-09-03,
+# `sender/.apply_debug/choice_will-you-now-…`): настоящие radio спрятаны под
+# `<label>` без текста, подпись варианта лежит СОСЕДНИМ `<p>`, а имена группы —
+# реактовские `useId` вида «radio-group-«rm»», то есть с не-ASCII кавычками
+# внутри. Имя подставляется в селектор, поэтому такое имя обязано работать.
+_LINKEDIN = """
+  <fieldset role="radiogroup">
+    <div role="radio" aria-checked="false" id="w0">
+      <input type="radio" id="lk-0" data-af="0" name="radio-group-\u00abrm\u00bb" value="Yes">
+      <label for="lk-0"></label><p>Yes</p>
+    </div>
+    <div role="radio" aria-checked="false" id="w1">
+      <input type="radio" id="lk-1" name="radio-group-\u00abrm\u00bb" value="No">
+      <label for="lk-1"></label><p>No</p>
+    </div>
+  </fieldset>
+"""
+
+
+def test_the_react_rerender_that_replaces_the_node_outright(page):
+    """Самый жёсткий вид той же беды: узел не теряет атрибут, а ЗАМЕНЯЕТСЯ. На
+    живой странице так и было — у выбранной обёртки появился `componentkey`,
+    которого нет у соседней. Тогда пропадает и `data-af` скрапера, и метка;
+    остаётся одно имя группы, и именно по нему ответ должен читаться."""
+    show(page, _LINKEDIN + """
+      <script>
+        document.querySelectorAll('input[type=radio]').forEach(inp => {
+          inp.addEventListener('click', () => {
+            const box = inp.closest('[role=radio]');
+            const fresh = box.cloneNode(true);
+            // Новый узел — без наших пометок, как после перерисовки React.
+            fresh.querySelectorAll('[data-af],[data-af-pick]').forEach(e => {
+              e.removeAttribute('data-af'); e.removeAttribute('data-af-pick'); });
+            fresh.querySelector('input').checked = true;
+            fresh.setAttribute('aria-checked', 'true');
+            fresh.setAttribute('componentkey', 'auto-component-5f513571');
+            box.replaceWith(fresh);
+          });
+        });
+      </script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), value="No", index=1)
+
+    assert (ok, why) == (True, "")
+    assert checked(page, "radio-group-\u00abrm\u00bb") == ["No"]
+    # И ответ на месте там, где его прочтёт работодатель, а не только в глазах.
+    assert page.get_attribute("[componentkey]", "aria-checked") == "true"
+
+
+def test_a_variant_that_left_the_page_is_still_an_honest_refusal(page):
+    """Пропажу метки больше не путаем с отказом — но и отказ не должен теперь
+    читаться как успех. Здесь переискать нечего: варианты нарисованы div-ами,
+    имени группы у них нет, а нужный вариант со страницы убрали совсем."""
+    show(page, """
+      <div id="grp" role="radiogroup">
+        <div role="radio" aria-checked="false" data-af="0">Yes</div>
+        <div role="radio" aria-checked="false">No</div>
+      </div>
+      <script>
+        document.querySelectorAll('[role=radio]').forEach(e =>
+          e.addEventListener('click', () => { e.remove(); }));
+      </script>
+    """)
+    ok, why = pick_choice_reason(page, af(page, "0"), value="Yes", index=0)
+
     assert ok is False
-    assert "метка не дожила" in why
+    assert "не засчитала" in why or "метка не дожила" in why

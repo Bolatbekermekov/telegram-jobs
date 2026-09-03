@@ -100,6 +100,33 @@ def test_an_unreadable_outcome_warns_that_it_may_already_be_sent():
     assert "проверь почту" in said
 
 
+def test_an_unreadable_outcome_saves_the_page(monkeypatch):
+    """Неизвестный исход — единственный, который нельзя проверить потом ничем,
+    кроме чужого почтового ящика. Значит страницу надо сохранить на месте: за
+    три дня таких лидов накопилось девять, и ни один не закрыт."""
+    dumped = []
+    monkeypatch.setattr(ea, "_dump_form_debug",
+                        lambda page, tag, locator=None: dumped.append(tag))
+    page = _Page(text="Apply now", fields=[FieldObs(tag="input", label="Email", ref="0")],
+                 url="https://jobs.ashbyhq.com/acme/1/application")
+    with pytest.raises(ManualApplyRequired):
+        ea._verify_submitted(page, "https://jobs.ashbyhq.com/acme/1/application")
+
+    assert len(dumped) == 1
+    # Имя файла называет площадку — иначе снимки девяти лидов неразличимы.
+    assert dumped[0].startswith("unknown-jobs-ashbyhq-com-")
+
+
+def test_a_known_outcome_saves_nothing(monkeypatch):
+    """Диагностика стоит снимка экрана и полного DOM. Платить за неё там, где
+    ответ уже известен, незачем."""
+    dumped = []
+    monkeypatch.setattr(ea, "_dump_form_debug",
+                        lambda page, tag, locator=None: dumped.append(tag))
+    ea._verify_submitted(_Page(text="", fields=[]), "https://ats.example/apply")
+    assert dumped == []
+
+
 def test_a_visible_validation_error_is_reported_verbatim():
     page = _Page(text="Apply now", fields=[FieldObs(tag="input", label="Email", ref="0")],
                  counts={ERR_SEL: 1})
