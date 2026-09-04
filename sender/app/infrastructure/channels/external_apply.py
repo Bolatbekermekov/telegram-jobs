@@ -1236,18 +1236,47 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
 
 
 def _visible_error(page) -> str:
-    """Text of a validation message on the page, or "" — the honest failure case."""
+    """Text of a validation message on the page, or "" — the honest failure case.
+
+    ВИДИМОЙ, а не любой. `innerText` у элемента, который не отрисован, отдаёт
+    весь `textContent` — то есть скрытая заготовка ошибки читается так же, как
+    настоящая. Живьём 2026-09-04 (лид #844, Lever): отклик ушёл в ручные с
+    «форма не приняла: File exceeds the maximum upload size of 100MB», а
+    отправляли мы PDF на 110 КБ. Lever держит этот текст в разметке постоянно и
+    показывает по случаю; случая не было.
+
+    Цена ошибки двойная. Заметка называет причину, которой нет, — по ней человек
+    будет искать несуществующий гигантский файл. И раньше неё срабатывает ветка
+    «форма не приняла», а значит не срабатывает та, что сохраняет страницу, —
+    разбирать настоящую причину потом нечем.
+
+    Скрытые не просто пропускаются, а не считаются за просмотренные: заготовок
+    на форме бывает больше, чем настоящих ошибок, и прежний предел в пять
+    элементов выбирался бы ими одними.
+    """
     try:
         # `[class*=error i]`, not `.error`: every modern ATS ships hashed class
         # names (`_errorBanner_1e3gg_32`), which an exact class selector misses.
         errs = page.locator("[role=alert], [aria-invalid='true'], "
                             "[class*=error i], [class*=Error]")
-        n = min(errs.count(), 5)
+        n = min(errs.count(), 40)
     except Exception:  # noqa: BLE001
         return ""
+    seen = 0
     for i in range(n):
+        if seen >= 5:
+            break
+        el = errs.nth(i)
         try:
-            said = (errs.nth(i).inner_text(timeout=1500) or "").strip()
+            # Исключение — не повод потерять настоящую ошибку: считаем видимым.
+            shown = el.is_visible(timeout=1000)
+        except Exception:  # noqa: BLE001
+            shown = True
+        if not shown:
+            continue
+        seen += 1
+        try:
+            said = (el.inner_text(timeout=1500) or "").strip()
         except Exception:  # noqa: BLE001
             continue
         if said:

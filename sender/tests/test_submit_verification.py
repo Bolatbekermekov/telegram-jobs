@@ -24,17 +24,25 @@ ERR_SEL = ("[role=alert], [aria-invalid='true'], "
 
 
 class _Loc:
-    def __init__(self, page, sel):
-        self.page, self.sel = page, sel
+    def __init__(self, page, sel, idx=0):
+        self.page, self.sel, self.idx = page, sel, idx
         self.first = self
 
     def count(self):
         return self.page.counts.get(self.sel, 0)
 
     def nth(self, i):
-        return self
+        return _Loc(self.page, self.sel, i)
+
+    def is_visible(self, timeout=None):
+        # Скрытые задаются номером: `hidden={ERR_SEL: {0}}` — нулевой элемент
+        # выборки не отрисован, как заготовка ошибки в разметке ATS.
+        return self.idx not in self.page.hidden.get(self.sel, set())
 
     def inner_text(self, timeout=None):
+        by_idx = self.page.texts.get((self.sel, self.idx))
+        if by_idx is not None:
+            return by_idx
         return self.page.texts.get(self.sel, "")
 
     def click(self, timeout=None, force=False):
@@ -48,11 +56,13 @@ class _Loc:
 
 
 class _Page:
-    def __init__(self, text="", url="https://ats.example/apply", fields=(), counts=None):
+    def __init__(self, text="", url="https://ats.example/apply", fields=(), counts=None,
+                 hidden=None):
         self.body, self.url, self._fields = text, url, list(fields)
         # Every scraped field is addressable, like a real page.
         self.counts = {f'[data-af="{f.ref}"]': 1 for f in self._fields}
         self.counts.update(counts or {})
+        self.hidden = hidden or {}
         self.texts, self.clicks, self.filled, self.typed = {}, [], {}, {}
 
     def wait_for_timeout(self, ms):
@@ -125,6 +135,46 @@ def test_a_known_outcome_saves_nothing(monkeypatch):
                         lambda page, tag, locator=None: dumped.append(tag))
     ea._verify_submitted(_Page(text="", fields=[]), "https://ats.example/apply")
     assert dumped == []
+
+
+def test_a_hidden_error_template_is_not_a_rejection(monkeypatch):
+    """Живьём 2026-09-04, лид #844 (Lever): «форма не приняла: File exceeds the
+    maximum upload size of 100MB» — при PDF на 110 КБ. Lever держит этот текст
+    в разметке всегда и показывает по случаю; `innerText` у неотрисованного
+    элемента отдаёт весь `textContent`, поэтому заготовка читалась как живая
+    ошибка.
+
+    Правильный исход здесь — «неизвестно», а не выдуманный отказ: только он
+    сохраняет страницу, по которой настоящую причину и разбирают."""
+    dumped = []
+    monkeypatch.setattr(ea, "_dump_form_debug",
+                        lambda page, tag, locator=None: dumped.append(tag))
+    url = "https://jobs.lever.co/acme/1/apply"
+    page = _Page(text="Apply now", url=url,
+                 fields=[FieldObs(tag="input", label="Email", ref="0")],
+                 counts={ERR_SEL: 1}, hidden={ERR_SEL: {0}})
+    page.texts[ERR_SEL] = "File exceeds the maximum upload size of 100MB."
+
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, url)
+
+    said = str(err.value)
+    assert "100MB" not in said
+    assert "ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА" in said
+    assert len(dumped) == 1
+
+
+def test_a_real_error_below_hidden_templates_is_still_found():
+    """Скрытые не съедают предел просмотра: на форме заготовок бывает больше,
+    чем настоящих ошибок, и настоящая стоит после них."""
+    page = _Page(text="Apply now", fields=[FieldObs(tag="input", label="Email", ref="0")],
+                 counts={ERR_SEL: 7}, hidden={ERR_SEL: {0, 1, 2, 3, 4, 5}})
+    page.texts[(ERR_SEL, 6)] = "Email is required."
+
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, "https://ats.example/apply")
+
+    assert "Email is required." in str(err.value)
 
 
 def test_a_visible_validation_error_is_reported_verbatim():
