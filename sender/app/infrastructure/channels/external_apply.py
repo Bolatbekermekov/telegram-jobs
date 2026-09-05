@@ -1239,6 +1239,14 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
             return
         if attempt == _VERIFY_ATTEMPTS - 1:
             break
+    # Капча проверяется РАНЬШЕ текста ошибки: она объясняет и молчание страницы,
+    # и любую жалобу, которую та успела показать, а «возможно, заявка ушла»
+    # рядом с ней — прямая неправда.
+    if _captcha_blocking(page):
+        _dump_form_debug(page, f"captcha-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
+        raise ManualApplyRequired(
+            "ATS показал капчу после отправки — заявка НЕ ушла, "
+            f"подать можно только вручную: {url}")
     said = _visible_error(page)
     if _BOT_BLOCKED_RE.search(said) or _BOT_BLOCKED_RE.search(_page_text(page)):
         raise ManualApplyRequired(
@@ -1254,6 +1262,46 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
     raise ManualApplyRequired(
         "кнопка отправки нажата, но подтверждения не видно — ВОЗМОЖНО, ЗАЯВКА "
         f"УЖЕ УШЛА, проверь почту прежде чем откликаться повторно: {url}")
+
+
+# Капча, которая ЗАГОРАЖИВАЕТ отправку, — и только она. Живьём 2026-09-05, лид
+# #844 (Lever, Potloc): после нажатия «Submit» страница показала hCaptcha
+# («Найдите предметы, которые работают с помощью того, что показано на образце»),
+# заявка не ушла, а отчёт сказал «ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА, проверь почту» —
+# то есть отправил владельца искать письмо, которого не будет.
+#
+# Отличать по НАЛИЧИЮ рамки нельзя: невидимый reCAPTCHA v3 висит на половине
+# форм и ничему не мешает — по нему каждая вторая заявка объявлялась бы
+# заблокированной. Загородивший вызов отличается тем, что он ВИДЕН и велик;
+# значок v3 — крошечный или скрытый вовсе.
+_CAPTCHA_SEL = ('iframe[src*="recaptcha/api2/bframe"], iframe[title="reCAPTCHA"], '
+                'iframe[src*="hcaptcha.com"], iframe[src*="captcha"], '
+                'iframe[src*="challenges.cloudflare.com"], .cf-turnstile, '
+                'iframe[title*="challenge" i]')
+# Меньше этого — значок, а не вызов. Реальный вызов hCaptcha — примерно 400×570.
+_CAPTCHA_MIN_SIDE = 200
+
+
+def _captcha_blocking(page) -> bool:
+    """Стоит ли на экране капча, которую человек должен пройти руками."""
+    try:
+        loc = page.locator(_CAPTCHA_SEL)
+        n = min(loc.count(), 6)
+    except Exception:  # noqa: BLE001 — поддельная страница без locator
+        return False
+    for i in range(n):
+        el = loc.nth(i)
+        try:
+            if not el.is_visible(timeout=1000):
+                continue
+            box = el.bounding_box()
+        except Exception:  # noqa: BLE001
+            continue
+        if not box:
+            continue
+        if box.get("width", 0) >= _CAPTCHA_MIN_SIDE and box.get("height", 0) >= _CAPTCHA_MIN_SIDE:
+            return True
+    return False
 
 
 def _visible_error(page) -> str:
@@ -1301,8 +1349,59 @@ def _visible_error(page) -> str:
         except Exception:  # noqa: BLE001
             continue
         if said:
-            return said[:120]
+            return _named(page, said)
     return ""
+
+
+# Чьё это поле. «Required.» без имени поля не говорит человеку ничего: он
+# открывает форму и ищет глазами, что именно пусто. Живьём 2026-09-05 (лид
+# #810, Sumsub) заметка была ровно «форма не приняла: Required.».
+#
+# Ищется по ТЕКСТУ ошибки, а не от её элемента: ATS кладёт ошибку то внутрь
+# обёртки поля, то соседом, то в общий `aria-describedby`, и один способ на всех
+# не работает. От найденного текста поднимаемся до ближайшего блока, в котором
+# ЕСТЬ контрол, и берём его подпись.
+_NAME_ERROR_JS = r'''
+(said) => {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const want = norm(said).slice(0, 60);
+  if (!want) return '';
+  const label = el => {
+    if (el.getAttribute('aria-label')) return norm(el.getAttribute('aria-label'));
+    if (el.id) {
+      const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (l) return norm(l.textContent);
+    }
+    const l2 = el.closest('label');
+    if (l2) return norm(l2.textContent);
+    return norm(el.getAttribute('name') || el.placeholder || '');
+  };
+  for (const el of document.querySelectorAll('*')) {
+    if (el.children.length) continue;                 // только листья текста
+    if (!norm(el.textContent).startsWith(want)) continue;
+    let node = el;
+    for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+      const ctl = node.querySelector('input,select,textarea');
+      if (!ctl) continue;
+      const name = label(ctl);
+      // Подпись самой ошибки за имя поля не сойдёт.
+      if (name && norm(name) !== want) return name.slice(0, 70);
+    }
+  }
+  return '';
+}
+'''
+
+
+def _named(page, said: str) -> str:
+    """«поле»: ошибка — или просто ошибка, если поле опознать не вышло."""
+    said = said[:120]
+    try:
+        name = page.evaluate(_NAME_ERROR_JS, said)
+    except Exception:  # noqa: BLE001 — поддельная страница / контекст разрушен
+        return said
+    name = (name or "").strip() if isinstance(name, str) else ""
+    return f"«{name}»: {said}" if name else said
 
 
 def _apply_via_email(obs, content, cv_path, email_channel, subject_maker,
