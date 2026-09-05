@@ -935,6 +935,13 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
     job_id = _job_id(job_url)
     _open_apply_flow(page, job_url)
 
+    # Отпечаток каждого экрана. Без него «не дошёл за 8 шагов» значит сразу два
+    # разных случая: мастер длиннее восьми экранов — или мы всё это время
+    # топтались на одном, а «Далее» его не сменяла. Чинятся они по-разному
+    # (поднять предел против разобраться, что экран не принимает), а по прежней
+    # фразе выбрать было нельзя.
+    seen: list[str] = []
+
     for step in range(_APPLY_MAX_STEPS):
         submit = page.locator(SEL_APPLY_SUBMIT)
         if submit.count() > 0:
@@ -949,6 +956,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
             # the contact step from the account itself, so a run without an apply
             # profile can still walk the flow — it just adds nothing of its own.
             obs, _route = scrape_until_ready(page)
+            seen.append(_screen_key(obs))
             # Easy Apply тоже спрашивает сопроводительное письмо файлом — там
             # это отдельный шаг «Дополнительные документы». Собираем PDF из уже
             # написанного письма; нет tectonic — поле останется пустым, как было.
@@ -1003,9 +1011,58 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
                 f"LinkedIn Easy Apply, шаг {step + 1}: форма не приняла — "
                 f"{said} — дожми вручную: {job_url}")
 
+    _dump_apply_screens(page, job_id, seen)
     raise ManualApplyRequired(
         f"LinkedIn Easy Apply: не дошёл до отправки за {_APPLY_MAX_STEPS} шагов "
-        f"— дожми вручную: {job_url}")
+        f"({_walk_shape(seen)}) — дожми вручную: {job_url}")
+
+
+def _screen_key(obs) -> str:
+    """Короткая подпись экрана — по названиям его полей.
+
+    Названия, а не заголовок: заголовок у Easy Apply один на весь мастер
+    («Подача заявки»), а поля меняются от экрана к экрану. Экран без полей
+    (обзор перед отправкой) тоже отличим — и это не то же самое, что пустой.
+    """
+    try:
+        labels = [(f.label or f.name or "").strip() for f in obs.fields]
+    except Exception:  # noqa: BLE001
+        return "?"
+    labels = [x for x in labels if x]
+    return " | ".join(labels)[:120] if labels else "(без полей)"
+
+
+def _walk_shape(seen) -> str:
+    """«Топтались на одном экране» или «прошли столько-то разных» — одной фразой."""
+    if not seen:
+        return "экраны не читались"
+    uniq = len(set(seen))
+    if uniq == 1:
+        return f"все шаги — один и тот же экран: {seen[0][:70]}"
+    if uniq < len(seen):
+        return f"{uniq} разных экрана на {len(seen)} шагов — часть повторялась"
+    return f"{uniq} разных экрана подряд, мастер длиннее предела"
+
+
+def _dump_apply_screens(page, job_id: str, seen) -> None:
+    """Разметка последнего экрана и список пройденных. Не роняет отклик."""
+    import json
+    from pathlib import Path
+
+    from app import config
+    try:
+        d = Path(config.APPLY_DEBUG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        tag = f"easyapply-steps-{job_id or 'no-id'}"
+        (d / f"{tag}.json").write_text(
+            json.dumps(list(seen), ensure_ascii=False, indent=1), encoding="utf-8")
+        (d / f"{tag}.html").write_text(page.content(), encoding="utf-8")
+        try:
+            page.screenshot(path=str(d / f"{tag}.png"))
+        except Exception:  # noqa: BLE001 — снимок необязателен, разметка важнее
+            pass
+    except Exception:  # noqa: BLE001 — диагностика не имеет права ломать прогон
+        pass
 
 
 class LinkedInChannel:

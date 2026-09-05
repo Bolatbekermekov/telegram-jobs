@@ -466,6 +466,33 @@ def test_a_screen_with_neither_submit_nor_next_is_manual_not_failed():
                             OutreachContent(body="hi"))
 
 
+def test_the_shape_of_the_walk_tells_a_loop_from_a_long_form():
+    """«Не дошёл за 8 шагов» значило сразу два разных случая: мастер длиннее
+    предела — или все восемь раз это был ОДИН экран, который «Далее» не сменяла.
+    Чинятся они по-разному, а по прежней фразе выбрать было нельзя.
+
+    Проверяются чистые функции, потому что именно они и есть решение: обход
+    сам по себе одинаков в обоих случаях."""
+    from app.domain.page_observation import FieldObs
+    from app.infrastructure.channels.linkedin import _screen_key, _walk_shape
+
+    class _Obs:
+        def __init__(self, labels):
+            self.fields = [FieldObs(tag="input", label=x, ref=str(i))
+                           for i, x in enumerate(labels)]
+
+    one = _screen_key(_Obs(["Email", "Phone"]))
+    two = _screen_key(_Obs(["Resume"]))
+    assert one == "Email | Phone"
+    assert _screen_key(_Obs([])) == "(без полей)"
+
+    assert "один и тот же экран" in _walk_shape([one] * 8)
+    assert "Email" in _walk_shape([one] * 8)
+    assert "длиннее предела" in _walk_shape([one, two, _screen_key(_Obs(["A"]))])
+    assert "часть повторялась" in _walk_shape([one, two, one, two])
+    assert _walk_shape([]) == "экраны не читались"
+
+
 def test_the_walk_is_bounded_and_never_submits_on_giving_up():
     page = _FakeApplyPage({SEL_EASY_APPLY: 1, SEL_APPLY_SUBMIT: 0,
                            SEL_APPLY_NEXT: 1},
