@@ -494,7 +494,13 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
             matched = re.search(r"\b" + r"\W+".join(map(re.escape, key_words)) + r"\b", low)
         if matched:
             if ans:
-                return FillAction(field=f, value=ans, source="custom")
+                # Перевод в единицы вопроса — НЕ отмена ответа владельца, а его
+                # выражение. `custom_answers` содержит «notice period: 1 month»,
+                # и эта ветка стоит раньше перевода: живьём 2026-09-05 (лид
+                # #877, повтор уже с правкой) в поле «notice period in days»
+                # снова уехало «1 month» — семь знаков, «Недопустимое значение».
+                return FillAction(field=f, value=_in_asked_units(low, ans),
+                                  source="custom")
             return FillAction(field=f, needs_ai=True, source="ai")
 
     # «Сколько лет опыта» — вопрос с готовым ответом, а не повод звать модель.
@@ -573,8 +579,8 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # Перевод, а не догадка: единицу называет сам вопрос, число берётся из
     # профиля. Не перевелось — правило молчит, и вопрос достаётся общему пути.
     if caption_len <= _MAX_LABEL_CHARS and _NOTICE_RE.search(low):
-        converted = notice_period_in(low, profile.notice_period)
-        if converted:
+        converted = _in_asked_units(low, profile.notice_period)
+        if converted != profile.notice_period:
             return FillAction(field=f, value=converted, source="profile")
 
     if caption_len <= _MAX_LABEL_CHARS:
@@ -787,6 +793,18 @@ _NUMERIC_Q_RE = re.compile(
 # считает модель»), — а текущая это ФАКТ о человеке, которого у нас нет. Число
 # на её месте было бы выдумкой о владельце, ушедшей работодателю. Для неё есть
 # `current_salary` в профиле; пока он пуст, поле честно достаётся человеку.
+def _in_asked_units(question: str, value: str) -> str:
+    """Значение в единицах, которые называет вопрос, — или как было.
+
+    Одно место на оба пути: и на `custom_answers`, и на строку профиля. Разными
+    их делать нельзя — вопрос «notice period in days» приходит один и тот же, а
+    ответ на него брался бы то переведённым, то нет.
+    """
+    if not _NOTICE_RE.search(question or ""):
+        return value
+    return notice_period_in(question, value) or value
+
+
 def _asks_for_a_number(field) -> bool:
     if (field.type or "").lower() == "number":
         return True

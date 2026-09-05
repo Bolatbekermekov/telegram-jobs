@@ -57,3 +57,39 @@ def test_the_planner_uses_the_converted_number():
     [action] = plan.actions
     assert action.value == "4"
     assert action.source == "profile"
+
+
+def test_the_owners_own_answer_is_converted_too():
+    """`custom_answers` содержит «notice period: 1 month», и эта ветка стоит
+    РАНЬШЕ перевода. Живьём 2026-09-05: повтор лида #877 уже с правкой снова
+    отправил «1 month» в поле «notice period in days» — семь знаков,
+    «Недопустимое значение». Перевод в единицы вопроса не отменяет ответ
+    владельца, он его выражает."""
+    from app.application.auto_apply import build_plan
+    from app.domain.page_observation import PageObservation
+
+    profile = ApplyProfile(full_name="B Y", first_name="B", email="a@b.com",
+                           notice_period="", custom_answers={"notice period": "1 month"})
+    for label, want in (("What is your notice period in days?", "30"),
+                        ("What is your notice period (in weeks)?", "4")):
+        field = FieldObs(tag="input", type="text", label=label, required=True, ref="0")
+        [action] = build_plan(
+            PageObservation(url="https://x", fields=[field]), profile, "").actions
+        assert (action.value, action.source) == (want, "custom"), label
+
+
+def test_a_custom_answer_without_a_unit_question_is_untouched():
+    """Перевод трогает только вопрос про срок отработки с названной единицей.
+    Всё остальное в `custom_answers` обязано доехать буква в букву."""
+    from app.application.auto_apply import build_plan
+    from app.domain.page_observation import PageObservation
+
+    profile = ApplyProfile(full_name="B Y", first_name="B", email="a@b.com",
+                           custom_answers={"nationality": "Kazakhstan",
+                                           "notice period": "1 month"})
+    for label, want in (("Nationality", "Kazakhstan"),
+                        ("Notice period", "1 month")):
+        field = FieldObs(tag="input", type="text", label=label, required=True, ref="0")
+        [action] = build_plan(
+            PageObservation(url="https://x", fields=[field]), profile, "").actions
+        assert action.value == want, label
