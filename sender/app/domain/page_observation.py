@@ -30,6 +30,12 @@ class FieldObs:
     # value chosen from its own suggestion list. LinkedIn's «Location (city)» is
     # one — typed text is rejected with "Please enter a valid answer".
     combobox: bool = False
+    # Сколько знаков поле готово принять; 0 — не объявлено. Не всегда атрибут:
+    # LinkedIn держит предел только в подсказке («Использовано: 37 из 20
+    # символов»), а превышение отзывается «Недопустимым значением» без единого
+    # `role=alert`. Ответ, который в поле не влезает, не отвергается на месте —
+    # он молча не даёт экрану смениться.
+    max_len: int = 0
     ref: str = ""                         # DOM handle set by the scraper (data-af index)
 
 

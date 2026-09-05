@@ -118,3 +118,43 @@ def test_radio_groups_still_work(page):
     assert len(obs.fields) == 1
     assert obs.fields[0].label == "Gender"
     assert obs.fields[0].options == ["Male", "Female"]
+
+
+# --- предел длины, объявленный не атрибутом ----------------------------------
+# LinkedIn Easy Apply не ставит `maxlength`: предел живёт в подсказке поля —
+# «Использовано: 37 из 20 символов», — и превышение отзывается там же
+# «Недопустимым значением», без единого `role=alert`. Не прочитав предел, модель
+# отвечает фразой в поле на двадцать знаков, экран молча не сменяется, и обход
+# упирается в предел шагов (живьём 2026-09-05, вакансия 4461771754).
+LINKEDIN_LIMITED = """
+  <input required id="q-salary" aria-describedby="q-salary-info"
+         aria-label="What is your current salary ?" type="text">
+  <div id="q-salary-info">1/20 Использовано: 1 из 20 символов</div>
+"""
+
+
+def test_the_limit_is_read_from_the_hint_when_there_is_no_maxlength(page):
+    obs = scrape(page, LINKEDIN_LIMITED)
+    [fld] = [f for f in obs.fields if "salary" in f.label]
+    assert fld.max_len == 20
+
+
+def test_a_real_maxlength_still_wins(page):
+    obs = scrape(page, '<input maxlength="7" aria-label="Код">')
+    [fld] = [f for f in obs.fields if f.label == "Код"]
+    assert fld.max_len == 7
+
+
+def test_english_wording_of_the_hint_counts(page):
+    obs = scrape(page, """
+      <input id="e" aria-describedby="e-info" aria-label="About you">
+      <div id="e-info">0 of 300 characters</div>
+    """)
+    [fld] = [f for f in obs.fields if f.label == "About you"]
+    assert fld.max_len == 300
+
+
+def test_no_declared_limit_reads_as_zero(page):
+    obs = scrape(page, '<input aria-label="Свободное поле">')
+    [fld] = [f for f in obs.fields if f.label == "Свободное поле"]
+    assert fld.max_len == 0

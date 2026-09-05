@@ -82,6 +82,25 @@ _SCRAPE_JS = r"""() => {
   // input[type=file] за своей кнопкой, и заявка без резюме этим уже кончалась.
   const usable = e => e.type === 'file' ? !e.disabled
     : (e.getAttribute('aria-hidden') !== 'true' && isVisible(e));
+  // Предел длины ответа. `maxlength` ставят не все: LinkedIn держит его только
+  // в подсказке поля — «Использовано: 37 из 20 символов», — и превышение там же
+  // отзывается «Недопустимым значением». Не прочитав предел, модель отвечает
+  // фразой в поле на двадцать знаков, экран не пускает дальше, и обход
+  // упирается в предел шагов (живьём 2026-09-05, вакансия 4461771754).
+  const maxLenOf = el => {
+    const attr = parseInt(el.getAttribute('maxlength') || '', 10);
+    if (attr > 0) return attr;
+    let txt = '';
+    for (const id of (el.getAttribute('aria-describedby') || '').split(/\s+/)) {
+      if (!id) continue;
+      const info = document.getElementById(id);
+      if (info) txt += ' ' + (info.textContent || '');
+    }
+    const m = txt.match(/из\s+(\d+)\s*символ/i)
+           || txt.match(/of\s+(\d+)\s*character/i)
+           || txt.match(/\b\d+\s*\/\s*(\d+)\b/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
   const controls = [...document.querySelectorAll('input,select,textarea')]
     .filter(e => !['hidden','submit','button','reset','image'].includes(e.type) && usable(e));
   // Radios only mean anything as a group: one question, several buttons. Emitted
@@ -212,6 +231,7 @@ _SCRAPE_JS = r"""() => {
       // plain text box and behaves like a dropdown.
       combobox: e.getAttribute('role') === 'combobox'
                 || ['list','both'].includes(e.getAttribute('aria-autocomplete')),
+      max_len: maxLenOf(e),
       ref: String(i),
     });
   });
@@ -253,6 +273,7 @@ def _build_observation(raw: dict) -> PageObservation:
                        required=bool(f.get("required")), options=f.get("options") or [],
                        value=f.get("value", "") or "",
                        combobox=bool(f.get("combobox")),
+                       max_len=int(f.get("max_len") or 0),
                        ref=f.get("ref", "")) for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),

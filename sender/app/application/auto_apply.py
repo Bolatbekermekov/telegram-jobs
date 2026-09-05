@@ -723,6 +723,65 @@ def build_plan(obs: PageObservation, profile: ApplyProfile, cv_path: str,
     return ApplyPlan(actions=actions)
 
 
+# Вопрос, ответом на который может быть только число. Раньше об этом судили по
+# `type == "number"`, и у LinkedIn это не срабатывало никогда: там ВСЕ поля
+# `type="text"`, включая «How many years…» и «notice period (in weeks)». Живьём
+# 2026-09-05 (вакансия 4461771754) в поле «notice period (in weeks)» уехало
+# «1 month», страница ответила «Недопустимое значение», и экран не сменился
+# шесть раз подряд.
+#
+# Зарплаты здесь НАМЕРЕННО нет, хотя она тоже про число: у владельца может быть
+# решение её не раскрывать, и «ответь только числом» это решение отменило бы.
+# Ей хватает предела длины — короткий отказ в двадцать знаков помещается.
+_NUMERIC_Q_RE = re.compile(
+    r"how many|years of (work )?experience|\(in weeks\)|\(in months\)|"
+    r"\(in years\)|notice period|сколько лет|сколько месяцев|сколько недель",
+    re.I)
+
+
+def _asks_for_a_number(field) -> bool:
+    if (field.type or "").lower() == "number":
+        return True
+    return bool(_NUMERIC_Q_RE.search(field.label or field.name or ""))
+
+
+def _ai_prompt(field) -> str:
+    """Вопрос модели вместе с тем, что поле готово принять.
+
+    Ограничения приходят от самой страницы и стоят одной строки в промпте, а их
+    отсутствие стоит отклика: ответ, который в поле не влезает, LinkedIn не
+    отвергает вслух — он молча не даёт экрану смениться.
+    """
+    prompt = field.label or field.name or ""
+    if _asks_for_a_number(field):
+        prompt += " (ответ: ТОЛЬКО число, без валюты, символов и слов)"
+    limit = getattr(field, "max_len", 0) or 0
+    if limit:
+        prompt += f" (не длиннее {limit} знаков)"
+    return prompt
+
+
+def _fit_answer(value: str, field) -> str | None:
+    """Ответ, укладывающийся в поле, — или None, если уложить нечем.
+
+    None, а не обрезка. Обрезанная фраза уезжает работодателю целым
+    предложением без конца, и читает её человек; лучше честно оставить поле
+    незаполненным, и пусть про него скажут по имени. Исключение — числовой
+    вопрос: там из ответа достаётся само число, и это не догадка, а ровно то,
+    что спрашивали.
+    """
+    limit = getattr(field, "max_len", 0) or 0
+    if not limit or len(value) <= limit:
+        return value
+    if _asks_for_a_number(field):
+        m = re.search(r"\d[\d\s.,]*", value)
+        if m:
+            digits = re.sub(r"[^\d]", "", m.group(0))[:limit]
+            if digits:
+                return digits
+    return None
+
+
 def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
     """Fill needs_ai actions using the injected answerer. Reuses hh_questions.fill_plan
     to clamp choices and normalise text, keeping one answer format across channels.
@@ -738,13 +797,7 @@ def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
     questions = [{
         "id": str(i),
         "type": "choice" if a.field.options else "text",
-        # Say when the box only takes digits. Without it the model answers a
-        # salary question with "£5000", which <input type=number> rejects
-        # outright — the value is salvaged on the way in either way, but an
-        # answer that fits the box is better than one that has to be repaired.
-        "prompt": ((a.field.label or a.field.name) +
-                   (" (ответ: ТОЛЬКО число, без валюты, символов и слов)"
-                    if a.field.type == "number" else "")),
+        "prompt": _ai_prompt(a.field),
         "options": a.field.options,
     } for i, a in enumerate(ai_actions)]
 
@@ -757,7 +810,10 @@ def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
             continue
         kind, _, val = t
         if kind == "text":
-            a.value = str(val)
+            fitted = _fit_answer(str(val), a.field)
+            if fitted is None:
+                continue        # в поле не влезает — пусть его назовёт человек
+            a.value = fitted
         else:
             a.choice_index = int(val)
             if a.field.options and 0 <= a.choice_index < len(a.field.options):
