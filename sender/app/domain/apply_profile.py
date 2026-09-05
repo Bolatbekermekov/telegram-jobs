@@ -108,6 +108,12 @@ class ApplyProfile:
     min_experience_years: int = 3
     open_to_relocation: bool = False
     notice_period: str = ""
+    # Текущая зарплата. Пусто = не подставлять: у ATS индийского рынка «Current
+    # CTC» часто обязателен и числовой, и без этой строки такая заявка честно
+    # уходит человеку. Отдельно от `desired_salary`, потому что это разные вещи:
+    # ожидаемую модель считает по вакансии, текущая — факт, который знает только
+    # владелец, и выдумывать его нельзя.
+    current_salary: str = ""
     # Keys are lowercase question substrings -> ready answers ("" => let the AI answer).
     custom_answers: dict[str, str] = field(default_factory=dict)
 

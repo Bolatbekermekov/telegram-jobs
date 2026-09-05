@@ -31,11 +31,18 @@ def test_linkedin_numeric_questions_are_recognised_despite_type_text():
     assert _asks_for_a_number(f("Стоимость часа", type="number"))
 
 
-def test_salary_is_deliberately_not_numeric():
-    """У владельца может быть решение зарплату не раскрывать, и «ответь только
-    числом» его бы отменило. Зарплате хватает предела длины."""
+def test_only_the_current_salary_stays_out_of_numbers():
+    """Граница проходит НЕ между «зарплата» и «не зарплата».
+
+    Сначала я вывел из ответа модели («Не готов раскрывать текущую зарплату.»),
+    что владелец зарплату скрывает, и исключил из числовых обе. Профиль говорит
+    обратное: `desired_salary` пуст НАМЕРЕННО — «пусть считает модель по самой
+    вакансии». Значит ожидаемая обязана быть числом.
+
+    Текущая — другое дело: это факт о владельце, которого у модели нет, и число
+    на её месте было бы выдумкой. Подробности — в test_salary_questions.py."""
+    assert _asks_for_a_number(f("What is your expected salary ?"))
     assert not _asks_for_a_number(f("What is your current salary ?"))
-    assert not _asks_for_a_number(f("What is your expected salary ?"))
 
 
 # --- что уходит модели --------------------------------------------------------

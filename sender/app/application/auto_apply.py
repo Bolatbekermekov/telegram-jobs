@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.domain.apply_profile import ApplyProfile, work_authorized_in
-from app.domain.availability import availability_iso
+from app.domain.availability import availability_iso, notice_period_in
 from app.domain.page_observation import FieldObs, PageObservation
 
 EEO_ANSWER = "Prefer not to say"
@@ -28,6 +28,16 @@ _MAX_LABEL_CHARS = 80
 _AVAILABILITY_DATE_RE = re.compile(
     r"availab|available start|start date|starting date|joining|can you start|"
     r"notice period|дата выхода|когда.*готов", re.IGNORECASE)
+
+# Вопрос про срок отработки — без требования даты. Отдельно от
+# `_AVAILABILITY_DATE_RE`: тот про контрол-календарь, этот про число в
+# названных единицах.
+_NOTICE_RE = re.compile(r"notice period|срок отработки", re.IGNORECASE)
+
+# `ctc\b` без левой границы намеренно: ECTC (expected) и CCTC (current) — это
+# тот же CTC с приставкой, и «\bctc\b» не поймал бы ни одного.
+_SALARY_Q_RE = re.compile(r"salary|compensation|ctc\b|expected pay|\brate\b", re.I)
+_CURRENT_SALARY_RE = re.compile(r"\bcurrent\b|\bcctc\b|текущ", re.I)
 
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
@@ -511,6 +521,22 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # stored figure instead of an answer is exactly what _MAX_LABEL_CHARS exists
     # to prevent. Longer labels fall through to the free-text branch below, which
     # sends them to the model anyway.
+    # ТЕКУЩАЯ зарплата — раньше общей ветки и отдельно от неё. Общая отдаёт
+    # ОЖИДАЕМУЮ всему, где есть слово «salary», и на вопросе «What is your
+    # current salary ?» это уверенно сообщало работодателю неверный факт о
+    # человеке (поймано тестом 2026-09-05; ветка существовала задолго до него).
+    #
+    # Нечем ответить — оставляем ПУСТЫМ, а не спрашиваем модель: ожидаемую она
+    # считает по вакансии, а текущая это факт о владельце, которого у неё нет.
+    # Пустое обязательное поле назовёт `unmapped_required` — сразу, по имени, до
+    # всякой отправки, и это честнее выдуманного числа.
+    if (caption_len <= _MAX_LABEL_CHARS
+            and _CURRENT_SALARY_RE.search(low)
+            and re.search(r"salary|compensation|ctc\b|зарплат|оклад", low)):
+        if profile.current_salary:
+            return FillAction(field=f, value=profile.current_salary, source="profile")
+        return FillAction(field=f, source="unmapped")
+
     if (caption_len <= _MAX_LABEL_CHARS
             and re.search(r"salary|compensation|expected pay|\brate\b|зарплат|оклад", low)):
         if profile.desired_salary:
@@ -538,6 +564,19 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # "…и укажи email кандидата" would otherwise hand over the address without the
     # model ever being asked. Real captions are short, so prose skips these rules
     # and falls through to the free-text branch below.
+    # Срок отработки, спрошенный В ЕДИНИЦАХ. Профиль хранит одну строку («1
+    # month»), а вопрос приходит в трёх видах — «(in weeks)», «in days», просто
+    # «notice period?» — и первые два поля числовые. Строка уезжала во все три
+    # как есть, LinkedIn отвечал «Недопустимое значение», экран не менялся
+    # (живьём 2026-09-05, вакансии 4461771754 и 4461119453).
+    #
+    # Перевод, а не догадка: единицу называет сам вопрос, число берётся из
+    # профиля. Не перевелось — правило молчит, и вопрос достаётся общему пути.
+    if caption_len <= _MAX_LABEL_CHARS and _NOTICE_RE.search(low):
+        converted = notice_period_in(low, profile.notice_period)
+        if converted:
+            return FillAction(field=f, value=converted, source="profile")
+
     if caption_len <= _MAX_LABEL_CHARS:
         for rx, resolver in _LABEL_RULES:
             if rx.search(low):
@@ -739,10 +778,22 @@ _NUMERIC_Q_RE = re.compile(
     re.I)
 
 
+# Зарплата — тоже число, и поле под неё у LinkedIn числовое: ответ «не указываю»
+# оно отвергает «Недопустимым значением» так же, как фразу (живьём 2026-09-05,
+# вакансии 4461771754 и 4463333146 — «Current CTC», «ECTC in lakhs per annum»).
+#
+# ТЕКУЩАЯ зарплата исключена, и это не осторожность, а граница: ожидаемую модель
+# считает по вакансии — так и написано в профиле («ПУСТО НАМЕРЕННО… пусть
+# считает модель»), — а текущая это ФАКТ о человеке, которого у нас нет. Число
+# на её месте было бы выдумкой о владельце, ушедшей работодателю. Для неё есть
+# `current_salary` в профиле; пока он пуст, поле честно достаётся человеку.
 def _asks_for_a_number(field) -> bool:
     if (field.type or "").lower() == "number":
         return True
-    return bool(_NUMERIC_Q_RE.search(field.label or field.name or ""))
+    label = field.label or field.name or ""
+    if _NUMERIC_Q_RE.search(label):
+        return True
+    return bool(_SALARY_Q_RE.search(label) and not _CURRENT_SALARY_RE.search(label))
 
 
 def _ai_prompt(field) -> str:
