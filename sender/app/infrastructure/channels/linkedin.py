@@ -810,8 +810,59 @@ def _open_apply_flow(page, job_url: str):
         _click_via_dom(hrefless[0])
         _settle(page)
         return hrefless[0]
+    # Тупик: Voyager говорит «Easy Apply» (companyApplyUrl нет), а кнопки верхней
+    # карточки на странице не видно — только ссылки правой колонки. Разбирать
+    # это по одной фразе в заметке нечем: непонятно, кнопка не успела
+    # смонтироваться, сменилась подпись или вакансия и правда не Easy Apply.
+    # Живьём 2026-09-05 (лид на 4459508144) — девять точек входа, все с href.
+    # Ведро молчало с 27.08 и вернулось, так что случай не разовый.
+    _dump_entry_points(page, job_id, entry, count)
     raise _ExternalApplyNeeded(
         f"точек входа {count}, из них без href {len(hrefless)} — ни одна не называет эту вакансию")
+
+
+def _dump_entry_points(page, job_id: str, entry, count: int) -> None:
+    """Разметка и подписи точек входа — чтобы следующий такой отказ читался.
+
+    Пишет рядом с дампами форм: тег, подпись, href и видимость каждой, плюс
+    страницу целиком. Никогда не роняет отклик — диагностика не имеет права
+    стоить лида.
+    """
+    import json
+    from pathlib import Path
+
+    from app import config
+    try:
+        d = Path(config.APPLY_DEBUG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        tag = f"easyapply-{job_id or 'no-id'}"
+        rows = []
+        for i in range(min(count, 12)):
+            el = entry.nth(i)
+            row = {"i": i}
+            # Тега здесь нет намеренно: узнать его можно только `evaluate` на
+            # самом кандидате, а это ТРОГАЕТ элемент — ровно то, чего отказ
+            # обязан не делать (тест на два безымянных контроля поймал это
+            # сразу). Кнопку от ссылки правой колонки отличает href, а полная
+            # разметка лежит рядом в .html.
+            for key, get in (("text", lambda: (el.inner_text(timeout=800) or "").strip()[:70]),
+                             ("href", lambda: el.get_attribute("href")),
+                             ("aria", lambda: el.get_attribute("aria-label")),
+                             ("visible", lambda: el.is_visible(timeout=500))):
+                try:
+                    row[key] = get()
+                except Exception as exc:  # noqa: BLE001
+                    row[key] = f"<{type(exc).__name__}>"
+            rows.append(row)
+        (d / f"{tag}.json").write_text(
+            json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
+        (d / f"{tag}.html").write_text(page.content(), encoding="utf-8")
+        try:
+            page.screenshot(path=str(d / f"{tag}.png"))
+        except Exception:  # noqa: BLE001 — снимок необязателен, разметка важнее
+            pass
+    except Exception:  # noqa: BLE001 — диагностика не имеет права ломать прогон
+        pass
 
 
 def _job_id(url: str) -> str:
