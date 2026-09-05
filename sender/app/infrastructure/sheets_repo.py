@@ -3,6 +3,8 @@ import datetime as _dt
 import time
 
 import gspread
+from requests.exceptions import (ConnectionError as RequestsConnectionError,
+                                 Timeout as RequestsTimeout)
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError
 from gspread.utils import ValueInputOption, rowcol_to_a1
@@ -56,12 +58,51 @@ def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
 
     A write that fails *after* the message was already delivered is what leaves a
     lead `new` and gets it sent to the same person again on the next run, so the
-    write path is worth retrying even though the read path is not.
+    write path is worth retrying.
+
+    Чтение повторяется отдельно (`_read_with_retry`) и по другим правилам:
+    прежняя фраза «читать повторять не стоит» держалась ровно до 2026-09-05,
+    когда один подвисший `get_all_records` уронил прогон посреди очереди из 66
+    лидов. Разница между путями не в том, стоит ли повторять, а в ЦЕНЕ ОШИБКИ:
+    повтор записи после дошедшего запроса создаёт дубль строки, повтор чтения
+    не создаёт ничего.
     """
     _sleep = time.sleep if sleep is None else sleep
     for attempt in range(attempts):
         try:
             return op()
+        except APIError as exc:
+            if _status_of(exc) not in _TRANSIENT_CODES or attempt == attempts - 1:
+                raise
+            _sleep(_RETRY_BASE_DELAY_SECONDS * 2 ** attempt)
+
+
+# Потолок ожидания ответа Google. Пара минут — это уже не «медленно», это
+# «не ответит»: сам лист читается за секунды.
+_HTTP_TIMEOUT_SECONDS = 60
+
+# Транспортные сбои, на которых ЧТЕНИЕ стоит повторить. Отдельно от `APIError`:
+# 2026-09-05 прогон умер на `requests.exceptions.ReadTimeout`, а `_with_retry`
+# ловит только `APIError` — то есть таймаут не пережил бы и путь записи.
+_TRANSPORT_ERRORS = (RequestsConnectionError, RequestsTimeout)
+
+
+def _read_with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
+    """Прочитать лист, пережив короткий сбой сети.
+
+    ЧТЕНИЕ, и это существенно. Запись повторять на таймауте нельзя: запрос мог
+    дойти до Google, и второй создал бы дубль строки — дубль лида и дубль
+    отклика. У чтения такой цены нет вовсе, а цена отказа измерена: один
+    подвисший запрос уронил прогон посреди очереди из 66 лидов.
+    """
+    _sleep = time.sleep if sleep is None else sleep
+    for attempt in range(attempts):
+        try:
+            return op()
+        except _TRANSPORT_ERRORS:
+            if attempt == attempts - 1:
+                raise
+            _sleep(_RETRY_BASE_DELAY_SECONDS * 2 ** attempt)
         except APIError as exc:
             if _status_of(exc) not in _TRANSIENT_CODES or attempt == attempts - 1:
                 raise
@@ -157,11 +198,16 @@ def record_to_lead(rec: dict, offset: int, status: str = STATUS_NEW) -> Lead:
 class SheetsRepo:
     def __init__(self, service_account_path: str, sheet_id: str, tab: str):
         client = gspread.authorize(_load_credentials(service_account_path))
+        # Без этого чтение уходит в `read timeout=None`, то есть ждёт вечно.
+        # Живьём 2026-09-05: Google подвис на `get_all_records`, прогон умер
+        # трейсбеком посреди очереди, и 66 лидов остались необработанными.
+        client.set_timeout(_HTTP_TIMEOUT_SECONDS)
         self._ws = client.open_by_key(sheet_id).worksheet(tab)
 
     def fetch_by_status(self, status: str) -> list[Lead]:
         """Every lead currently carrying `status`, in sheet order."""
-        records = self._ws.get_all_records(expected_headers=COLUMNS)
+        records = _read_with_retry(
+            lambda: self._ws.get_all_records(expected_headers=COLUMNS))
         return [
             record_to_lead(rec, offset, status)
             for offset, rec in enumerate(records)
@@ -177,7 +223,8 @@ class SheetsRepo:
         Один запрос на прогон: лист читается целиком и так, а история нужна
         до первой отправки.
         """
-        records = self._ws.get_all_records(expected_headers=COLUMNS)
+        records = _read_with_retry(
+            lambda: self._ws.get_all_records(expected_headers=COLUMNS))
         return [r for r in (record_to_sent(rec) for rec in records) if r is not None]
 
     def mark_sent(self, lead: Lead, message: str, status: str,
