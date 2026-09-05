@@ -725,7 +725,72 @@ def company_apply_url_or_reason(page, job_url) -> tuple[str | None, str]:
         url = page.evaluate(_VOYAGER_APPLY_JS, job_url)
     except Exception as exc:  # noqa: BLE001
         return (None, f"запрос к Voyager не прошёл: {str(exc)[:120]}")
-    return (url, "") if url else (None, "Voyager не дал companyApplyUrl")
+    if url:
+        return (url, "")
+    # Voyager промолчал — но у страницы ссылка может быть своя. Живьём
+    # 2026-09-05 (вакансия 4463701481, дамп easyapply-4463701481): Voyager не
+    # дал companyApplyUrl, точек входа Easy Apply нашлась ровно одна и та из
+    # правой колонки «похожие вакансии», а на верхней карточке всё это время
+    # висел `<a aria-label="Подать заявку на сайте компании">` с настоящим
+    # адресом. Лид ушёл в ручные при живой ссылке на экране.
+    #
+    # Только на ЧЕСТНОМ нуле, не на сбое запроса: упавший Voyager значит, что со
+    # страницей что-то не так, и читать с неё что-либо — гадание (эту границу
+    # держит отдельный тест).
+    from_page = _offsite_apply_from_page(page)
+    if from_page:
+        return (from_page, "")
+    return (None, "Voyager не дал companyApplyUrl, и на странице нет ссылки "
+                  "«на сайте компании»")
+
+
+# Кнопка внешнего отклика верхней карточки. Ищется по aria-label, а НЕ по
+# подписи: подпись «Подать заявку» несут и карточки правой колонки, и строка
+# «11 человек нажали „Подать заявку“», и ровно на таком совпадении обход
+# однажды ушёл гулять по чужим вакансиям. Формулировка «на сайте компании» /
+# «company website» принадлежит только этой кнопке.
+_SEL_OFFSITE_APPLY = ("a[aria-label*='сайте компании' i], "
+                      "a[aria-label*='company website' i], "
+                      "a[aria-label*='company site' i]")
+
+
+def _unwrap_safety_link(href: str) -> str:
+    """Развернуть перенаправление LinkedIn `/safety/go/?url=…`.
+
+    Каждую внешнюю ссылку LinkedIn заворачивает в свой редиректор, и адрес
+    внутри — процентно-закодированный. Идти по обёртке можно, но тогда все
+    последующие проверки (allowlist ATS, `vendor_behind`, дедупликация по
+    ссылке) увидят linkedin.com вместо настоящего работодателя.
+    """
+    from urllib.parse import parse_qs, urlsplit
+    try:
+        parts = urlsplit(href or "")
+    except ValueError:
+        return href
+    if "linkedin.com" not in parts.netloc.lower() or "/safety/go" not in parts.path:
+        return href
+    return parse_qs(parts.query).get("url", [""])[0] or href
+
+
+def _offsite_apply_from_page(page) -> str:
+    """Адрес внешнего отклика с самой страницы, или пустая строка.
+
+    Никогда не бросает: это запасной путь, и его поломка не должна превращать
+    честный ноль в исключение.
+    """
+    try:
+        loc = page.locator(_SEL_OFFSITE_APPLY)
+        n = min(loc.count(), 5)
+    except Exception:  # noqa: BLE001 — страница без locator (или уже закрыта)
+        return ""
+    for i in range(n):
+        try:
+            href = loc.nth(i).get_attribute("href") or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if href:
+            return _unwrap_safety_link(href)
+    return ""
 
 
 class _ExternalApplyNeeded(Exception):

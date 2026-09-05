@@ -187,9 +187,66 @@ class _EmptyPage:
 
 
 def test_an_honest_absence_says_so():
+    """Ноль от Voyager — и на странице тоже пусто. Причина называет оба места:
+    искали в двух, не нашли ни в одном."""
     url, why = li.company_apply_url_or_reason(_EmptyPage(), "https://x/jobs/view/1")
     assert url is None
-    assert why == "Voyager не дал companyApplyUrl"
+    assert "Voyager не дал companyApplyUrl" in why
+    assert "на сайте компании" in why
+
+
+class _PageWithApplyLink:
+    """Страница, у которой Voyager молчит, а кнопка внешнего отклика есть."""
+
+    def __init__(self, href):
+        self.href, self.asked = href, []
+
+    def evaluate(self, script, *args):
+        return None
+
+    def locator(self, sel):
+        self.asked.append(sel)
+        page = self
+
+        class _L:
+            def count(self):
+                return 1
+
+            def nth(self, i):
+                return self
+
+            def get_attribute(self, name):
+                return page.href if name == "href" else None
+        return _L()
+
+
+def test_the_page_own_apply_link_is_used_when_voyager_is_silent():
+    """Живьём 2026-09-05 (вакансия 4463701481): Voyager не дал companyApplyUrl,
+    Easy Apply не нашёлся, а на верхней карточке всё это время висел
+    `<a aria-label="Подать заявку на сайте компании">`. Лид ушёл в ручные при
+    живой ссылке на экране.
+
+    Обёртка LinkedIn разворачивается: иначе allowlist ATS, `vendor_behind` и
+    дедупликация увидят linkedin.com вместо настоящего работодателя."""
+    wrapped = ("https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fboards"
+               "%2Egreenhouse%2Eio%2Facme%2Fjobs%2F7&urlhash=6ee4&isSdui=true")
+    page = _PageWithApplyLink(wrapped)
+    url, why = li.company_apply_url_or_reason(page, "https://x/jobs/view/1")
+
+    assert url == "https://boards.greenhouse.io/acme/jobs/7"
+    assert why == ""
+    # По aria-label, а не по подписи: «Подать заявку» несут и карточки правой
+    # колонки, и строка «11 человек нажали …».
+    assert "aria-label" in page.asked[0]
+    assert "has-text" not in page.asked[0]
+
+
+def test_a_plain_apply_link_is_left_alone():
+    """Не всякая ссылка завёрнута. Разворачивать нечего — отдаём как есть."""
+    page = _PageWithApplyLink("https://jobs.lever.co/acme/1/apply")
+    url, why = li.company_apply_url_or_reason(page, "https://x/jobs/view/1")
+    assert url == "https://jobs.lever.co/acme/1/apply"
+    assert why == ""
 
 
 def test_a_found_url_carries_no_reason():
