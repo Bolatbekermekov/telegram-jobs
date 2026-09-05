@@ -91,3 +91,68 @@ def test_a_page_that_cannot_be_evaluated_is_silent():
             raise RuntimeError("Execution context was destroyed")
 
     assert _first_field_error(_Boom()) == ""
+
+
+# --- закрытая вакансия ---------------------------------------------------------
+# Живьём 2026-09-05, вакансия 4459508144 (дамп `easyapply-4459508144`). Кнопки
+# отклика на странице нет ни одной, все восемь «точек входа» — значки Easy Apply
+# на карточках правой колонки, а в `<main>` стоит «Заявки на эту вакансию больше
+# не принимаются». Прежний отчёт звал человека подать заявку руками — на
+# вакансию, которая заявок не принимает.
+#
+# Проверка живости на ПОИСКЕ такое поймать не может: она читает страницу
+# анонимно по HTTP, а эту строку LinkedIn показывает только вошедшему.
+
+from app.infrastructure.channels.linkedin import _job_page_is_gone
+
+
+class _Page:
+    def __init__(self, main=None, body="", title="Backend Engineer | LinkedIn"):
+        self._main, self._body, self._title = main, body, title
+
+    def title(self):
+        return self._title
+
+    def locator(self, sel):
+        page = self
+
+        class _L:
+            @property
+            def first(self):
+                return self
+
+            def inner_text(self, timeout=None):
+                if sel == "main":
+                    if page._main is None:
+                        raise RuntimeError("нет main")
+                    return page._main
+                return page._body
+        return _L()
+
+
+def test_the_closed_notice_is_recognised():
+    page = _Page(main="droplet.ink\nBackend Engineer\nКалькутта\n"
+                      "Заявки на эту вакансию больше не принимаются\nОб этой вакансии")
+    assert _job_page_is_gone(page) is True
+
+
+def test_a_live_job_page_is_not_gone():
+    page = _Page(main="droplet.ink\nBackend Engineer\nПростая подача заявки\nОб этой вакансии")
+    assert _job_page_is_gone(page) is False
+
+
+def test_body_is_read_when_there_is_no_main():
+    page = _Page(main=None, body="No longer accepting applications")
+    assert _job_page_is_gone(page) is True
+
+
+def test_a_page_that_reads_nothing_is_not_called_gone():
+    """Молчание страницы — не доказательство, что вакансия закрыта."""
+    class _Boom:
+        def title(self):
+            raise RuntimeError("нет")
+
+        def locator(self, sel):
+            raise RuntimeError("нет")
+
+    assert _job_page_is_gone(_Boom()) is False

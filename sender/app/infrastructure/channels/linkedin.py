@@ -772,6 +772,28 @@ def _unwrap_safety_link(href: str) -> str:
     return parse_qs(parts.query).get("url", [""])[0] or href
 
 
+def _job_page_is_gone(page) -> bool:
+    """Закрыта ли вакансия — по тексту страницы, которую мы уже открыли.
+
+    Правило берётся из домена (`page_is_gone`), а не пишется тут заново: оно уже
+    знает и «больше не принима», и английские формулировки, и статус отдельной
+    строкой. Здесь только чтение.
+    """
+    from app.domain.page_gone import page_is_gone
+    try:
+        title = page.title()
+    except Exception:  # noqa: BLE001
+        title = ""
+    try:
+        text = page.locator("main").first.inner_text(timeout=4000)
+    except Exception:  # noqa: BLE001 — нет main / страница закрыта
+        try:
+            text = page.locator("body").inner_text(timeout=4000)
+        except Exception:  # noqa: BLE001
+            return False
+    return page_is_gone(title or "", text or "")
+
+
 def _offsite_apply_from_page(page) -> str:
     """Адрес внешнего отклика с самой страницы, или пустая строка.
 
@@ -1336,6 +1358,22 @@ class LinkedInChannel:
         # navigate under automation, so we never rely on clicking it.
         company_url, why = company_apply_url_or_reason(page, job_url)
         if not company_url:
+            # Кнопки отклика может не быть по самой простой причине: вакансия
+            # закрыта. Живьём 2026-09-05 (4459508144, дамп easyapply-4459508144)
+            # — в `<main>` стоит «Заявки на эту вакансию больше не принимаются»,
+            # ни одной кнопки на странице нет, и все восемь «точек входа» это
+            # значки Easy Apply на карточках правой колонки.
+            #
+            # Проверка живости на поиске такое не ловит и поймать не может: она
+            # читает страницу анонимно по HTTP, а эту строку LinkedIn показывает
+            # только вошедшему. Здесь мы уже стоим на странице своей сессией.
+            #
+            # Разница не косметическая: «нет ссылки внешнего отклика» отправляет
+            # человека подавать заявку руками — на вакансию, которая заявок не
+            # принимает.
+            if _job_page_is_gone(page):
+                raise ManualApplyRequired(
+                    f"LinkedIn: вакансия больше не принимает заявки: {job_url}")
             raise ManualApplyRequired(
                 f"LinkedIn: нет ссылки внешнего отклика (возможно Easy Apply) — {why}"
                 + (f"; Easy Apply: {easy_apply_detail}" if easy_apply_detail else "")
