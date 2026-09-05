@@ -955,6 +955,58 @@ def _still_on_the_job(page, job_id: str) -> bool:
         return True
 
 
+# Ошибка поля в новой разметке LinkedIn лежит НЕ в `role=alert`, а в подсказке,
+# на которую поле ссылается через `aria-describedby` — там же, где счётчик
+# символов. Живьём 2026-09-05 (вакансия 4461771754): экран скрининговых вопросов
+# показывал «Недопустимое значение» под двумя полями, `role=alert` на странице
+# не было ни одного, обход шесть раз подряд жал «Далее» по одному и тому же
+# экрану и сдался с «не дошёл за 8 шагов».
+_FIELD_ERROR_JS = r"""
+() => {
+  const bad = [];
+  const q = 'input[aria-describedby], textarea[aria-describedby], select[aria-describedby]';
+  for (const el of document.querySelectorAll(q)) {
+    let txt = '';
+    for (const id of (el.getAttribute('aria-describedby') || '').split(/\s+/)) {
+      if (!id) continue;
+      const info = document.getElementById(id);
+      if (info) txt += ' ' + (info.textContent || '');
+    }
+    if (!/недопустимое значение|invalid value|введите допустимый/i.test(txt)) continue;
+    bad.push({
+      label: (el.getAttribute('aria-label') || el.name || '').trim().slice(0, 70),
+      info: txt.replace(/\s+/g, ' ').trim().slice(0, 90),
+    });
+    if (bad.length >= 3) break;
+  }
+  return bad;
+}
+"""
+
+
+def _first_field_error(page) -> str:
+    """«Поле: что с ним не так» — или пустая строка.
+
+    Отдельно от `_first_alert_text`, потому что читается из другого места и
+    значит другое: alert говорит про экран целиком, а это — про конкретное поле,
+    и назвать его надо поимённо. Человеку иначе непонятно, что править.
+    """
+    try:
+        bad = page.evaluate(_FIELD_ERROR_JS)
+    except Exception:  # noqa: BLE001 — поддельная страница / контекст разрушен
+        return ""
+    if not isinstance(bad, list) or not bad:
+        return ""
+    parts = []
+    for b in bad[:3]:
+        if not isinstance(b, dict):
+            continue
+        label = (b.get("label") or "").strip()
+        info = (b.get("info") or "").strip()
+        parts.append(f"«{label}»: {info}" if label else info)
+    return "; ".join(p for p in parts if p)[:220]
+
+
 def _first_alert_text(page, limit: int = 6) -> str:
     """Text of the first non-empty alert on the page, or "" when there is none."""
     alerts = page.locator(SEL_APPLY_ALERT)
@@ -1070,7 +1122,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
         # `role=alert` live regions on the page for screen readers, and treating
         # their mere presence as a failure stopped the walk on step 1 with
         # "проверка не пройдена" and nothing to act on.
-        said = _first_alert_text(page)
+        said = _first_alert_text(page) or _first_field_error(page)
         if said:
             raise ManualApplyRequired(
                 f"LinkedIn Easy Apply, шаг {step + 1}: форма не приняла — "
