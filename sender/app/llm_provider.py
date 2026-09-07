@@ -1,8 +1,8 @@
 """Какой LLM-провайдер обслуживает эту половину проекта.
 
-NVIDIA NIM говорит на протоколе OpenAI, поэтому разница между провайдерами
-сводится к трём значениям: ключ, базовый адрес и имена моделей. Всё остальное —
-тот же клиент `openai` и те же вызовы.
+NVIDIA NIM и Gemini говорят на протоколе OpenAI, поэтому разница между
+провайдерами сводится к трём значениям: ключ, базовый адрес и имена моделей.
+Всё остальное — тот же клиент `openai` и те же вызовы.
 
 Функция чистая и принимает env словарём (как platform_enabled в app/config.py):
 провайдера можно проверить в тестах, не поднимая конфиг целиком — он на импорте
@@ -13,13 +13,7 @@ from typing import Mapping
 
 OPENAI = "openai"
 NVIDIA = "nvidia"
-PROVIDERS = (OPENAI, NVIDIA)
-
-NVIDIA_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
-# Замер 2026-09-07: из 81 модели каталога ключу доступно 13, и русский
-# системный промпт держат только minimax-m3 и kimi-k3. У kimi разброс времени
-# 16–52 с, поэтому по умолчанию — minimax (7.4 с на той же задаче).
-NVIDIA_DEFAULT_MODEL = "minimaxai/minimax-m3"
+GEMINI = "gemini"
 
 
 @dataclass(frozen=True)
@@ -32,32 +26,63 @@ class LLMSettings:
     model_cheap: str
 
 
-def _require(env: Mapping[str, str], name: str, provider: str) -> str:
-    value = (env.get(name) or "").strip()
-    if not value:
-        raise ValueError(
-            f"Провайдер '{provider}' выбран, но {name} в .env пуст. "
-            f"Заполни {name} или смени провайдера."
-        )
-    return value
+@dataclass(frozen=True)
+class _Spec:
+    """Как читать провайдера из окружения. Префикс общий у всех переменных."""
+    prefix: str
+    base_url: str | None
+    model: str
+    model_cheap: str
+
+
+_SPECS: dict[str, _Spec] = {
+    # У OpenAI base_url не задаём: SDK подставит свой адрес сам.
+    OPENAI: _Spec("OPENAI", None, "gpt-5.4-mini", "gpt-5.4-nano"),
+    # Замер 2026-09-07: из 81 модели каталога ключу доступно 13, и русский
+    # системный промпт держат только minimax-m3 и kimi-k3. У kimi разброс
+    # 16–52 с, у minimax 7.4 с — отсюда выбор.
+    NVIDIA: _Spec("NVIDIA", "https://integrate.api.nvidia.com/v1",
+                  "minimaxai/minimax-m3", "minimaxai/minimax-m3"),
+    # Единственный провайдер, у которого тиры реально разные, и оба выбора
+    # измерены 2026-09-07 на настоящих промптах проекта.
+    # Пишущий тир — flash: flash-lite в ТРЁХ письмах из трёх вставил русскую
+    # строку («Мой стек: …») в английское письмо, flash — ни разу. Письмо
+    # читает человек, а смешанный язык в отклике HR это брак. Медленнее (8–9 с
+    # против 1.5), но на письмо приходится один вызов, и между лидами всё равно
+    # стоит пауза MIN/MAX_DELAY_SECONDS.
+    # Массовый тир — flash-lite: держит ~15 запросов в минуту (14/18/18 в трёх
+    # раундах) против ~8 у flash и ~2 у NVIDIA. Здесь решает лимит, а не слог:
+    # боту нужно два вызова подряд на каждое сообщение, а поиску — по одному на
+    # каждую найденную вакансию.
+    # Модели 2.5 не брать вовсе: новым ключам они отвечают 404.
+    GEMINI: _Spec("GEMINI", "https://generativelanguage.googleapis.com/v1beta/openai",
+                  "gemini-3.5-flash", "gemini-3.5-flash-lite"),
+}
+
+PROVIDERS = tuple(_SPECS)
 
 
 def resolve(provider: str, env: Mapping[str, str]) -> LLMSettings:
     name = (provider or "").strip().lower()
-    if name == OPENAI:
-        return LLMSettings(
-            api_key=_require(env, "OPENAI_API_KEY", OPENAI),
-            base_url=None,
-            model=env.get("OPENAI_MODEL") or "gpt-5.4-mini",
-            model_cheap=env.get("OPENAI_MODEL_CHEAP") or "gpt-5.4-nano",
+    spec = _SPECS.get(name)
+    if spec is None:
+        raise ValueError(
+            f"Неизвестный LLM-провайдер '{provider}'. "
+            f"Допустимые: {', '.join(PROVIDERS)}."
         )
-    if name == NVIDIA:
-        return LLMSettings(
-            api_key=_require(env, "NVIDIA_API_KEY", NVIDIA),
-            base_url=env.get("NVIDIA_BASE_URL") or NVIDIA_DEFAULT_BASE_URL,
-            model=env.get("NVIDIA_MODEL") or NVIDIA_DEFAULT_MODEL,
-            model_cheap=env.get("NVIDIA_MODEL_CHEAP") or NVIDIA_DEFAULT_MODEL,
+
+    def _get(suffix: str, default: str | None) -> str | None:
+        return (env.get(f"{spec.prefix}_{suffix}") or "").strip() or default
+
+    api_key = _get("API_KEY", None)
+    if not api_key:
+        raise ValueError(
+            f"Провайдер '{name}' выбран, но {spec.prefix}_API_KEY в .env пуст. "
+            f"Заполни {spec.prefix}_API_KEY или смени провайдера."
         )
-    raise ValueError(
-        f"Неизвестный LLM-провайдер '{provider}'. Допустимые: {', '.join(PROVIDERS)}."
+    return LLMSettings(
+        api_key=api_key,
+        base_url=_get("BASE_URL", spec.base_url),
+        model=_get("MODEL", spec.model),
+        model_cheap=_get("MODEL_CHEAP", spec.model_cheap),
     )

@@ -77,10 +77,44 @@ def test_unknown_provider_lists_the_valid_ones():
     with pytest.raises(ValueError) as e:
         resolve("anthropic", {"OPENAI_API_KEY": "sk-test"})
     msg = str(e.value)
-    assert "anthropic" in msg and "openai" in msg and "nvidia" in msg
+    assert "anthropic" in msg
+    for known in ("openai", "nvidia", "gemini"):
+        assert known in msg
 
 
 def test_provider_name_is_trimmed_and_case_insensitive():
     # .env правят руками; " NVIDIA " не должно означать «неизвестный провайдер».
     s = resolve("  NVIDIA  ", {"NVIDIA_API_KEY": "nvapi-test"})
     assert s.base_url == "https://integrate.api.nvidia.com/v1"
+
+def test_gemini_points_at_the_openai_compatible_endpoint():
+    # У Gemini есть endpoint, говорящий на протоколе OpenAI, поэтому провайдер
+    # добавляется теми же тремя значениями, что и NVIDIA.
+    s = resolve("gemini", {"GEMINI_API_KEY": "AIza-test"})
+    assert s.api_key == "AIza-test"
+    assert s.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    # Тиры здесь расходятся, в отличие от NVIDIA, и по замеру 2026-09-07.
+    # Пишущий: flash-lite в трёх письмах из трёх вставил русскую строку («Мой
+    # стек: …») в английское письмо, flash — ни разу. Письмо читает человек.
+    assert s.model == "gemini-3.5-flash"
+    # Массовый: flash упирается в 429 на девятом запросе, flash-lite держит ~15
+    # в минуту. Боту нужно два вызова подряд на каждое сообщение.
+    assert s.model_cheap == "gemini-3.5-flash-lite"
+
+
+def test_gemini_base_url_and_models_are_overridable():
+    s = resolve("gemini", {
+        "GEMINI_API_KEY": "AIza-test",
+        "GEMINI_BASE_URL": "https://example.test/v1",
+        "GEMINI_MODEL": "gemini-3.5-flash",
+        "GEMINI_MODEL_CHEAP": "gemini-3.1-flash-lite",
+    })
+    assert s.base_url == "https://example.test/v1"
+    assert s.model == "gemini-3.5-flash"
+    assert s.model_cheap == "gemini-3.1-flash-lite"
+
+
+def test_gemini_without_its_key_names_the_variable_to_fill():
+    with pytest.raises(ValueError) as e:
+        resolve("gemini", {"OPENAI_API_KEY": "sk-test", "NVIDIA_API_KEY": "nvapi-test"})
+    assert "GEMINI_API_KEY" in str(e.value)
