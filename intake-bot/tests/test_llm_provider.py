@@ -93,12 +93,13 @@ def test_gemini_points_at_the_openai_compatible_endpoint():
     s = resolve("gemini", {"GEMINI_API_KEY": "AIza-test"})
     assert s.api_key == "AIza-test"
     assert s.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
-    # Тиры здесь расходятся, в отличие от NVIDIA, и по замеру 2026-09-07.
-    # Пишущий: flash-lite в трёх письмах из трёх вставил русскую строку («Мой
-    # стек: …») в английское письмо, flash — ни разу. Письмо читает человек.
-    assert s.model == "gemini-3.5-flash"
-    # Массовый: flash упирается в 429 на девятом запросе, flash-lite держит ~15
-    # в минуту. Боту нужно два вызова подряд на каждое сообщение.
+    # Обе flash-lite, и пишущая тоже. Сначала было иначе: flash-lite вставлял
+    # русскую строку «Мой стек: …» в английское письмо (3 из 3), flash — нет.
+    # Но причина оказалась в промпте, а не в модели: формат диктовал подпись
+    # дословно по-русски, а правило языка требовало обратного. После правки
+    # language_rule («My stack:») flash-lite даёт 4 чистых письма из 4.
+    # А квота решает: у flash 20 запросов в минуту, и прогон на нём вставал.
+    assert s.model == "gemini-3.5-flash-lite"
     assert s.model_cheap == "gemini-3.5-flash-lite"
 
 
