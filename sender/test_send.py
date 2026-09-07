@@ -46,7 +46,8 @@ def main() -> None:
     print(f"Вакансия: {lead.vacancy_context or lead.raw_text}\n")
 
     generator = GenerateMessage(
-        OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL),
+        OpenAIMessageGenerator(config.LLM_API_KEY, config.LLM_MODEL,
+                               base_url=config.LLM_BASE_URL),
         cv_text,
         profile_text,
         config.SIGNATURE_TEXT,

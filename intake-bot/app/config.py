@@ -3,14 +3,23 @@ import os
 
 from dotenv import load_dotenv
 
+from app.llm_provider import resolve
 from app.search_profile import SEARCH_PROFILE as _BUNDLED_SEARCH_PROFILE
 
 load_dotenv()  # local .env; on Vercel the vars are injected and this is a no-op
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Кто обслуживает бота: openai или nvidia (см. app/llm_provider.py). Переменная
+# своя, отдельная от ноутбука (SENDER_LLM_PROVIDER): у Vercel лимит функции
+# 10 секунд, а модель здесь вызывается синхронно из вебхука, так что облако
+# может остаться на OpenAI даже когда рассылка уже переехала.
+LLM_PROVIDER = os.environ.get("INTAKE_LLM_PROVIDER", "").strip() or "openai"
+_llm = resolve(LLM_PROVIDER, os.environ)
+LLM_API_KEY = _llm.api_key
+# None у OpenAI: SDK подставит свой адрес сам.
+LLM_BASE_URL = _llm.base_url
 # Summarising a pasted vacancy is extraction, not writing — the cheap tier is
 # enough, and this runs on every message forwarded to the bot.
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL_CHEAP", "gpt-5.4-nano")
+LLM_MODEL = _llm.model_cheap
 OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "1000"))
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]

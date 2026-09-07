@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app.domain.contacts import parse_contacts
+from app.llm_provider import resolve
 from app.domain.cv_files import find_any_cv
 
 # Load the shared .env at the project root (telegram-jobs/.env).
@@ -12,13 +13,23 @@ from app.domain.cv_files import find_any_cv
 _ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(_ROOT / ".env")
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Кто обслуживает ноутбук: openai или nvidia (см. app/llm_provider.py). NVIDIA
+# говорит на том же протоколе, поэтому разница сводится к ключу, адресу и именам
+# моделей. Переменная своя, отдельная от бота (INTAKE_LLM_PROVIDER): у Vercel
+# лимит функции 10 секунд, а здесь времени сколько угодно, так что половины
+# должны переключаться независимо.
+LLM_PROVIDER = os.environ.get("SENDER_LLM_PROVIDER", "").strip() or "openai"
+_llm = resolve(LLM_PROVIDER, os.environ)
+LLM_API_KEY = _llm.api_key
+# None у OpenAI: SDK подставит свой адрес сам.
+LLM_BASE_URL = _llm.base_url
 # Writing model: the HR message and hh screening answers — a human reads these.
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+LLM_MODEL = _llm.model
 # Bulk model: relevance scoring runs on every job found on every platform on every
 # search, so it dominates the bill. Scoring is classification (description in,
-# 0-100 out), which is what the nano tier is built for.
-OPENAI_MODEL_CHEAP = os.environ.get("OPENAI_MODEL_CHEAP", "gpt-5.4-nano")
+# 0-100 out), which is what the nano tier is built for. У NVIDIA тир один и тот
+# же — на ключе доступна ровно одна модель, держащая русский.
+LLM_MODEL_CHEAP = _llm.model_cheap
 
 # Cap the reply length. The vacancy text comes from a scraped third-party page, so
 # without this an injected "write 10000 words" is billed in full.

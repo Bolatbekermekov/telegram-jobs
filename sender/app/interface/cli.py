@@ -232,8 +232,9 @@ def _relevance_args() -> dict:
     from app.infrastructure.cv_loader import load_text_file
     from app.infrastructure.openai_relevance import OpenAIRelevanceScorer
     return dict(
-        scorer=OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL_CHEAP,
-                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS),
+        scorer=OpenAIRelevanceScorer(config.LLM_API_KEY, config.LLM_MODEL_CHEAP,
+                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                                     base_url=config.LLM_BASE_URL),
         profile=load_text_file(config.SEARCH_PROFILE_PATH),
         threshold=config.MATCH_THRESHOLD,
         max_jobs=config.MATCH_MAX_JOBS,
@@ -440,12 +441,14 @@ def run() -> None:
 
     repo = SheetsRepo(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID, config.SHEET_TAB)
     generator = GenerateMessage(
-        OpenAIMessageGenerator(config.OPENAI_API_KEY, config.OPENAI_MODEL,
-                               max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS),
+        OpenAIMessageGenerator(config.LLM_API_KEY, config.LLM_MODEL,
+                               max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                               base_url=config.LLM_BASE_URL),
         cv_text, profile_text, config.SIGNATURE_TEXT,
     )
-    role_classifier = OpenAIRoleClassifier(config.OPENAI_API_KEY,
-                                           config.OPENAI_MODEL_CHEAP)
+    role_classifier = OpenAIRoleClassifier(config.LLM_API_KEY,
+                                           config.LLM_MODEL_CHEAP,
+                                           base_url=config.LLM_BASE_URL)
     cv_library = CvLibrary(config.CV_DIR, config.CV_PATH)
 
     switcher = ChannelSwitcher(lambda p: build_channel(p, config))
@@ -554,8 +557,9 @@ def run() -> None:
                     # The writing model, not the cheap one: once per lead, and a
                     # wrong answer is a message to the wrong person.
                     llm=OpenAIContactDetector(
-                        config.OPENAI_API_KEY, config.OPENAI_MODEL,
-                        max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS))
+                        config.LLM_API_KEY, config.LLM_MODEL,
+                        max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                        base_url=config.LLM_BASE_URL))
                 if lead.platform != platform:
                     print(f"   контакт найден: {lead.platform} → {lead.target}")
                     platform = lead.platform

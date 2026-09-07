@@ -178,8 +178,9 @@ def _parse_letter_and_note(raw: str) -> tuple[str, str]:
 
 
 class OpenAIMessageGenerator:
-    def __init__(self, api_key: str, model: str, max_output_tokens: int = 2000):
-        self._client = OpenAI(api_key=api_key)
+    def __init__(self, api_key: str, model: str, max_output_tokens: int = 2000,
+                 base_url: str | None = None):
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self._max_output_tokens = max_output_tokens
 

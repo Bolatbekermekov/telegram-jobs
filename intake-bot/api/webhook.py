@@ -117,7 +117,8 @@ def _relevance_scorer():
     бота как приговор, которого никто не выносил.
     """
     deadline = time.monotonic() + _SCORE_DEADLINE_SECONDS
-    scorer = OpenAIRelevanceScorer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
+    scorer = OpenAIRelevanceScorer(config.LLM_API_KEY, config.LLM_MODEL,
+                                   base_url=config.LLM_BASE_URL)
 
     def score(title: str, description: str):
         left = deadline - time.monotonic()
@@ -145,7 +146,8 @@ def _detector(oracle):
 
 
 def _build_use_case() -> ExtractLeadFromText:
-    summarizer = OpenAISummarizer(config.OPENAI_API_KEY, config.OPENAI_MODEL)
+    summarizer = OpenAISummarizer(config.LLM_API_KEY, config.LLM_MODEL,
+                                  base_url=config.LLM_BASE_URL)
     return ExtractLeadFromText(_detector(_telegram_oracle()), summarizer,
                                _build_repo(),
                                fetcher=fetch_vacancy_text,

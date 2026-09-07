@@ -36,8 +36,9 @@ class OpenAIRelevanceScorer:
     суммаризации."""
 
     def __init__(self, api_key: str, model: str, client=None,
-                 max_output_tokens: int = _MAX_OUTPUT_TOKENS):
-        self._client = client or OpenAI(api_key=api_key, max_retries=0)
+                 max_output_tokens: int = _MAX_OUTPUT_TOKENS,
+                 base_url: str | None = None):
+        self._client = client or OpenAI(api_key=api_key, max_retries=0, base_url=base_url)
         self._model = model
         self._max_output_tokens = max_output_tokens
 

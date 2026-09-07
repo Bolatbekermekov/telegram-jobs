@@ -13,16 +13,17 @@ from app.infrastructure.channels.wellfound import WellfoundChannel
 
 def _hh_answerer(config):
     """Callable that answers hh employer questions with the AI, or None if no
-    OpenAI key is configured (then such vacancies are skipped, not answered)."""
-    api_key = getattr(config, "OPENAI_API_KEY", "")
+    LLM key is configured (then such vacancies are skipped, not answered)."""
+    api_key = getattr(config, "LLM_API_KEY", "")
     if not api_key:
         return None
 
     def answer(questions, vacancy_context):
         from app.infrastructure.cv_loader import load_cv_text, load_text_file
         from app.infrastructure.openai_client import OpenAIMessageGenerator
-        ai = OpenAIMessageGenerator(api_key, config.OPENAI_MODEL,
-                                    max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS)
+        ai = OpenAIMessageGenerator(api_key, config.LLM_MODEL,
+                                    max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                                    base_url=getattr(config, "LLM_BASE_URL", None))
         cv = load_cv_text(config.CV_PATH)
         profile = load_text_file(config.PROFILE_PATH)
         answers = ai.answer_questions(cv, profile, vacancy_context, questions)
