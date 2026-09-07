@@ -30,6 +30,12 @@ def to_session_domain(url: str) -> str:
 
 SEL_APPLY = "[data-qa='vacancy-response-link-top']:visible"
 SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
+# Признаки входа. Аноним видит «Войти», залогиненный — своё меню. Нужны, чтобы
+# `make login_hh` смотрел на живость сессии, а не на наличие файла: куки в файле
+# остаются непросроченными и после того, как hh перестаёт их признавать
+# (замер 2026-09-07: hhtoken жил ещё 384 дня, а страница показывала «Войти»).
+SEL_LOGIN = "[data-qa='login']"
+SEL_USER_MENU = "[data-qa='mainmenu_applicantProfile'], [data-qa='mainmenu_myResumes']"
 # Consent popups shown when applying to a vacancy in another country (the account
 # is in KZ, the vacancies are RU). TWO different ones appear:
 #  * the profile-visibility popup (older), and
@@ -418,6 +424,43 @@ def _already_applied(page) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return any(m in body for m in _APPLIED_MARKERS)
+
+
+def hh_logged_in(page) -> bool:
+    """Признаёт ли hh нас залогиненными ПРЯМО СЕЙЧАС.
+
+    Ни один маркер не найден — считаем, что нет. Осторожность намеренно в эту
+    сторону: лишний перелогин стоит минуту, а работа с мёртвой сессией стоит
+    всех hh-лидов прогона (анониму hh показывает отклик по телефону, поля письма
+    в нём нет, и каждый лид уезжает в `failed`).
+    """
+    if page.locator(SEL_LOGIN).count() > 0:
+        return False
+    return page.locator(SEL_USER_MENU).count() > 0
+
+
+def hh_session_alive(state_path: str, headless: bool = True) -> bool:
+    """Открыть hh с сохранённой сессией и спросить страницу, узнаёт ли она нас.
+
+    Любая беда по дороге (нет Chrome, нет сети, битый файл) — это «не знаю», и
+    отвечаем «мертва»: перелогин безвреден, работа с мёртвой сессией — нет.
+    """
+    try:
+        from patchright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=headless, channel="chrome")
+            try:
+                page = browser.new_context(storage_state=state_path,
+                                           no_viewport=True).new_page()
+                page.goto("https://hh.ru/applicant/resumes",
+                          wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(2500)
+                return hh_logged_in(page)
+            finally:
+                browser.close()
+    except Exception:  # noqa: BLE001 — «не смогли спросить» = «считаем мёртвой»
+        return False
 
 
 def _applied_after_reload(page, url: str) -> bool:

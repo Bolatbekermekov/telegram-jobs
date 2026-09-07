@@ -1144,8 +1144,11 @@ def _read_wellfound_state():
         return ("unreachable", str(exc)[:80])
 
 
-def run_login_hh():
+def run_login_hh(session_alive=None):
     """Log in to hh.ru in the user's REAL Chrome, then export the session.
+
+    `session_alive` инъектируется тестами; по умолчанию это настоящая проверка
+    браузером.
 
     hh.ru's anti-fraud blocks the login request (the SMS send) in any browser
     we launch through automation — the page opens, the submit spins forever.
@@ -1158,10 +1161,26 @@ def run_login_hh():
 
     from app.infrastructure.search.wellfound_search import build_chrome_debug_args
 
-    if Path(config.HH_STATE_PATH).exists():
-        print(f"✅ Сессия hh.ru уже есть ({config.HH_STATE_PATH}). "
-              "Удали этот файл, если хочешь перелогиниться.")
-        return
+    # Смотрим на ЖИВОСТЬ сессии, а не на наличие файла. Раньше стояло
+    # `if exists(): return`, и мёртвую сессию нельзя было обновить вовсе: куки
+    # в файле не просрочены (замер 2026-09-07 — hhtoken жил ещё 384 дня), а hh
+    # уже считает нас анонимом и вместо отклика показывает форму с телефоном,
+    # где поля письма нет. Прогон при этом валит каждый hh-лид в `failed`.
+    state = Path(config.HH_STATE_PATH)
+    if state.exists():
+        if session_alive is None:
+            from app.infrastructure.channels.headhunter import hh_session_alive
+            session_alive = hh_session_alive
+        print("Проверяю, жива ли сохранённая сессия hh.ru...")
+        if session_alive(str(state)):
+            print(f"✅ Сессия hh.ru жива ({state}) — перелогин не нужен.")
+            return
+        from datetime import date
+
+        from app.infrastructure.session_state import retire_dead_state
+        moved = retire_dead_state(state, date.today())
+        print(f"⚠️ Файл сессии есть, но hh считает нас анонимом. "
+              f"Убрал его в {moved.name} и логинимся заново.")
 
     args = build_chrome_debug_args(
         config.HH_CHROME_PROFILE, config.HH_CDP_PORT, "https://hh.ru/account/login")
