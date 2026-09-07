@@ -35,7 +35,14 @@ SEL_ALREADY_APPLIED = "[data-qa='vacancy-response-link-view-topic']"
 # остаются непросроченными и после того, как hh перестаёт их признавать
 # (замер 2026-09-07: hhtoken жил ещё 384 дня, а страница показывала «Войти»).
 SEL_LOGIN = "[data-qa='login']"
-SEL_USER_MENU = "[data-qa='mainmenu_applicantProfile'], [data-qa='mainmenu_myResumes']"
+# Маркеры сняты с ЖИВОЙ залогиненной страницы 2026-09-07, а не придуманы. Первая
+# редакция была придумана (`mainmenu_applicantProfile`, `mainmenu_myResumes`) —
+# таких data-qa на hh нет, и зонд отвечал «аноним» на исправно залогиненную
+# сессию: «Войти» уже исчез, а профиль ещё не нашёлся, и предикат уходил в свою
+# осторожную ветку. Ошибка была тихой ровно потому, что оба маркера молчали.
+SEL_USER_MENU = ("[data-qa='mainmenu_applicantProfilePage'], "
+                 "[data-qa='mainmenu_profileAndResumes'], "
+                 "[data-qa='mainmenu_vacancyResponses']")
 # Consent popups shown when applying to a vacancy in another country (the account
 # is in KZ, the vacancies are RU). TWO different ones appear:
 #  * the profile-visibility popup (older), and
@@ -453,7 +460,7 @@ def hh_session_alive(state_path: str, headless: bool = True) -> bool:
             try:
                 page = browser.new_context(storage_state=state_path,
                                            no_viewport=True).new_page()
-                page.goto("https://hh.ru/applicant/resumes",
+                page.goto("https://hh.ru/",
                           wait_until="domcontentloaded", timeout=45000)
                 page.wait_for_timeout(2500)
                 return hh_logged_in(page)

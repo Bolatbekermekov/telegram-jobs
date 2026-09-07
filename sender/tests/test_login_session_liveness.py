@@ -114,3 +114,17 @@ def test_dead_session_is_retired_instead_of_refusing(tmp_path, monkeypatch, caps
     assert list(tmp_path.glob("hh_state.dead-*.json")), "но сохраниться рядом"
     out = capsys.readouterr().out
     assert "Удали этот файл" not in out, "старый тупиковый совет должен уйти"
+
+
+def test_the_markers_are_the_ones_hh_really_uses():
+    """Селекторы сняты с живой страницы, а не придуманы.
+
+    Первая редакция была придумана — `mainmenu_applicantProfile` и
+    `mainmenu_myResumes`. Таких data-qa на hh нет, поэтому на исправно
+    залогиненной сессии зонд отвечал «аноним»: «Войти» уже исчез, профиль не
+    нашёлся, и предикат уходил в осторожную ветку. Тест держит проверенные имена,
+    чтобы следующая правка не вернула выдуманные.
+    """
+    from app.infrastructure.channels.headhunter import SEL_USER_MENU
+    for verified in ("mainmenu_applicantProfilePage", "mainmenu_profileAndResumes"):
+        assert verified in SEL_USER_MENU
