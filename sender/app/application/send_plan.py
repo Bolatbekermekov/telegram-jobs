@@ -364,6 +364,19 @@ _NO_VACANCY_RE = re.compile(
     re.IGNORECASE)
 
 
+# Строки, которые дописываем МЫ САМИ: оценка релевантности и подписи из
+# search_leads_repo._vacancy_text / vacancy_text.extract_*. Держим копию, а не
+# импорт из message_language: там они решают вопрос про ЯЗЫК, и связывать два
+# несвязанных решения одной константой значит чинить одно, ломая другое.
+_OUR_SCORE_LINE = re.compile(r"^\s*\d{1,3}/100:.*$", re.MULTILINE)
+_OUR_LABEL_LINE = re.compile(r"^(?:Зарплата|Локация|Компания):.*$", re.MULTILINE)
+
+
+def _without_our_annotations(text: str) -> str:
+    """Что останется от текста, если убрать нашу разметку. Пусто = описания нет."""
+    return _OUR_LABEL_LINE.sub("", _OUR_SCORE_LINE.sub("", text)).strip()
+
+
 def needs_vacancy_refetch(vacancy_context: str) -> bool:
     """True when the stored vacancy text is unusable and the link must be re-read.
 
@@ -374,6 +387,14 @@ def needs_vacancy_refetch(vacancy_context: str) -> bool:
     """
     text = (vacancy_context or "").strip()
     if not text:
+        return True
+    # Наша собственная разметка описанием не является. Лид #930 (2026-09-07)
+    # ушёл рекрутёру, имея в «Вакансии» ровно одну строку — нашу же оценку
+    # «86/100: Frontend Engineer; …»: текст не пуст и не отказ модели, поэтому
+    # ссылку никто не перечитал, и письмо писалось из неё и резюме. Таких лидов
+    # в очереди было 18 из 73. Ту же мысль уже несёт message_language, где эти
+    # строки выброшены из подсчёта языка.
+    if not _without_our_annotations(text):
         return True
     return bool(_REFUSAL_RE.search(text[:_REFUSAL_HEAD_CHARS])
                 or _NO_VACANCY_RE.search(text[:_NO_VACANCY_HEAD_CHARS]))
