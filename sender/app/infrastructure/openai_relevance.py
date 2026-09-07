@@ -1,6 +1,8 @@
 """OpenAI-backed relevance scorer: one chat call → (score, reason)."""
 from openai import OpenAI
 
+from app.infrastructure.rate_limit import with_rate_limit_retry
+
 from app.application.relevance import build_score_prompt, parse_score_response
 
 
@@ -17,12 +19,12 @@ class OpenAIRelevanceScorer:
     def score(self, profile: str, title: str, description: str,
               location: str = "") -> tuple[int, str]:
         system, user = build_score_prompt(profile, title, description, location)
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_completion_tokens=self._max_output_tokens,
+        ))
         return parse_score_response(resp.choices[0].message.content or "")

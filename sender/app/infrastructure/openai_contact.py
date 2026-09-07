@@ -7,6 +7,8 @@ wrong is a message to the wrong person. Vetting lives in
 """
 from openai import OpenAI
 
+from app.infrastructure.rate_limit import with_rate_limit_retry
+
 from app.application.contact_llm import build_contact_prompt
 
 
@@ -23,12 +25,12 @@ class OpenAIContactDetector:
 
     def __call__(self, thread_text: str) -> str:
         system, user = build_contact_prompt(thread_text)
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_completion_tokens=self._max_output_tokens,
+        ))
         return resp.choices[0].message.content or ""

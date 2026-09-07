@@ -5,6 +5,8 @@
 """
 from openai import OpenAI
 
+from app.infrastructure.rate_limit import with_rate_limit_retry
+
 from app.application.classify_role import build_role_prompt, parse_role_response
 
 
@@ -23,13 +25,13 @@ class OpenAIRoleClassifier:
 
     def classify(self, vacancy_context: str) -> str:
         system, user = build_role_prompt(vacancy_context)
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                max_completion_tokens=self._max_output_tokens,
+        ))
         return parse_role_response(resp.choices[0].message.content or "")

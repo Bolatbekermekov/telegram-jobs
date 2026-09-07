@@ -4,6 +4,8 @@ import re
 
 from openai import OpenAI
 
+from app.infrastructure.rate_limit import with_rate_limit_retry
+
 from app.domain.message_language import detect_language, language_rule
 from app.domain.seniority import strip_seniority
 
@@ -192,20 +194,20 @@ class OpenAIMessageGenerator:
             f"=== ВАКАНСИЯ ===\n{vacancy_context}\n\n"
             "Напиши сообщение для HR по правилам выше."
         )
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                # Язык называем прямо, а не оставляем правилу «язык сообщения =
-                # язык вакансии» внутри _SYSTEM: живьём оно проигрывало русскому
-                # языку самого промпта, и английские вакансии получали русские
-                # письма (лиды 6, 13, 17).
-                {"role": "system",
-                 "content": _SYSTEM + language_rule(
-                     language or detect_language(vacancy_context))},
-                {"role": "user", "content": user},
-            ],
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    # Язык называем прямо, а не оставляем правилу «язык сообщения =
+                    # язык вакансии» внутри _SYSTEM: живьём оно проигрывало русскому
+                    # языку самого промпта, и английские вакансии получали русские
+                    # письма (лиды 6, 13, 17).
+                    {"role": "system",
+                     "content": _SYSTEM + language_rule(
+                         language or detect_language(vacancy_context))},
+                    {"role": "user", "content": user},
+                ],
+                max_completion_tokens=self._max_output_tokens,
+        ))
         return _clean((resp.choices[0].message.content or "").strip())
 
     def generate_with_note(self, cv_text: str, profile_text: str,
@@ -223,17 +225,17 @@ class OpenAIMessageGenerator:
             f"=== ВАКАНСИЯ ===\n{vacancy_context}\n\n"
             "Напиши сообщение для HR и записку по правилам выше. Верни JSON."
         )
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system",
-                 "content": _SYSTEM + _note_rules(note_limit)
-                 + language_rule(language or detect_language(vacancy_context))},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system",
+                     "content": _SYSTEM + _note_rules(note_limit)
+                     + language_rule(language or detect_language(vacancy_context))},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                max_completion_tokens=self._max_output_tokens,
+        ))
         letter, note = _parse_letter_and_note(resp.choices[0].message.content or "")
         return _clean(letter), _clean(note)
 
@@ -267,15 +269,15 @@ class OpenAIMessageGenerator:
             f"=== ВАКАНСИЯ ===\n{vacancy_context}\n\n"
             f"=== ВОПРОСЫ ===\n" + "\n".join(lines) + "\n\nОтветь JSON по правилам."
         )
-        resp = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system",
-                 "content": _QUESTIONS_SYSTEM + _answers_language_rule(
-                     language or detect_language(vacancy_context))},
-                {"role": "user", "content": user},
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=self._max_output_tokens,
-        )
+        resp = with_rate_limit_retry(lambda: self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system",
+                     "content": _QUESTIONS_SYSTEM + _answers_language_rule(
+                         language or detect_language(vacancy_context))},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+                max_completion_tokens=self._max_output_tokens,
+        ))
         return parse_ai_answers(resp.choices[0].message.content or "{}")
