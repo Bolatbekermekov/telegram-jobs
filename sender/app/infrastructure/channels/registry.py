@@ -1,6 +1,7 @@
 """Map a platform string to a freshly-built (not yet started) OutreachChannel."""
 from app.application.answer_log import AnswerLog, wrap_answerer
 from app.application.hh_questions import canonicalize_answers
+from app.infrastructure.channels.ats import AtsChannel
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.external import ExternalChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
@@ -111,6 +112,16 @@ def build_channel(platform: str, config):
         log = AnswerLog()
         return _with_answer_log(ExternalChannel(
             name=platform, headless=config.BROWSER_HEADLESS,
+            external_apply_deps=_external_apply_deps(config, log)), log)
+    if platform == "ats":
+        # Прямая ссылка в ATS работодателя. Сессии нет — страницы публичные, как
+        # у агрегаторов. В отличие от них промежуточного прыжка не делается: это
+        # уже сайт работодателя, и форму на нём ищет сам external_apply.
+        # Имя площадки одно на всех вендоров: маршрутизация в classify_apply идёт
+        # по разметке страницы, а какой вендор попался — видно в «Источнике».
+        log = AnswerLog()
+        return _with_answer_log(AtsChannel(
+            headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.

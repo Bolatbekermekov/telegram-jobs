@@ -35,8 +35,9 @@ and a datacenter IP that any of these sites may throttle, so every failure retur
 from app.domain.vacancy_text import (  # noqa: F401 — re-exported, see above
     extract_external_url, extract_hh_vacancy, extract_linkedin_post,
     extract_linkedin_vacancy, extract_threads_post, expand_short_links,
-    aggregator_apply_url, extract_aggregator_vacancy,
-    is_aggregator_job_url, is_fetchable_vacancy_url, is_hh_vacancy_url,
+    aggregator_apply_url, extract_aggregator_vacancy, extract_ats_vacancy,
+    is_aggregator_job_url, is_ats_job_url,
+    is_fetchable_vacancy_url, is_hh_vacancy_url,
     is_linkedin_job_url, is_linkedin_post_url, is_lnkd_in_url,
     is_remoteok_job_url, is_threads_post_url, iter_urls,
     pick_vacancy_url, strip_tracking_params,
@@ -159,6 +160,13 @@ def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
         # 2026-08-22 на remocate.app). Поэтому текст снимается тегами, а лишнее
         # обрезается по маркеру конца вакансии — см. extract_aggregator_vacancy.
         extract = extract_aggregator_vacancy
+    elif is_ats_job_url(url):
+        # ATS работодателя. Замер 2026-09-11 по живым вакансиям: Greenhouse,
+        # Lever, SmartRecruiters и Personio отдают текст прямо в HTML за 0.4-3 с,
+        # Workday, Teamtailor и Recruitee — в блоке JSON-LD, а Ashby и Workable
+        # без выполнения JS не отдают его ничем. Последним двум здесь честно
+        # вернётся "", и вакансию перечитает отправитель браузером.
+        extract = extract_ats_vacancy
     else:
         return ""
     try:

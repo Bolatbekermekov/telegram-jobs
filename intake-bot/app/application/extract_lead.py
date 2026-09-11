@@ -5,7 +5,7 @@ from app.domain.post_contact import (
 )
 from app.domain.vacancy_text import (
     expand_short_links, is_fetchable_vacancy_url, is_link_only,
-    is_linkedin_post_url, pick_vacancy_url,
+    is_ats_job_url, is_linkedin_post_url, pick_vacancy_url,
 )
 
 _FALLBACK_LEN = 280
@@ -122,10 +122,21 @@ class ExtractLeadFromText:
         apply to those through the site itself, there is no contact to find in
         them, and this runs on a serverless function whose whole budget is ~10s —
         a fetch bought for nothing is a killed request that Telegram then retries.
+
+        Страница ATS читается наравне с постом LinkedIn, и по той же логике «иначе
+        этого не узнает никто». Отличие от hh здесь не в площадке, а в том, что
+        ниже по течению: письмо пишется ИЗ колонки «Вакансия» ещё до того, как
+        канал откроет браузер, а `needs_vacancy_refetch` спасает только пустоту,
+        нашу собственную разметку и отказ модели. Связный пересказ приписки
+        «смотри, вроде под тебя» для него нормальный текст, ссылку он не
+        перечитает, и письмо уйдёт написанным по чужой реплике. Замер 2026-09-11:
+        Greenhouse, Lever, SmartRecruiters и Personio отвечают за 0.4-3 с, то есть
+        бюджет это выдерживает.
         """
         if self._fetch is None or not url:
             return False
-        return is_linkedin_post_url(url) or is_link_only(raw_text)
+        return (is_linkedin_post_url(url) or is_ats_job_url(url)
+                or is_link_only(raw_text))
 
     def _route(self, contact, url: str, page_text: str):
         """(platform, target, note) — whom this lead is for.

@@ -180,6 +180,24 @@ _AGGREGATOR_RE = re.compile(
     r"(?:https?://)?(?:www\.)?remocate\.app/jobs/[\w%-]+\S*", re.IGNORECASE)
 _REMOTEOK_RE = re.compile(
     r"(?:https?://)?(?:www\.)?remoteok\.com/remote-jobs/[\w%-]+\S*", re.IGNORECASE)
+# Вакансия прямо в ATS работодателя. Правило-близнец `is_ats_job_url` из
+# vacancy_text: там оно якорится на `^` и проверяет готовый адрес, здесь ищет
+# его в свободном тексте и потому доедает хвост `\S*`. Ровно та же пара, что у
+# агрегаторов, и по той же причине — vacancy_text импортирует отсюда
+# `canonical_linkedin_url`, так что обратный импорт замкнул бы круг.
+# Согласованность пары держит тест, а не устройство кода.
+_ATS_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:"
+    r"(?:boards|job-boards)\.greenhouse\.io/[\w%-]+/jobs/\d+"
+    r"|jobs\.lever\.co/[\w%-]+/[\w%-]+"
+    r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
+    r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
+    r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"
+    r"|[\w-]+\.[\w-]+\.myworkdayjobs\.com/\S*?/job/[\w%-]+"
+    r"|[\w-]+\.teamtailor\.com/jobs/[\w%-]+"
+    r"|[\w-]+\.recruitee\.com/o/[\w%-]+"
+    r"|[\w-]+\.jobs\.personio\.(?:com|de)/job/[\w%-]+"
+    r")\S*", re.IGNORECASE)
 
 
 def _with_scheme(url: str) -> str:
@@ -312,4 +330,10 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
         return Contact("remoteok", _with_scheme(_clean(m.group(0))))
     if threads_url:
         return Contact("threads", threads_url)
+    # ПОСЛЕДНИМ. У hh, LinkedIn и Wellfound свой канал отклика, а живой человек в
+    # телеграме лучше любой формы: `ats` подбирает только то, что иначе стало бы
+    # «⚠️ Не нашёл контакт» и не сохранилось бы вовсе.
+    m = _ATS_RE.search(text)
+    if m:
+        return Contact("ats", _with_scheme(_clean(m.group(0))))
     return None

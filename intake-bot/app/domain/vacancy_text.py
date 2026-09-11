@@ -4,6 +4,7 @@ Pure text handling, no network — the fetching itself lives in
 infrastructure/vacancy_fetcher.py so this stays testable on saved HTML.
 """
 import html as _html
+import json as _json
 import re
 from urllib.parse import urlparse as _urlparse
 
@@ -24,6 +25,14 @@ from app.domain.contact import canonical_linkedin_url
 _KNOWN_HOST = (r"(?:[\w-]+\.)*(?:linkedin\.com|lnkd\.in|t\.me|telegram\.me|"
                r"hh\.(?:ru|kz|uz|by|kg|az|tj)|wellfound\.com|angel\.co|"
                r"remocate\.app|remoteok\.com|"
+               # ATS работодателей: вакансия там живёт на поддомене
+               # (boards.greenhouse.io, jobs.lever.co, <компания>.recruitee.com),
+               # а поддомены уже покрыты префиксом выше. Путь после хоста
+               # обязателен по общему правилу, поэтому «мы нанимаем через
+               # greenhouse.io» остаётся прозой, а не становится ссылкой.
+               r"greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|"
+               r"smartrecruiters\.com|myworkdayjobs\.com|teamtailor\.com|"
+               r"recruitee\.com|personio\.(?:com|de)|"
                r"threads\.(?:com|net))")
 _URL_RE = re.compile(rf"https?://\S+|(?<![\w@.-]){_KNOWN_HOST}/\S*", re.IGNORECASE)
 _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -207,7 +216,8 @@ def is_threads_post_url(url: str) -> bool:
 def is_fetchable_vacancy_url(url: str) -> bool:
     return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
             or is_linkedin_post_url(url) or is_threads_post_url(url)
-            or is_aggregator_job_url(url) or is_remoteok_job_url(url))
+            or is_aggregator_job_url(url) or is_remoteok_job_url(url)
+            or is_ats_job_url(url))
 
 
 def pick_vacancy_url(text: str) -> str:
@@ -391,6 +401,45 @@ _REMOTEOK_JOB_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?remoteok\.com/remote-jobs/[\w%-]+", re.IGNORECASE)
 
 
+# Вакансия, размещённая прямо в ATS работодателя. Отклик там идёт формой, и
+# заполнять её умеет `external_apply` — тот же код, что обслуживает внешние
+# отклики LinkedIn, RemoteOK и агрегаторов.
+#
+# Путь после хоста обязателен, как и у агрегаторов: корень доски
+# (`boards.greenhouse.io/<компания>`) вакансией не является, откликаться там не
+# на что. Greenhouse держит два хоста разом — компании переезжают со старого на
+# новый, а ссылки в обращении остаются обе.
+# Формы адресов сняты с живых вакансий 2026-09-11. Каждый вендор адресует
+# вакансию по-своему, и «корень компании» у каждого свой, поэтому общего правила
+# «хост плюс хоть какой-то путь» мало: оно бы приняло доску целиком.
+#
+# Сюда НЕ входят hh, LinkedIn и Wellfound, хотя в `apply_guard` они лежат в одном
+# списке с настоящими ATS. У них свой канал отклика, и попасть в `ats` для них
+# значит потерять его.
+_ATS_JOB_RE = re.compile(
+    r"^(?:https?://)?(?:www\.)?(?:"
+    # Greenhouse держит два хоста разом: компании переезжают со старого на новый.
+    r"(?:boards|job-boards)\.greenhouse\.io/[\w%-]+/jobs/\d+"
+    # Lever и Ashby: второй сегмент пути — uuid вакансии.
+    r"|jobs\.lever\.co/[\w%-]+/[\w%-]+"
+    r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
+    # Workable прячет вакансию за /j/, SmartRecruiters адресует числом.
+    r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
+    r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"
+    # Workday: поддоменов два (компания и её инстанс), вакансия всегда за /job/.
+    r"|[\w-]+\.[\w-]+\.myworkdayjobs\.com/\S*?/job/[\w%-]+"
+    # Teamtailor, Recruitee и Personio живут на поддомене компании.
+    r"|[\w-]+\.teamtailor\.com/jobs/[\w%-]+"
+    r"|[\w-]+\.recruitee\.com/o/[\w%-]+"
+    r"|[\w-]+\.jobs\.personio\.(?:com|de)/job/[\w%-]+"
+    r")",
+    re.IGNORECASE)
+
+
+def is_ats_job_url(url: str) -> bool:
+    return bool(_ATS_JOB_RE.match((url or "").strip()))
+
+
 def is_aggregator_job_url(url: str) -> bool:
     return bool(_AGGREGATOR_JOB_RE.match((url or "").strip()))
 
@@ -433,6 +482,69 @@ def extract_aggregator_vacancy(html_text) -> str:
         if found != -1:
             cut = min(cut, found)
     return text[:min(cut, _VACANCY_TEXT_CAP)].strip()
+
+
+# Что отдаёт пустой React-шелл вместо вакансии. Замер 2026-09-11: Ashby и
+# Workable без выполнения JS не несут текста вообще, и весь их «текст» — вот эта
+# фраза. Пустая строка честнее: с ней лид сохранится и вакансию перечитает
+# отправитель браузером, а с фразой в «Вакансии» письмо напишется по ней.
+_JS_SHELL_RE = re.compile(r"you need to enable javascript", re.IGNORECASE)
+_LD_JSON_RE = re.compile(
+    r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.IGNORECASE | re.DOTALL)
+
+
+def _ld_job_description(html_text: str) -> str:
+    """Описание из блока JSON-LD `JobPosting`, если он на странице есть.
+
+    Workday, Teamtailor и Recruitee выглядят пустыми SPA, но кладут туда полное
+    описание серверным рендером — то есть читаются обычным GET, просто не
+    видимым текстом. Разметка бывает и списком, и `@graph`, поэтому обходим
+    всё дерево, а не только корень.
+    """
+    for raw in _LD_JSON_RE.findall(html_text):
+        try:
+            data = _json.loads(_html.unescape(raw.strip()))
+        except Exception:  # noqa: BLE001 — чужая разметка, битый JSON не наша беда
+            continue
+        stack = [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+            elif isinstance(node, dict):
+                types = node.get("@type")
+                types = types if isinstance(types, list) else [types]
+                if "JobPosting" in types and node.get("description"):
+                    return str(node["description"])
+                stack.extend(v for v in node.values()
+                             if isinstance(v, (list, dict)))
+    return ""
+
+
+def _visible_text(html_text: str) -> str:
+    text = _SCRIPT_STYLE_RE.sub(" ", str(html_text or ""))
+    text = _ANY_TAG_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", _html.unescape(text)).strip()
+    # Тег снимается пробелом, иначе «<b>Go</b>,<b>Python</b>» слиплось бы в одно
+    # слово. Цена — пробел перед знаком препинания: «gateways .», «Python , Go».
+    # В брифе это читается как небрежность, а бриф уходит в письмо.
+    return re.sub(r"\s+([,.;:!?])", r"\1", text)
+
+
+def extract_ats_vacancy(html_text) -> str:
+    """Текст вакансии со страницы ATS работодателя.
+
+    Сперва структурированное описание, потом видимый текст: на страницах, где
+    есть и то и другое, JSON-LD чище — в нём нет шапки, футера и карточек чужих
+    вакансий, которые у агрегаторов приходится обрезать маркерами.
+    """
+    html_text = str(html_text or "")
+    structured = _ld_job_description(html_text)
+    text = _visible_text(structured) if structured else _visible_text(html_text)
+    if not text or _JS_SHELL_RE.search(text):
+        return ""
+    return text[:_VACANCY_TEXT_CAP].strip()
 
 
 def _brand_of(page_url: str) -> str:

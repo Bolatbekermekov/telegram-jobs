@@ -337,7 +337,9 @@ async def telegram_webhook(
             chat_id,
             "⚠️ Не нашёл контакт. Пришли вакансию с одним из: @ник, t.me-ссылка, "
             "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads / "
-            "Remocate / RemoteOK.",
+            "Remocate / RemoteOK, либо прямая ссылка на отклик в Greenhouse, "
+            "Lever, Ashby, Workable, SmartRecruiters, Workday, Teamtailor, "
+            "Recruitee или Personio.",
         )
     except Exception as exc:  # noqa: BLE001
         _reply(chat_id, f"❌ Ошибка при сохранении: {exc}")
