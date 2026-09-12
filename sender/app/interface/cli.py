@@ -39,7 +39,6 @@ from app.application.send_plan import (
     pause_after,
     skip_reason,
     unresolved_thread,
-    waiting_for_login,
 )
 from app.domain.invite_age import expired_note, invite_expired
 from app.domain.paused import (
@@ -68,22 +67,12 @@ from app.infrastructure.vacancy_fetcher import (
 # Platforms the send loop can build a channel for. A platform missing here is a
 # per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
 _KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads",
-          "remoteok", "remocate", "ats", "jobicy", "indeed"}
+          "remoteok", "remocate", "ats", "indeed"}
 
 # Longer than the intake bot's 8s. That budget exists because the bot answers a
 # Telegram webhook from a serverless function; here a human is watching a terminal
 # and the alternative to waiting is not sending at all.
 _REFETCH_TIMEOUT = 20.0
-
-# Где лежит сессия площадки, которой сессия нужна только для отклика. Решение
-# «ждать или ронять прогон» принимает waiting_for_login в send_plan.py; здесь
-# только ответ на вопрос «файл есть?».
-_OPTIONAL_SESSION_PATHS = {"jobicy": lambda: config.JOBICY_STATE_PATH}
-
-
-def _optional_session_exists(platform: str) -> bool:
-    path = _OPTIONAL_SESSION_PATHS.get(platform)
-    return True if path is None else Path(path()).exists()
 
 
 def _refetch(url: str) -> str:
@@ -561,20 +550,6 @@ def run() -> None:
                 status, note = reason
                 repo.mark_status(lead, status, note=note)
                 print(f"⏭  Лид #{lead.lead_id} [{platform}]: {note} — пропуск.")
-                continue
-
-            # Площадка, чья сессия нужна ТОЛЬКО для отклика (поиск у неё идёт
-            # анонимно). Гейт стоит ДО открытия канала намеренно: иначе start()
-            # вернёт ChannelUnavailable, а обработчик `for_platform` ниже уведёт
-            # в SystemExit весь прогон — вместе с лидами всех остальных площадок,
-            # стоящими в очереди после. Ровно так же огорожен Threads.
-            held = waiting_for_login(platform, _optional_session_exists(platform))
-            if held is not None:
-                # Статус остаётся `new`, но заметка ПИШЕТСЯ: иначе по таблице не
-                # отличить лид, до которого не дошли руки, от лида, который ждёт
-                # входа. Тот же приём, что в ветке лимита площадки.
-                repo.mark_status(lead, STATUS_NEW, note=held)
-                print(f"✋ Лид #{lead.lead_id} [{platform}]: {held}")
                 continue
 
             if lead.platform == "threads":
@@ -1497,93 +1472,6 @@ def run_login_threads():
         print("⚠️ Файл сохранён, но живого `sessionid` в нём нет — вход не удался. "
               "Проверь, что действительно залогинился, и повтори.")
 
-def run_login_jobicy():
-    """One-time Jobicy login in the user's REAL Chrome; saves the session to a file.
-
-    Поиск по Jobicy аккаунта НЕ требует — он идёт по открытому JSON API. Сессия
-    нужна ровно для отклика: кнопка «Apply Now» на странице вакансии это не
-    ссылка, а регистрационный гейт (её onclick шлёт событие
-    `RegistrationGateOpened`), и адреса работодателя гостю не показывают нигде —
-    ни в разметке страницы, ни в пред-отрисованном попапе, ни в описании из API
-    (замер 2026-09-11 на 50 вакансиях: ноль ссылок в ATS).
-
-    Chrome настоящий, а не запущенный автоматикой, и это не перестраховка: Jobicy
-    пускает через Google, а Google в автоматизированном браузере отвечает «this
-    browser or app may not be secure» и вход не даёт — проверено живьём тремя
-    попытками подряд. Ровно тот же обход, что у RemoteOK.
-
-    Ждём появления авторизационной куки, а не нажатия Enter. Причин две. Без
-    терминала на вводе (`!` в Claude Code, cron) чтение клавиши падает с
-    EOFError раньше, чем человек успевает войти. И судить по странице нельзя:
-    первая версия делала это и дала ложное «залогинен» прямо на форме входа,
-    сохранив гостевую сессию из трёх аналитических кук.
-    """
-    import subprocess
-    from pathlib import Path
-
-    from app.application.login import wait_for_login
-    from app.domain.jobicy_session import auth_cookie_names, is_logged_in
-    from app.infrastructure.search.wellfound_search import build_chrome_debug_args
-
-    if Path(config.JOBICY_STATE_PATH).exists():
-        print(f"✅ Сессия Jobicy уже есть ({config.JOBICY_STATE_PATH}). "
-              "Удали этот файл, если хочешь перелогиниться.")
-        return
-
-    args = build_chrome_debug_args(config.JOBICY_CHROME_PROFILE,
-                                   config.JOBICY_CDP_PORT,
-                                   "https://jobicy.com/sign-in")
-    print("Открываю твой Chrome для входа в Jobicy...")
-    try:
-        subprocess.Popen([config.CHROME_PATH, *args])
-    except FileNotFoundError:
-        print(f"❌ Не нашёл Chrome по пути {config.CHROME_PATH}. "
-              "Укажи его в переменной CHROME_PATH.")
-        return
-
-    print("Войди в Jobicy в открывшемся Chrome (почтой или через Google). "
-          "Я сам увижу вход и сохраню сессию — нажимать здесь ничего не нужно.")
-
-    try:
-        from patchright.sync_api import sync_playwright
-        with sync_playwright() as pw:
-            browser = None
-            # Chrome поднимается не мгновенно: первые попытки подключения по CDP
-            # честно падают, и это не ошибка входа.
-            for _ in range(20):
-                try:
-                    browser = pw.chromium.connect_over_cdp(config.JOBICY_CDP_URL)
-                    break
-                except Exception:  # noqa: BLE001
-                    time.sleep(1.0)
-            if browser is None:
-                print("⚠️ Chrome не отозвался по отладочному порту. Закрой все окна "
-                      "Chrome и запусти `make login_jobicy` снова.")
-                return
-            ctx = browser.contexts[0] if browser.contexts else None
-            if ctx is None:
-                print("⚠️ Не нашёл открытую вкладку Chrome. Запусти команду снова.")
-                browser.close()
-                return
-            if not wait_for_login(lambda: is_logged_in(ctx.cookies())):
-                # Имена кук печатаются намеренно: если Jobicy сменит механизм
-                # входа, следующий шаг будет по замеру, а не по догадке.
-                print("⚠️ Не дождался входа — авторизационной куки так и не "
-                      "появилось. Сессию НЕ сохраняю: гостевая хуже, чем никакой, "
-                      "она вскроется только на отклике.")
-                print(f"   Куки, которые пришли: {auth_cookie_names(ctx.cookies())}")
-                browser.close()  # disconnect only — leaves Chrome running
-                return
-            ctx.storage_state(path=config.JOBICY_STATE_PATH)
-            browser.close()  # disconnect only — leaves Chrome running
-    except Exception as exc:  # noqa: BLE001
-        print(f"⚠️ Не смог забрать сессию по CDP: {exc}")
-        return
-
-    print(f"✅ Сессия Jobicy сохранена в {config.JOBICY_STATE_PATH}. "
-          "Этот Chrome можно закрыть.")
-
-
 def run_login_all():
     """One command: log in to every platform, skipping ones with a live session.
 
@@ -1617,10 +1505,6 @@ def run_login_all():
         "remoteok": Path(config.REMOTEOK_STATE_PATH).exists(),
         # Same trap as LinkedIn: a state file without a live sessionid is a guest.
         "threads": threads_has_valid_session(config.THREADS_STATE_PATH),
-        # Файл пишется только после успешного входа (run_login_jobicy), но
-        # гостевая сессия на диске неотличима от рабочей — поэтому здесь
-        # просто наличие, а живость проверяет сам канал на первом отклике.
-        "jobicy": Path(config.JOBICY_STATE_PATH).exists(),
         # У площадок на CDP «сессия» — это живой Chrome, а не файл.
         "indeed": cdp_alive(config.INDEED_CDP_URL),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
@@ -1639,7 +1523,6 @@ def run_login_all():
 
     actions = {"telegram": _login_telegram, "linkedin": run_login_browser,
                "hh": run_login_hh, "remoteok": run_login_remoteok,
-               "jobicy": run_login_jobicy,
                "threads": run_login_threads,
                "indeed": run_login_indeed,
                "wellfound": run_login_wellfound}

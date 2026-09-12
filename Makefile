@@ -11,7 +11,6 @@
 #   make login_wellfound -> open your Chrome for a one-time Wellfound login (leave it open)
 #   make login_hh        -> open the hh.ru login window, save the session (one-time)
 #   make login_remoteok  -> register/log in to RemoteOK in your Chrome, save the session (one-time)
-#   make login_jobicy   -> log in to Jobicy once (needed for APPLYING; search works without it)
 #   make login_threads  -> open the Threads login window, save the session (one-time; use a burner Instagram)
 #   make login           -> log in to ALL platforms in one go (skips ones with a session)
 #   make search          -> one-shot vacancy search across all platforms
@@ -19,7 +18,6 @@
 #   make search_wellfound-> one-shot Wellfound search (needs make login_wellfound Chrome open)
 #   make search_remoteok -> one-shot RemoteOK search
 #   make search_remotive -> one-shot Remotive search
-#   make search_jobicy   -> one-shot Jobicy search (open JSON API, no login)
 #   make search_indeed   -> one-shot Indeed search (needs make login_indeed Chrome open)
 #   make login_indeed    -> open your Chrome for Indeed and LEAVE IT OPEN (CDP, like wellfound)
 #   make search_remocate -> one-shot Remocate search (public feed, no login)
@@ -31,7 +29,7 @@
 PYTHON ?= sender/.venv/bin/python
 TO ?= @bolatbek_yermekov
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login_remoteok login_jobicy login_threads login search search_linkedin search_wellfound search_remoteok search_remotive search_jobicy search_indeed login_indeed search_remocate search_hh bot_menu test-unit apply_probe
+.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login_remoteok login_threads login search search_linkedin search_wellfound search_remoteok search_remotive search_indeed login_indeed search_remocate search_hh bot_menu test-unit apply_probe
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -69,9 +67,6 @@ search_remoteok:
 search_remotive:
 	$(PYTHON) sender/run.py search_remotive
 
-search_jobicy:
-	$(PYTHON) sender/run.py search_jobicy
-
 search_indeed:
 	$(PYTHON) sender/run.py search_indeed
 
@@ -86,9 +81,6 @@ login_hh:
 
 login_remoteok:
 	$(PYTHON) sender/run.py login_remoteok
-
-login_jobicy:
-	$(PYTHON) sender/run.py login_jobicy
 
 login_threads:
 	$(PYTHON) sender/run.py login_threads

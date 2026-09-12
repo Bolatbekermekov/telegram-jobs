@@ -179,6 +179,15 @@ INDEED_PER_KEYWORD = int(os.environ.get("INDEED_PER_KEYWORD", "25"))
 INDEED_PAGES = int(os.environ.get("INDEED_PAGES", "2"))
 # «Worldwide» — понятие LinkedIn; Indeed ждёт город или Remote.
 INDEED_LOCATION = os.environ.get("INDEED_LOCATION", "Remote")
+# Свои слова, а не общий SEARCH_KEYWORDS. Решение владельца 2026-09-12: выдача
+# Indeed привязана к США, и по общим словам возвращается американская удалёнка,
+# закрытая правом на работу. AI-роли — единственная часть, где международных
+# вакансий хватает, чтобы площадка окупала прогон. Уровень не ограничен: берём
+# любой grade, годится или нет решает скорер.
+INDEED_KEYWORDS = [k.strip() for k in os.environ.get(
+    "INDEED_KEYWORDS",
+    "ai engineer,llm engineer,machine learning engineer,ai software engineer,"
+    "generative ai engineer,applied ai engineer").split(",") if k.strip()]
 
 # --- Vacancy search (sub-project C) ---
 SEARCH_KEYWORDS = [
@@ -281,24 +290,6 @@ HTTP_TIMEOUT_SECONDS = int(os.environ.get("HTTP_TIMEOUT_SECONDS", "20"))
 REMOTEOK_API_URL = os.environ.get("REMOTEOK_API_URL", "https://remoteok.com/api")
 REMOTIVE_API_URL = os.environ.get(
     "REMOTIVE_API_URL", "https://remotive.com/api/remote-jobs")
-# Jobicy: открытый JSON API без ключа. В отличие от Remotive параметры здесь
-# работают, поэтому поиск ходит позапросно по каждому ключевому слову.
-JOBICY_API_URL = os.environ.get(
-    "JOBICY_API_URL", "https://jobicy.com/api/v2/remote-jobs")
-# Сессия нужна только для ОТКЛИКА: поиск по API идёт анонимно. Кнопка
-# «Apply Now» на странице вакансии — гейт регистрации, адреса работодателя
-# без входа не отдают (замер 2026-09-11).
-JOBICY_STATE_PATH = os.environ.get(
-    "JOBICY_STATE_PATH", str(_ROOT / "sender" / "jobicy_state.json"))
-# Вход идёт в НАСТОЯЩЕМ Chrome, а не в запущенном автоматикой, и это не
-# перестраховка: Jobicy пускает через Google, а Google автоматизированному
-# браузеру отвечает «this browser or app may not be secure» и вход не даёт
-# (проверено живьём 2026-09-11, три попытки). Тот же обход, что у RemoteOK.
-JOBICY_CDP_PORT = int(os.environ.get("JOBICY_CDP_PORT", "9225"))  # 9222 wf, 9223 hh, 9224 ro
-JOBICY_CDP_URL = os.environ.get(
-    "JOBICY_CDP_URL", f"http://127.0.0.1:{JOBICY_CDP_PORT}")
-JOBICY_CHROME_PROFILE = os.environ.get(
-    "JOBICY_CHROME_PROFILE", str(_ROOT / "sender" / ".jobicy_chrome"))
 
 # Remocate — агрегатор чужих вакансий; поиск идёт по публичным лентам и ни
 # аккаунта, ни браузера не требует.

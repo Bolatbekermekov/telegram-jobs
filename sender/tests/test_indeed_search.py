@@ -314,3 +314,35 @@ def test_the_searcher_raises_on_a_challenge_instead_of_reporting_nothing():
     s._page = _Page()
     with pytest.raises(RuntimeError, match="login_indeed"):
         s.search(["ai engineer"], "", 5)
+
+
+# --- своя выборка ключевых слов -------------------------------------------
+
+def test_indeed_searches_its_own_keywords_not_the_global_list():
+    """Площадка ищет ТОЛЬКО AI-роли, независимо от общего SEARCH_KEYWORDS.
+
+    Решение владельца 2026-09-12. Причина в устройстве выдачи: Indeed привязан к
+    США, и по общим словам («golang developer», «qa engineer») он возвращает
+    американскую удалёнку, закрытую для кандидата правом на работу. AI-роли —
+    единственная часть выдачи, где хватает международных вакансий, чтобы
+    площадка окупала прогон.
+    """
+    page = _FakePage(rows=[])
+    s = _searcher(page, keywords=["ai engineer", "llm engineer"], pages=1)
+    s.search(["golang developer", "qa engineer"], "", 10)
+    asked = [u.split("q=")[1].split("&")[0] for u in page.visited]
+    assert asked == ["ai+engineer", "llm+engineer"]
+
+
+def test_without_its_own_list_the_global_keywords_are_used():
+    """Пустая настройка = прежнее поведение, а не пустой поиск."""
+    page = _FakePage(rows=[])
+    _searcher(page, keywords=None, pages=1).search(["golang developer"], "", 10)
+    assert "q=golang+developer" in page.visited[0]
+
+
+def test_no_seniority_is_filtered_out():
+    """«Любой grade»: уровень не фильтруется ни словом, ни параметром выдачи."""
+    url = build_jobs_url("ai engineer", "Remote", page=1)
+    for level in ("senior", "junior", "lead", "principal", "explvl"):
+        assert level not in url.lower()

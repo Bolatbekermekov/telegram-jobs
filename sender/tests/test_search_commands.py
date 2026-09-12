@@ -3,7 +3,7 @@ from app.application.search_commands import platforms_arg
 
 def test_search_token_means_all_platforms():
     assert platforms_arg("search") == [
-        "linkedin", "wellfound", "indeed", "remoteok", "remotive", "jobicy",
+        "linkedin", "wellfound", "indeed", "remoteok", "remotive",
         "remocate", "hh"]
 
 

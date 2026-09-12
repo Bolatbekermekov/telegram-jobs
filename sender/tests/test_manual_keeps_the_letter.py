@@ -25,8 +25,8 @@ class _Repo:
 
 
 def _lead():
-    return Lead(row=2, lead_id="1084", platform="jobicy",
-                target="https://jobicy.com/jobs/150365-go", vacancy_context="Go dev",
+    return Lead(row=2, lead_id="1084", platform="remocate",
+                target="https://www.remocate.app/jobs/go-dev", vacancy_context="Go dev",
                 raw_text="", status="new")
 
 

@@ -8,7 +8,7 @@ REQ_ERROR = "error"
 
 # Platforms searchable in sub-project C, in scrape order.
 SEARCH_PLATFORMS = ["linkedin", "wellfound", "indeed", "remoteok", "remotive",
-                    "jobicy", "remocate", "hh"]
+                    "remocate", "hh"]
 
 
 @dataclass

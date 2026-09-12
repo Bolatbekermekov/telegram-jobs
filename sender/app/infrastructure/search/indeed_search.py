@@ -177,8 +177,15 @@ class IndeedSearcher:
     }"""
 
     def __init__(self, cdp_url: str | None = None, per_keyword: int = 25,
-                 pages: int = 2, location: str = "Remote"):
+                 pages: int = 2, location: str = "Remote", keywords=None):
         self._cdp_url = cdp_url
+        # Своя выборка слов, а не общая. Причина в устройстве выдачи: Indeed
+        # привязан к США, и по общим словам («golang developer», «qa engineer»)
+        # он возвращает американскую удалёнку, закрытую кандидату правом на
+        # работу. AI-роли — единственная часть выдачи, где хватает
+        # международных вакансий, чтобы площадка окупала прогон.
+        # Пусто = прежнее поведение, общий список.
+        self._keywords = [k for k in (keywords or []) if (k or "").strip()]
         self._per_keyword = per_keyword
         self._pages = pages
         self._location = location
@@ -248,6 +255,9 @@ class IndeedSearcher:
         # `location` из общего конфига сюда не годится: «Worldwide» — понятие
         # LinkedIn, а Indeed ждёт либо город, либо «Remote».
         loc = self._location
+        # Уровень (junior/senior/lead) НЕ фильтруется ни здесь, ни в адресе
+        # выдачи: берём любой grade, а годится он или нет решает скорер.
+        keywords_list = self._keywords or keywords_list
         per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         found: list[Candidate] = []
         seen: set[str] = set()
