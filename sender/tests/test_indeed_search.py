@@ -267,3 +267,50 @@ def test_without_the_job_block_the_page_body_is_the_fallback():
     s = IndeedSearcher(cdp_url="http://127.0.0.1:9226")
     s._page = _Page()
     assert "EMEA" in s.describe("https://www.indeed.com/viewjob?jk=1")
+
+
+# --- сбой не должен выглядеть как пустой день -----------------------------
+
+def test_a_challenge_page_is_not_an_empty_day():
+    """Живьём 2026-09-12: прогон отдал «пусто» за 4 м 32 с, и это были
+    четырнадцать таймаутов ожидания карточек подряд — страница в тот момент не
+    отрисовалась. Через двадцать минут тот же запрос дал 10 вакансий за 2 с.
+
+    Пустая выдача и не открывшаяся страница обязаны различаться: первое —
+    нормальный рабочий день, второе — повод поднять Chrome и посмотреть.
+    """
+    from app.infrastructure.search.indeed_search import page_state
+    assert page_state("Just a moment...", "Verify you are human", 0) == "challenge"
+    assert page_state("Security Check - Indeed.com", "", 0) == "challenge"
+
+
+def test_a_page_with_cards_is_ready_whatever_the_title_says():
+    from app.infrastructure.search.indeed_search import page_state
+    assert page_state("Just a moment...", "", 12) == "ready"
+
+
+def test_a_genuinely_empty_result_stays_empty():
+    from app.infrastructure.search.indeed_search import page_state
+    assert page_state("golang developer jobs", "no jobs match your search", 0) == "empty"
+
+
+def test_the_searcher_raises_on_a_challenge_instead_of_reporting_nothing():
+    """`run_search` ловит исключение и пишет «ошибка» вместо «пусто»."""
+    class _Page:
+        url = "https://www.indeed.com/jobs?q=x"
+        def goto(self, url, **kw): pass
+        def title(self): return "Just a moment..."
+        def wait_for_selector(self, selector, timeout=None):
+            raise TimeoutError("no cards")
+        def evaluate(self, script): return 0
+        def locator(self, selector):
+            class _Loc:
+                @property
+                def first(self_inner): return self_inner
+                def inner_text(self_inner, timeout=None): return "Verify you are human"
+            return _Loc()
+
+    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226")
+    s._page = _Page()
+    with pytest.raises(RuntimeError, match="login_indeed"):
+        s.search(["ai engineer"], "", 5)

@@ -61,6 +61,28 @@ def work_authorization_note(page_text: str) -> str:
             "разрешения на работу в США нет, спонсорство визы не предлагается.")
 
 
+# Маркеры не-страницы. Снято живьём 2026-09-12: прогон отдал «пусто» за 4 м 32 с,
+# и это были четырнадцать таймаутов ожидания карточек подряд — страница в тот
+# момент не отрисовалась. Через двадцать минут тот же запрос дал 10 вакансий за
+# 2 секунды. Пустая выдача и не открывшаяся страница обязаны различаться: первое
+# нормальный рабочий день площадки, второе повод пойти и посмотреть в Chrome.
+_CHALLENGE = re.compile(
+    r"just a moment|security check|verify you are human|unusual traffic|access denied",
+    re.IGNORECASE)
+
+
+def page_state(title: str, body_text: str, card_count: int) -> str:
+    """«ready» | «challenge» | «empty» по тому, что реально на странице.
+
+    Карточки главнее заголовка: если выдача отрисовалась, нам всё равно, что
+    Indeed написал в title.
+    """
+    if card_count > 0:
+        return "ready"
+    blob = f"{title or ''} {body_text or ''}"
+    return "challenge" if _CHALLENGE.search(blob) else "empty"
+
+
 def build_jobs_url(keyword: str, location: str, page: int = 1) -> str:
     """Адрес страницы выдачи. Смещение в вакансиях: start=0, 10, 20."""
     start = max(0, (max(1, page) - 1) * _PAGE_STEP)
@@ -193,7 +215,13 @@ class IndeedSearcher:
     def _job_cards(self):
         try:
             self._page.wait_for_selector('a[href*="jk="]', timeout=15000)
-        except Exception:  # noqa: BLE001 — по этому слову у площадки пусто
+        except Exception:  # noqa: BLE001 — либо пусто, либо страница не открылась
+            if self._page_state() == "challenge":
+                # Наружу, а не в «пусто»: run_search назовёт это ошибкой, и
+                # человек увидит причину вместо молчаливого нуля.
+                raise RuntimeError(
+                    "Indeed показывает проверку вместо выдачи — открой Chrome, "
+                    "пройди её и повтори (make login_indeed поднимает то же окно)")
             return []
         try:
             raw = self._page.evaluate(self._CARDS_JS)
@@ -202,6 +230,16 @@ class IndeedSearcher:
         return [_LiveCard(title=r.get("title", ""), company=r.get("company", ""),
                           location=r.get("location", ""), salary=r.get("salary", ""),
                           href=r.get("href", "")) for r in raw]
+
+    def _page_state(self) -> str:
+        try:
+            cards = self._page.evaluate(
+                '() => document.querySelectorAll(\'a[href*="jk="]\').length')
+            title = self._page.title()
+            body = self._page.locator("body").first.inner_text(timeout=5000)
+        except Exception:  # noqa: BLE001 — не смогли спросить, значит не знаем
+            return "empty"
+        return page_state(title, body, cards or 0)
 
     def job_cards_for_test(self):
         return self._job_cards()
