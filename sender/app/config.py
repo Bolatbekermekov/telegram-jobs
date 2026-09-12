@@ -184,6 +184,13 @@ INDEED_LOCATION = os.environ.get("INDEED_LOCATION", "Remote")
 # закрытая правом на работу. AI-роли — единственная часть, где международных
 # вакансий хватает, чтобы площадка окупала прогон. Уровень не ограничен: берём
 # любой grade, годится или нет решает скорер.
+# Пауза между обращениями к выдаче. Площадка ловит по ЧАСТОТЕ: замер
+# 2026-09-12 показал, что одиночные запросы проходят (12 и 35 карточек), а шесть
+# подряд дают «Security Check» с Ray ID — в том же настоящем Chrome, где ручной
+# просмотр работает. Это единственное, чем мы можем на это повлиять, не обходя
+# саму проверку; обходить её мы не будем.
+INDEED_MIN_DELAY_SECONDS = float(os.environ.get("INDEED_MIN_DELAY_SECONDS", "8"))
+INDEED_MAX_DELAY_SECONDS = float(os.environ.get("INDEED_MAX_DELAY_SECONDS", "20"))
 INDEED_KEYWORDS = [k.strip() for k in os.environ.get(
     "INDEED_KEYWORDS",
     "ai engineer,llm engineer,machine learning engineer,ai software engineer,"

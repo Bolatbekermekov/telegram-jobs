@@ -51,6 +51,8 @@ def build_searcher(platform: str):
             pages=config.INDEED_PAGES,
             location=config.INDEED_LOCATION,
             keywords=config.INDEED_KEYWORDS,
+            min_delay=config.INDEED_MIN_DELAY_SECONDS,
+            max_delay=config.INDEED_MAX_DELAY_SECONDS,
         )
     if platform == "remotive":
         return RemotiveSearcher(

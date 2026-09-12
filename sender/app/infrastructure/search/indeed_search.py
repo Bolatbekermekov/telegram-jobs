@@ -177,7 +177,8 @@ class IndeedSearcher:
     }"""
 
     def __init__(self, cdp_url: str | None = None, per_keyword: int = 25,
-                 pages: int = 2, location: str = "Remote", keywords=None):
+                 pages: int = 2, location: str = "Remote", keywords=None,
+                 min_delay: float = 8.0, max_delay: float = 20.0, sleep=None):
         self._cdp_url = cdp_url
         # Своя выборка слов, а не общая. Причина в устройстве выдачи: Indeed
         # привязан к США, и по общим словам («golang developer», «qa engineer»)
@@ -189,9 +190,25 @@ class IndeedSearcher:
         self._per_keyword = per_keyword
         self._pages = pages
         self._location = location
+        # Пауза между обращениями. Площадка ловит по частоте: замер 2026-09-12
+        # показал, что одиночные запросы проходят, а шесть подряд дают «Security
+        # Check» с Ray ID в том же Chrome, где ручной просмотр работает.
+        # Случайная, а не ровная: ровный интервал сам по себе выглядит машиной.
+        self._min_delay = min_delay
+        self._max_delay = max_delay
+        # Поздним связыванием, а не значением по умолчанию: иначе тест,
+        # подменяющий time.sleep, всё равно спал бы по-настоящему.
+        self._sleep = sleep
         self._pw = None
         self._browser = None
         self._page = None
+
+    def _pause(self) -> None:
+        import random
+        import time
+
+        sleep = self._sleep or time.sleep
+        sleep(random.uniform(self._min_delay, self._max_delay))
 
     @property
     def uses_cdp(self) -> bool:
@@ -272,6 +289,7 @@ class IndeedSearcher:
             for kw in keywords_list:
                 if kw in empty:
                     continue
+                self._pause()
                 self._page.goto(build_jobs_url(kw, loc, page),
                                 wait_until="domcontentloaded", timeout=45000)
                 cards = self._job_cards()

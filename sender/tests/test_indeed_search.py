@@ -166,6 +166,10 @@ def _row(jk="5a8e2f18a0bdf37f", title="AI Engineer"):
 
 
 def _searcher(page, **kw):
+    # Пауза между обращениями подменяется ВСЕГДА: без этого соседние тесты
+    # начинают спать по-настоящему по 8-20 секунд на запрос. Тот же капкан уже
+    # захлопывался на rate_limit.py, поэтому `sleep` и инъектируется.
+    kw.setdefault("sleep", lambda seconds: None)
     s = IndeedSearcher(cdp_url="http://127.0.0.1:9226", **kw)
     s._page = page          # обычно ставит start(); в тесте браузер не нужен
     return s
@@ -310,7 +314,7 @@ def test_the_searcher_raises_on_a_challenge_instead_of_reporting_nothing():
                 def inner_text(self_inner, timeout=None): return "Verify you are human"
             return _Loc()
 
-    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226")
+    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226", sleep=lambda x: None)
     s._page = _Page()
     with pytest.raises(RuntimeError, match="login_indeed"):
         s.search(["ai engineer"], "", 5)
@@ -368,3 +372,38 @@ def test_cards_are_awaited_as_attached_not_visible():
     s._page = _Page()
     s.job_cards_for_test()
     assert seen["state"] == "attached"
+
+
+# --- темп запросов --------------------------------------------------------
+
+def test_the_search_pauses_between_pages():
+    """Площадка ловит нас по частоте, а не по одному запросу.
+
+    Замер 2026-09-12: одиночные обращения проходят (12 и 35 карточек в разных
+    попытках), шесть подряд дают «Security Check - Indeed.com» с Ray ID — в том
+    же настоящем Chrome, где ручной просмотр работает. Пауза между страницами
+    это единственное, чем мы можем на это повлиять, не обходя саму проверку.
+    """
+    page = _FakePage(rows=[_row()])
+    slept = []
+    s = _searcher(page, keywords=["ai engineer", "llm engineer"], pages=1,
+                  sleep=slept.append)
+    s.search([], "", 10)
+    assert len(slept) == 2, "по паузе на каждое обращение"
+    assert all(x > 0 for x in slept)
+
+
+def test_the_pause_is_not_the_same_every_time():
+    """Ровный интервал сам по себе выглядит машиной."""
+    page = _FakePage(rows=[_row()])
+    slept = []
+    s = _searcher(page, keywords=["a", "b", "c", "d", "e", "f"], pages=1,
+                  sleep=slept.append)
+    s.search([], "", 10)
+    assert len(set(slept)) > 1, f"паузы одинаковые: {slept}"
+
+
+def test_without_an_injected_sleep_the_search_still_runs():
+    page = _FakePage(rows=[])
+    _searcher(page, keywords=["ai engineer"], pages=1, sleep=lambda s: None) \
+        .search([], "", 10)
