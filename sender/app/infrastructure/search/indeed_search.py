@@ -221,7 +221,13 @@ class IndeedSearcher:
 
     def _job_cards(self):
         try:
-            self._page.wait_for_selector('a[href*="jk="]', timeout=15000)
+            # state="attached", а НЕ видимость по умолчанию. Живьём 2026-09-12:
+            # первая ссылка на вакансию в разметке Indeed невидима, и ожидание
+            # видимости падало по таймауту при полной странице — `querySelectorAll`
+            # в тот же момент находил 35 карточек. Боевой поиск из-за этого дважды
+            # вернул «пусто». Сборщик читает DOM целиком, видимость ему безразлична.
+            self._page.wait_for_selector('a[href*="jk="]', timeout=15000,
+                                         state="attached")
         except Exception:  # noqa: BLE001 — либо пусто, либо страница не открылась
             if self._page_state() == "challenge":
                 # Наружу, а не в «пусто»: run_search назовёт это ошибкой, и

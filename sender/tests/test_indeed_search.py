@@ -120,7 +120,7 @@ class _FakeDescribePage:
     def goto(self, url, **kw):
         self.visited.append(url)
 
-    def wait_for_selector(self, selector, timeout=None):
+    def wait_for_selector(self, selector, timeout=None, state=None):
         pass
 
     def locator(self, selector):
@@ -151,7 +151,7 @@ class _FakePage:
     def goto(self, url, **kw):
         self.visited.append(url)
 
-    def wait_for_selector(self, selector, timeout=None):
+    def wait_for_selector(self, selector, timeout=None, state=None):
         self.waited.append(selector)
 
     def evaluate(self, script):
@@ -228,7 +228,7 @@ def test_the_description_comes_from_the_job_block_not_the_whole_page():
     """
     class _Page:
         def goto(self, url, **kw): pass
-        def wait_for_selector(self, selector, timeout=None): pass
+        def wait_for_selector(self, selector, timeout=None, state=None): pass
 
         def locator(self, selector):
             text = ("Build LLM agents with LangGraph."
@@ -252,7 +252,7 @@ def test_without_the_job_block_the_page_body_is_the_fallback():
     """Вёрстка меняется; остаться совсем без текста хуже, чем с шумной шапкой."""
     class _Page:
         def goto(self, url, **kw): pass
-        def wait_for_selector(self, selector, timeout=None): pass
+        def wait_for_selector(self, selector, timeout=None, state=None): pass
 
         def locator(self, selector):
             if selector != "body":
@@ -300,7 +300,7 @@ def test_the_searcher_raises_on_a_challenge_instead_of_reporting_nothing():
         url = "https://www.indeed.com/jobs?q=x"
         def goto(self, url, **kw): pass
         def title(self): return "Just a moment..."
-        def wait_for_selector(self, selector, timeout=None):
+        def wait_for_selector(self, selector, timeout=None, state=None):
             raise TimeoutError("no cards")
         def evaluate(self, script): return 0
         def locator(self, selector):
@@ -346,3 +346,25 @@ def test_no_seniority_is_filtered_out():
     url = build_jobs_url("ai engineer", "Remote", page=1)
     for level in ("senior", "junior", "lead", "principal", "explvl"):
         assert level not in url.lower()
+
+
+def test_cards_are_awaited_as_attached_not_visible():
+    """Первая ссылка на вакансию в разметке Indeed НЕвидима.
+
+    Живьём 2026-09-12: `querySelectorAll` находит 35 карточек, а
+    `wait_for_selector` по умолчанию ждёт видимости и падает по таймауту — и так
+    шесть раз подряд, отчего боевой поиск дважды вернул «пусто» при полной
+    странице. Сборщик читает DOM целиком, видимость ему безразлична.
+    """
+    seen = {}
+
+    class _Page:
+        def goto(self, url, **kw): pass
+        def wait_for_selector(self, selector, timeout=None, state=None):
+            seen["state"] = state
+        def evaluate(self, script): return []
+
+    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226")
+    s._page = _Page()
+    s.job_cards_for_test()
+    assert seen["state"] == "attached"
