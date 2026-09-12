@@ -29,11 +29,41 @@ class Candidate:
     summary: str
 
 
+# Параметры, которые АДРЕСУЮТ вакансию, а не метят выдачу. Всё остальное из
+# query выбрасывается, ради чего функция и писалась.
+#
+# Живьём 2026-09-12: поиск по Indeed возвращал ноль при полной выдаче. Площадка
+# адресует вакансию параметром `jk` (`indeed.com/rc/clk?jk=…`), и без этого
+# исключения ВСЕ её вакансии превращались в один ключ `indeed.com/rc/clk`.
+# Дальше срабатывал конвейер: `run_search` отсеивает уже известное ДО скоринга,
+# и стоило одной вакансии попасть в память отказников, как весь Indeed навсегда
+# становился «уже известным». В файле памяти на момент находки лежали ровно
+# `/rc/clk`, `/viewjob` и `/addlLoc/redirect`.
+#
+# Граница правила: `/rc/clk?jk=X` и `/viewjob?jk=X` — два адреса одной вакансии,
+# но ключи у них разные, потому что различаются пути. Схлопывать их значит
+# завести ещё одно частное правило про Indeed в функции, общей для всех
+# площадок; поиск отдаёт только форму `/rc/clk`, так что на практике это не
+# встречается. Зафиксировано тестом, чтобы читатель видел границу.
+_IDENTIFYING_PARAMS = ("jk",)
+
+
 def normalize_url(url: str) -> str:
-    """Dedup key: lowercase host, drop query/fragment, strip trailing slash."""
+    """Dedup key: lowercase host, path, and the params that identify a vacancy.
+
+    Query отбрасывается, КРОМЕ идентифицирующих параметров: у большинства
+    площадок вакансию адресует путь, а query это метки выдачи (`?from=share_ios`,
+    `?utm_source=…`), из-за которых одна вакансия считалась бы несколькими.
+    """
     parts = urlsplit(url.strip())
     path = parts.path.rstrip("/")
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+    kept = []
+    for pair in parts.query.split("&"):
+        name, _, value = pair.partition("=")
+        if name.lower() in _IDENTIFYING_PARAMS and value:
+            kept.append(f"{name.lower()}={value.lower()}")
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path,
+                       "&".join(sorted(kept)), ""))
 
 
 # Одна и та же вакансия приходит под РАЗНЫМИ адресами, и это не сбой выдачи, а

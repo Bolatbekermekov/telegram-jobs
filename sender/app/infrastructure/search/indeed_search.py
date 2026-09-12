@@ -246,12 +246,17 @@ class IndeedSearcher:
             self._page.wait_for_selector('a[href*="jk="]', timeout=15000,
                                          state="attached")
         except Exception:  # noqa: BLE001 — либо пусто, либо страница не открылась
-            if self._page_state() == "challenge":
+            state, detail = self._page_state()
+            if state == "challenge":
                 # Наружу, а не в «пусто»: run_search назовёт это ошибкой, и
                 # человек увидит причину вместо молчаливого нуля.
                 raise RuntimeError(
                     "Indeed показывает проверку вместо выдачи — открой Chrome, "
-                    "пройди её и повтори (make login_indeed поднимает то же окно)")
+                    f"пройди её и повтори (make login_indeed поднимает то же окно). {detail}")
+            # Пусто — но ПОЧЕМУ пусто, по логу было не понять, и это стоило
+            # трёх неверных догадок подряд (холодный старт, ожидание видимости,
+            # частота запросов). Теперь страница рассказывает о себе сама.
+            print(f"   indeed: карточек не нашлось. {detail}")
             return []
         try:
             raw = self._page.evaluate(self._CARDS_JS)
@@ -261,15 +266,19 @@ class IndeedSearcher:
                           location=r.get("location", ""), salary=r.get("salary", ""),
                           href=r.get("href", "")) for r in raw]
 
-    def _page_state(self) -> str:
+    def _page_state(self):
+        """(состояние, человекочитаемая подробность) — для сообщения об ошибке."""
         try:
             cards = self._page.evaluate(
                 '() => document.querySelectorAll(\'a[href*="jk="]\').length')
             title = self._page.title()
+            url = self._page.url
             body = self._page.locator("body").first.inner_text(timeout=5000)
-        except Exception:  # noqa: BLE001 — не смогли спросить, значит не знаем
-            return "empty"
-        return page_state(title, body, cards or 0)
+        except Exception as exc:  # noqa: BLE001 — не смогли спросить, значит не знаем
+            return ("empty", f"страницу не опросить: {type(exc).__name__}")
+        detail = (f"URL: {str(url)[:90]} | title: {str(title)[:60]} | "
+                  f"карточек в DOM: {cards} | текста: {len(body or '')} симв.")
+        return (page_state(title, body, cards or 0), detail)
 
     def job_cards_for_test(self):
         return self._job_cards()
