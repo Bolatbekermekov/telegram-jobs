@@ -320,6 +320,15 @@ class SheetsRepo:
         _with_retry(lambda: self._ws.batch_update(
             _payload(), value_input_option=ValueInputOption.raw))
 
+    def update_message(self, lead: Lead, message: str) -> None:
+        """Записать письмо, не трогая ни статус, ни дату отправки.
+
+        Нужно там, где письмо написано, а отправки не было: лид уходит в
+        «ручные». `mark_sent` сюда не годится — он ставит дату отправки, а
+        отправки не случилось, и дата в такой строке была бы ложью.
+        """
+        self._ws.update_cell(lead.row, COL_MESSAGE, message)
+
     def update_vacancy(self, lead: Lead, vacancy_context: str) -> None:
         """Replace a lead's «Вакансия» text, leaving every other column alone.
 

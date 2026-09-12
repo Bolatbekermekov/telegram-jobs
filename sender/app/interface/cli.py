@@ -858,7 +858,7 @@ def run() -> None:
                       f"(лид #{lead.lead_id} в 'invited').")
             elif result.manual:
                 # Couldn't auto-apply (gate/unknown form); leave for a manual apply.
-                repo.mark_status(lead, STATUS_MANUAL, note=result.error)
+                _record_manual(repo, lead, body, result.error)
                 print(f"✋ Нужен ручной отклик [{platform}]: {result.error}")
             elif result.rate_limited:
                 # Статус остаётся `new` — ровно поэтому следующий прогон возьмёт
@@ -894,6 +894,23 @@ def run() -> None:
         held = sum(rate_limited.values())
         print(f"🛑 Уперлись в лимит на {held} лид(ах): {dict(rate_limited)}. "
               "Все они остались 'new' — следующий прогон возьмёт их снова.")
+
+
+def _record_manual(repo, lead, message: str, note: str) -> None:
+    """Отдать лид человеку, СОХРАНИВ написанное письмо.
+
+    Письмо к этому моменту уже сгенерировано — генерация идёт до открытия
+    канала, — и раньше оно просто выбрасывалось: ветка звала только
+    `mark_status`, а тот колонку «Сообщение» не трогает. Живьём 2026-09-12 так
+    ушли двадцать два лида Jobicy: ссылка есть, текста нет, и человек пишет
+    заново то, за что уже заплачено.
+
+    Пустое письмо колонку не затирает: генерация могла и не состояться, а
+    затереть чужой текст пустотой хуже, чем оставить как есть.
+    """
+    if (message or "").strip():
+        repo.update_message(lead, message)
+    repo.mark_status(lead, STATUS_MANUAL, note=note)
 
 
 def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
