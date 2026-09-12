@@ -111,7 +111,31 @@ _HELPERS = r"""
     return null;
   };
   const role = el => (el.getAttribute && el.getAttribute('role') || '').toLowerCase();
+  // Кнопочная пара вместо радиогруппы. Живьём 2026-09-12 на формах Ashby
+  // «Do you require visa sponsorship?*» нарисован двумя <button aria-pressed>
+  // со спрятанным рядом <input type=checkbox tabindex="-1">: в данные формы
+  // уедет чекбокс, но переключают его кнопки. Группой считался один чекбокс,
+  // выбирать было не из чего — «варианта нет среди кнопок группы», и вопрос
+  // оставался без ответа. Зеркало `pressButtons` из `_SCRAPE_JS`.
+  const pressGroup = el => {
+    if (el.tagName === 'BUTTON' && el.hasAttribute('aria-pressed')) {
+      const box = el.parentElement;
+      if (box) return [...box.querySelectorAll('button[aria-pressed]')];
+    }
+    let node = el.parentElement;
+    for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
+      const btns = [...node.querySelectorAll('button[aria-pressed]')];
+      if (btns.length >= 2) {
+        const others = [...node.querySelectorAll('input,select,textarea')].filter(
+          x => x !== el && !['hidden','submit','button','reset','image'].includes(x.type));
+        return others.length ? [] : btns;
+      }
+    }
+    return [];
+  };
   const groupOf = el => {
+    const press = pressGroup(el);
+    if (press.length >= 2) return press;
     const t = (el.type || '').toLowerCase();
     if ((t === 'radio' || t === 'checkbox') && el.name) {
       const g = [...document.querySelectorAll('input[type=' + t + ']')]
@@ -131,9 +155,15 @@ _HELPERS = r"""
     }
     return [el];
   };
-  const isPicked = el => typeof el.checked === 'boolean'
-    ? el.checked
-    : (el.getAttribute && el.getAttribute('aria-checked') === 'true');
+  const isPicked = el => {
+    // Кнопка раньше `checked`: у <button> его нет вовсе, но проверка стоит
+    // первой, чтобы порядок читался как «сначала своё состояние виджета».
+    if (el.getAttribute && el.hasAttribute && el.hasAttribute('aria-pressed'))
+      return el.getAttribute('aria-pressed') === 'true';
+    return typeof el.checked === 'boolean'
+      ? el.checked
+      : (el.getAttribute && el.getAttribute('aria-checked') === 'true');
+  };
   // Попал ли ответ в ДАННЫЕ формы. null = проверить нечем (контрол вне <form>
   // или без имени) — тогда судим по состоянию контрола.
   const inFormData = el => {
@@ -173,6 +203,16 @@ _HELPERS = r"""
       if (i >= 0) { k.name = el.name; k.nameIndex = i; }
     }
     if (el.id) k.id = el.id;
+    // Кнопочная пара: ни `name`, ни `id` у кнопок Ashby нет, а `blockOf` ищет
+    // input-ы и такой группы не видит. Опора — текст блока вопроса и номер
+    // кнопки в нём; и то и другое переживает перерисовку, потому что вопрос
+    // остаётся тем же.
+    if (el.tagName === 'BUTTON' && el.hasAttribute('aria-pressed')) {
+      const box = el.parentElement;
+      const g = box ? [...box.querySelectorAll('button[aria-pressed]')] : [];
+      const i = g.indexOf(el);
+      if (i >= 0) { k.press = blockKey(box.parentElement || box); k.pressIndex = i; }
+    }
     const b = blockOf(el);
     if (b && t) {
       const i = [...b.querySelectorAll('input[type=' + t + ']')].indexOf(el);
@@ -191,6 +231,16 @@ _HELPERS = r"""
     if (k.id) {
       const e = [...document.querySelectorAll('[id]')].find(x => x.id === k.id);
       if (e) return e;
+    }
+    // Кнопочную пару ищем по тексту вопроса: он единственное, что у неё есть.
+    if (k.press !== undefined) {
+      const boxes = [...new Set([...document.querySelectorAll('button[aria-pressed]')]
+                                  .map(b => b.parentElement).filter(Boolean))];
+      for (const box of boxes) {
+        if (blockKey(box.parentElement || box) !== k.press) continue;
+        const g = [...box.querySelectorAll('button[aria-pressed]')];
+        if (g[k.pressIndex]) return g[k.pressIndex];
+      }
     }
     // Перемонтирование: живьём 2026-09-03 (лид #805) у новой галочки не было
     // ни `data-af`, ни прежнего id — React выдал новый `useId`. Пережил только

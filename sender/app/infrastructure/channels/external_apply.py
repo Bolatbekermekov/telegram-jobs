@@ -180,6 +180,50 @@ _SCRAPE_JS = r"""() => {
     }
     return own;
   };
+  // Вопрос, ответ на который держат КНОПКИ, а не сам контрол.
+  //
+  // Живьём 2026-09-12, три отклика на формы Ashby (Polymath, Basis Research,
+  // Blacksmith Agency): «Do you require visa sponsorship?*» нарисован парой
+  // <button aria-pressed> со СПРЯТАННЫМ рядом <input type=checkbox
+  // tabindex="-1">. В FormData уедет чекбокс, но переключают его кнопки, и
+  // читается тут единственное: скрапер видел одинокий безымянный флажок без
+  // вариантов. Ответить на него было нечем, вопрос оставался пустым, форма
+  // молча не отправлялась — а отчёт говорил «возможно, заявка ушла».
+  //
+  // Правило общее, а не про Ashby: контрол, рядом с которым лежит группа
+  // <button aria-pressed>, — это вопрос с вариантами, и варианты суть подписи
+  // кнопок. Контейнер обязан описывать ОДИН вопрос: чужое поле внутри значит,
+  // что мы поднялись слишком высоко и собрали кнопки соседних вопросов.
+  const pressButtons = e => {
+    let node = e.parentElement;
+    for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
+      const btns = [...node.querySelectorAll('button[aria-pressed]')];
+      if (btns.length >= 2) {
+        const others = [...node.querySelectorAll('input,select,textarea')].filter(
+          x => x !== e && !['hidden','submit','button','reset','image'].includes(x.type));
+        return others.length ? [] : btns;
+      }
+    }
+    return [];
+  };
+  // Обязательность, которой нет ни в `required`, ни в `aria-required`: вендор
+  // помечает её КЛАССОМ на метке и рисует звёздочку стилем (Ashby:
+  // `_required_f7cvd_91`), так что в тексте её нет вовсе. Не прочитав этого,
+  // незаполненный обязательный вопрос считался необязательным, и никто не
+  // возражал против пустого ответа.
+  const labelNodeFor = el => {
+    if (el.id) {
+      const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (l) return l;
+    }
+    return el.closest('label');
+  };
+  const markedRequired = el => {
+    const l = labelNodeFor(el);
+    if (!l) return false;
+    if (/(^|[^a-z])required([^a-z]|$)/i.test(l.className || '')) return true;
+    return /\*\s*$/.test((l.textContent || '').trim());
+  };
   const seenGroup = new Set();
   const fields = [];
   controls.forEach((e, i) => {
@@ -188,6 +232,23 @@ _SCRAPE_JS = r"""() => {
     // согласие, у которого подпись и есть вопрос («Acme has my consent…»), и
     // сгруппировать его значило бы подменить вопрос ответом «Yes»; поэтому для
     // чекбоксов группа начинается с двух.
+    // Раньше радио- и чекбокс-групп: контрол здесь один, общего `name` у
+    // группы нет, и по прежним правилам он уходил в одинокий чекбокс — то
+    // есть в согласие, у которого подпись и есть вопрос. Вопрос с вариантами
+    // подменялся флажком «да/нет», и вариант выбрать было нечем.
+    const press = pressButtons(e);
+    if (press.length >= 2) {
+      const on = press.find(b => b.getAttribute('aria-pressed') === 'true');
+      fields.push({
+        tag: 'input', type: e.type, label: labelFor(e), name: e.name || '',
+        required: e.required || e.getAttribute('aria-required') === 'true'
+                  || markedRequired(e),
+        options: press.map(b => norm(b.textContent)),
+        value: on ? norm(on.textContent) : '',
+        ref: String(i),
+      });
+      return;
+    }
     if (e.name && (e.type === 'radio'
                    || (e.type === 'checkbox' && sameGroup(e).length > 1))) {
       const key = e.type + '|' + e.name;
