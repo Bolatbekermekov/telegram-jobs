@@ -400,6 +400,36 @@ def needs_vacancy_refetch(vacancy_context: str) -> bool:
                 or _NO_VACANCY_RE.search(text[:_NO_VACANCY_HEAD_CHARS]))
 
 
+# Площадки, чья сессия нужна ТОЛЬКО для отклика: поиск у них идёт анонимно, и
+# аккаунт может появиться нескоро или не появиться вовсе. Значение — имя команды,
+# которая чинит, оно уходит человеку в консоль и в «Заметку».
+#
+# Список намеренно короткий и не обобщается до «любой площадки без сессии». Для
+# hh, LinkedIn, Wellfound и RemoteOK мёртвая сессия — это поломка настройки, и
+# остановка всего прогона там правильная: иначе очередь здоровых площадок
+# дренируется, пока сломанная остаётся незамеченной (см. обработчик
+# `for_platform` в interface/cli.py).
+_OPTIONAL_SESSION_PLATFORMS = {"jobicy": "make login_jobicy"}
+
+
+def waiting_for_login(platform: str, session_exists: bool) -> str | None:
+    """Заметка, если лид должен ПОДОЖДАТЬ входа, а не ронять прогон.
+
+    Появилось после того, как поиск по Jobicy записал в очередь 13 лидов раньше,
+    чем на площадке был заведён аккаунт: без этого гейта первый же из них дошёл
+    бы до `for_platform`, получил `ChannelUnavailable` и увёл в `SystemExit` весь
+    прогон — вместе с hh и телеграмом, стоявшими в очереди после. Тот же приём,
+    что у Threads с его `dm_fallback_reason`, и по той же причине.
+    """
+    if session_exists:
+        return None
+    fix = _OPTIONAL_SESSION_PLATFORMS.get((platform or "").strip().lower())
+    if fix is None:
+        return None
+    return (f"нет сессии {platform}: поиск работает без неё, а отклик нет — "
+            f"сделай `{fix}`. Лид ждёт и останется 'new'.")
+
+
 def pause_after(result) -> bool:
     """Нужна ли анти-бан пауза после этого исхода отправки.
 

@@ -470,6 +470,38 @@ def hh_session_alive(state_path: str, headless: bool = True) -> bool:
         return False
 
 
+def hh_vacancy_text(url: str, state_path: str, headless: bool = True,
+                    limit: int = 6000) -> str:
+    """Описание вакансии hh, прочитанное настоящим браузером.
+
+    Нужно потому, что простой GET по hh получает 403 — это антибот площадки, а
+    не снятая вакансия (замер 2026-09-11 на `hh.ru/vacancy/136926142`, тот же
+    ответ и с `hh.kz`). Поиск обходит это давно, своим открытым браузером
+    (`HHSearcher.describe`); у цикла отправки открытой страницы нет, поэтому
+    здесь поднимается своя, короткоживущая.
+
+    Сессия подставляется та же, что у отклика, хотя описание открывается и без
+    логина: залогиненной странице антибот верит охотнее, а файл всё равно есть.
+    Любая беда по дороге — пустая строка: перечитка не обязана удаться, лид
+    просто подождёт следующего прогона.
+    """
+    try:
+        from patchright.sync_api import sync_playwright
+
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=headless, channel="chrome")
+            try:
+                page = browser.new_context(storage_state=state_path,
+                                           no_viewport=True).new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                text = page.locator(SEL_DESCRIPTION).first.inner_text(timeout=15000)
+                return text.strip()[:limit]
+            finally:
+                browser.close()
+    except Exception:  # noqa: BLE001 — «не смогли прочитать» = «в этот раз без описания»
+        return ""
+
+
 def _applied_after_reload(page, url: str) -> bool:
     """Переспросить страницу заново: не прошёл ли отклик всё-таки.
 

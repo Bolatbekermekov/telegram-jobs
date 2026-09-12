@@ -6,7 +6,8 @@ After that the worker runs headless without prompting.
 """
 
 # `make login` walks this list; wellfound goes last — its Chrome stays open (CDP).
-LOGIN_ORDER = ["telegram", "linkedin", "hh", "remoteok", "threads", "wellfound"]
+LOGIN_ORDER = ["telegram", "linkedin", "hh", "remoteok", "jobicy", "threads",
+               "wellfound"]
 
 
 def telegram_session_file(session_path: str) -> str:
@@ -47,3 +48,39 @@ def login_all(searchers) -> list:
             except Exception:  # noqa: BLE001
                 pass
     return done
+
+
+# Сколько раз спрашиваем страницу, вошёл ли человек, и с каким шагом. Двести
+# попыток по три секунды это десять минут. Пять оказалось в обрез живьём
+# (2026-09-11): вход через Google уводит на его собственные экраны, и человек
+# просто не успевает. Зависнуть навсегда всё равно не даёт.
+_LOGIN_ATTEMPTS = 200
+_LOGIN_INTERVAL_SECONDS = 3.0
+
+
+def wait_for_login(logged_in, sleep=None, attempts: int = _LOGIN_ATTEMPTS,
+                   interval: float = _LOGIN_INTERVAL_SECONDS) -> bool:
+    """Ждать, пока страница сама не скажет, что мы вошли. True — дождались.
+
+    Пришло на замену `input()`. Живьём 2026-09-11: запущенный без терминала на
+    вводе (через `!` в Claude Code или любым неинтерактивным вызовом) вход падал
+    с `EOFError` раньше, чем человек успевал набрать пароль в открывшемся окне, —
+    окно оставалось висеть, сессия не сохранялась. Опрос заодно снимает ловушку
+    «не закрывай окно до Enter»: помнить об этом больше не нужно.
+
+    `sleep` поздним связыванием, а не значением по умолчанию: иначе тест,
+    подменяющий time.sleep, всё равно спал бы по-настоящему — этот капкан здесь
+    уже захлопывался на rate_limit.py.
+    """
+    import time
+
+    sleep = sleep or time.sleep
+    for attempt in range(attempts):
+        try:
+            if logged_in():
+                return True
+        except Exception:  # noqa: BLE001 — страница перезагружается под нами, это «ещё нет»
+            pass
+        if attempt < attempts - 1:
+            sleep(interval)
+    return False

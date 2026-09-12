@@ -23,7 +23,7 @@ def test_search_platforms_includes_remocate():
 
 def test_all_expands_to_every_platform():
     assert platforms_for("all") == [
-        "linkedin", "wellfound", "remoteok", "remotive", "remocate", "hh"]
+        "linkedin", "wellfound", "remoteok", "remotive", "jobicy", "remocate", "hh"]
 
 
 def test_search_platforms_includes_hh():

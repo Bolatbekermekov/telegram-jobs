@@ -50,7 +50,7 @@ def test_telegram_session_file_appends_telethon_suffix():
 
 def test_platforms_needing_login_keeps_order_and_skips_existing():
     has = {"telegram": True, "linkedin": False, "hh": False, "remoteok": True,
-           "threads": False, "wellfound": True}
+           "jobicy": True, "threads": False, "wellfound": True}
     assert platforms_needing_login(has) == ["linkedin", "hh", "threads"]
 
 
@@ -83,3 +83,12 @@ def test_remoteok_logs_in_before_wellfound():
     """Его Chrome закрывается сразу после выгрузки куки, а wellfound-овский
     обязан остаться открытым — значит remoteok идёт раньше."""
     assert LOGIN_ORDER.index("remoteok") < LOGIN_ORDER.index("wellfound")
+
+
+def test_jobicy_is_in_the_login_order():
+    """Вход нужен только ради ОТКЛИКА: поиск по Jobicy идёт анонимно, по API.
+
+    Но без него канал отвечает ChannelUnavailable на каждый лид, и площадка
+    молча копит очередь — поэтому вход стоит наравне с остальными.
+    """
+    assert "jobicy" in LOGIN_ORDER

@@ -42,6 +42,9 @@ sender/.hh_chrome/
 
 # Same, for the interactive RemoteOK login
 sender/.remoteok_chrome/
+# Профиль Chrome для входа в Jobicy. Как и соседние: внутри Cookies, Login Data
+# и кэш — в репозиторий это не уезжает никогда.
+sender/.jobicy_chrome/
 
 # DOM dumps + screenshots written when an hh selector breaks. A logged-in page's
 # HTML carries the CSRF token, the full name and resume data — never commit it.

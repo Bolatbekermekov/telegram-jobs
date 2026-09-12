@@ -3,6 +3,7 @@ import time
 
 from app import config
 from app.infrastructure.search.hh_search import HHSearcher
+from app.infrastructure.search.jobicy_search import JobicySearcher
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
 from app.infrastructure.search.remocate_search import RemocateSearcher
 from app.infrastructure.search.remoteok_search import RemoteOKSearcher
@@ -45,6 +46,16 @@ def build_searcher(platform: str):
     if platform == "remotive":
         return RemotiveSearcher(
             api_url=config.REMOTIVE_API_URL,
+            user_agent=config.HTTP_USER_AGENT,
+            timeout=config.HTTP_TIMEOUT_SECONDS,
+        )
+    if platform == "jobicy":
+        # Позапросно по каждому ключевому слову, а не одна общая лента: в
+        # отличие от Remotive, параметр `tag` у Jobicy действительно фильтрует
+        # (замер 2026-09-11: пересечение выдач `python` и `ai engineer` — 27 из
+        # 100). Ни браузера, ни сессии: лента отдаётся анонимно.
+        return JobicySearcher(
+            api_url=config.JOBICY_API_URL,
             user_agent=config.HTTP_USER_AGENT,
             timeout=config.HTTP_TIMEOUT_SECONDS,
         )

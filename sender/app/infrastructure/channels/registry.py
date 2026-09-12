@@ -5,6 +5,7 @@ from app.infrastructure.channels.ats import AtsChannel
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.external import ExternalChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
+from app.infrastructure.channels.jobicy import JobicyChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
 from app.infrastructure.channels.remoteok import RemoteOKChannel
 from app.infrastructure.channels.telegram import TelegramChannel
@@ -122,6 +123,15 @@ def build_channel(platform: str, config):
         log = AnswerLog()
         return _with_answer_log(AtsChannel(
             headless=config.BROWSER_HEADLESS,
+            external_apply_deps=_external_apply_deps(config, log)), log)
+    if platform == "jobicy":
+        # Своей формы у площадки нет, отклик живёт на сайте работодателя.
+        # Но дойти до него анонимно нельзя: кнопка «Apply Now» это гейт
+        # регистрации (замер 2026-09-11), поэтому нужна сохранённая сессия —
+        # как у RemoteOK и в отличие от агрегаторов с их публичными страницами.
+        log = AnswerLog()
+        return _with_answer_log(JobicyChannel(
+            config.JOBICY_STATE_PATH, headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.
