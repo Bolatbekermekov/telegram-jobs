@@ -166,6 +166,20 @@ WELLFOUND_CDP_URL = os.environ.get(
 WELLFOUND_CHROME_PROFILE = os.environ.get(
     "WELLFOUND_CHROME_PROFILE", str(_ROOT / "sender" / ".wellfound_chrome"))
 
+# Indeed. Тот же транспорт, что у Wellfound, и по той же причине: замер
+# 2026-09-12 дал 403 Cloudflare обычному клиенту и 200 с 32 карточками
+# живому Chrome. Пропуск привязан к профилю, который его прошёл, поэтому
+# свой запущенный браузер не поможет — только CDP к окну человека.
+INDEED_CDP_PORT = int(os.environ.get("INDEED_CDP_PORT", "9226"))  # 9222 wf, 9223 hh, 9224 ro, 9225 jo
+INDEED_CDP_URL = os.environ.get(
+    "INDEED_CDP_URL", f"http://127.0.0.1:{INDEED_CDP_PORT}")
+INDEED_CHROME_PROFILE = os.environ.get(
+    "INDEED_CHROME_PROFILE", str(_ROOT / "sender" / ".indeed_chrome"))
+INDEED_PER_KEYWORD = int(os.environ.get("INDEED_PER_KEYWORD", "25"))
+INDEED_PAGES = int(os.environ.get("INDEED_PAGES", "2"))
+# «Worldwide» — понятие LinkedIn; Indeed ждёт город или Remote.
+INDEED_LOCATION = os.environ.get("INDEED_LOCATION", "Remote")
+
 # --- Vacancy search (sub-project C) ---
 SEARCH_KEYWORDS = [
     k.strip() for k in os.environ.get("SEARCH_KEYWORDS", "internship,junior").split(",")

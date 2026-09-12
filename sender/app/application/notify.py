@@ -108,7 +108,35 @@ def wellfound_offline_message(platforms, chrome_up: bool) -> str:
     names = {(p or "").strip().lower() for p in platforms}
     if "wellfound" not in names:
         return ""
-    return ("⚠️  Wellfound: Chrome с отладочным портом не отвечает — площадка "
-            "отдаст ноль (и поиск, и отклик ходят только через него).\n"
-            "   Подними и оставь окно открытым: make login_wellfound\n"
-            "   Либо убери площадку из этого прогона: PAUSED_PLATFORMS=wellfound в .env.")
+    return cdp_offline_message(platforms, {"wellfound": chrome_up, "indeed": True})
+
+
+# Площадки, у которых ЕДИНСТВЕННЫЙ вход — окно Chrome, оставшееся открытым после
+# `make login_<имя>`. Своим браузером к ним не пройти: Cloudflare привязывает
+# пропуск к тому браузеру, который его прошёл (Wellfound — замер 2026-08-27,
+# Indeed — 2026-09-12, где обычный клиент получил 403, а живой Chrome 200).
+_CDP_PLATFORMS = {"wellfound": "Wellfound", "indeed": "Indeed"}
+
+
+def cdp_offline_message(platforms, chrome_up: dict) -> str:
+    """Одно предупреждение про все площадки на CDP, чей Chrome не отвечает.
+
+    Пустая строка, когда говорить не о чем: порты живы или таких площадок в
+    этом прогоне нет вовсе (`make search_hh`, пауза).
+
+    Одним сообщением, а не по одному на площадку: два предупреждения подряд
+    человек читает как одно и пропускает второе.
+    """
+    names = {(p or "").strip().lower() for p in platforms}
+    down = [key for key in _CDP_PLATFORMS
+            if key in names and not chrome_up.get(key, True)]
+    if not down:
+        return ""
+    titles = " и ".join(_CDP_PLATFORMS[k] for k in down)
+    fixes = "\n".join(f"   Подними и оставь окно открытым: make login_{k}" for k in down)
+    return (f"⚠️  {titles}: Chrome с отладочным портом не отвечает — "
+            f"{'площадки отдадут' if len(down) > 1 else 'площадка отдаст'} ноль "
+            "(и поиск, и отклик ходят только через него).\n"
+            f"{fixes}\n"
+            "   Либо убери из этого прогона: PAUSED_PLATFORMS="
+            f"{','.join(down)} в .env.")

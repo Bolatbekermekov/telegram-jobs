@@ -23,7 +23,7 @@ from app.application.generate_message import (
     GenerateMessage, generate_for, subject_for,
 )
 from app.application.login import cdp_alive
-from app.application.notify import wellfound_offline_message
+from app.application.notify import cdp_offline_message
 from app.application.send_outreach import SendOutreach
 from app.application.channel_switcher import ChannelSwitcher
 from app.application.send_plan import (
@@ -68,7 +68,7 @@ from app.infrastructure.vacancy_fetcher import (
 # Platforms the send loop can build a channel for. A platform missing here is a
 # per-lead skip in skip_reason(), so forgetting to add one silently buries its leads.
 _KNOWN = {"telegram", "linkedin", "hh", "email", "wellfound", "threads",
-          "remoteok", "remocate", "ats", "jobicy"}
+          "remoteok", "remocate", "ats", "jobicy", "indeed"}
 
 # Longer than the intake bot's 8s. That budget exists because the bot answers a
 # Telegram webhook from a serverless function; here a human is watching a terminal
@@ -318,22 +318,27 @@ def _warn_if_apply_profile_blank() -> None:
     print("   Либо выключи автоотклик: EXTERNAL_APPLY_ENABLED=false в .env\n")
 
 
-def _wellfound_offline_note(platforms) -> str:
-    """Текст про неподнятый Chrome Wellfound, или пустая строка. Сам текст и
-    правило молчания живут в notify — здесь только проверка порта.
+# Площадки, живущие через CDP: порт и переменная конфига у каждой своя.
+_CDP_PORTS = {"wellfound": "WELLFOUND_CDP_URL", "indeed": "INDEED_CDP_URL"}
 
+
+def _wellfound_offline_note(platforms) -> str:
+    """Текст про неподнятый Chrome площадок на CDP, или пустая строка.
+
+    Сам текст и правило молчания живут в notify — здесь только проверка портов.
     Порт дёргается ТОЛЬКО когда площадка в списке: httpx с таймаутом 2 с на
     каждый `make search_hh` — плата ни за что.
     """
     names = {(p or "").strip().lower() for p in platforms}
-    if "wellfound" not in names:
+    present = [k for k in _CDP_PORTS if k in names]
+    if not present:
         return ""
-    return wellfound_offline_message(
-        names, chrome_up=cdp_alive(config.WELLFOUND_CDP_URL))
+    chrome_up = {k: cdp_alive(getattr(config, _CDP_PORTS[k])) for k in present}
+    return cdp_offline_message(names, chrome_up)
 
 
 def _warn_if_wellfound_chrome_down(platforms) -> None:
-    """Сказать вслух, что Chrome Wellfound не поднят, — до того, как это станет
+    """Сказать вслух, что Chrome площадки не поднят, — до того, как это станет
     ошибкой без причины."""
     note = _wellfound_offline_note(platforms)
     if note:
@@ -1129,6 +1134,93 @@ def run_login_wellfound():
     _await_wellfound_login()
 
 
+def run_login_indeed():
+    """Поднять Chrome для Indeed и оставить его открытым.
+
+    Логин Indeed для ПОИСКА не нужен — выдача публичная. Нужен сам живой
+    браузер: замер 2026-09-12 дал 403 Cloudflare обычному клиенту и 200 с 32
+    карточками настоящему Chrome, причём пропуск привязан к профилю, который
+    его прошёл. Поэтому окно остаётся жить, а поиск и отклик подключаются к
+    нему по CDP — ровно как у Wellfound.
+    """
+    import subprocess
+
+    from app.application.login import cdp_alive
+    from app.infrastructure.search.wellfound_search import build_chrome_debug_args
+
+    if cdp_alive(config.INDEED_CDP_URL):
+        print(f"✅ Chrome для Indeed уже поднят ({config.INDEED_CDP_URL}). "
+              "Оставь его открытым.")
+        return
+
+    args = build_chrome_debug_args(
+        config.INDEED_CHROME_PROFILE, config.INDEED_CDP_PORT,
+        "https://www.indeed.com/jobs?q=ai+engineer&l=Remote")
+    print("Открываю твой Chrome для Indeed...")
+    try:
+        subprocess.Popen([config.CHROME_PATH, *args])
+    except FileNotFoundError:
+        print(f"❌ Не нашёл Chrome по пути {config.CHROME_PATH}. "
+              "Укажи его в переменной CHROME_PATH.")
+        return
+
+    print("\n1) Если Indeed покажет проверку — пройди её в открывшемся окне.")
+    print("2) Дождись, пока увидишь список вакансий.")
+    print(f"Жду до {LOGIN_WAIT_SECONDS // 60} минут, проверяю сам. Enter жать не нужно.\n")
+    _await_indeed_ready()
+
+
+def _await_indeed_ready(wait_seconds: int = None, poll_seconds: int = None,
+                        read_state=None, sleep=None) -> bool:
+    """Дождаться вкладки с живой выдачей Indeed. True — дождались."""
+    import time as _time
+
+    wait_seconds = LOGIN_WAIT_SECONDS if wait_seconds is None else wait_seconds
+    poll_seconds = LOGIN_POLL_SECONDS if poll_seconds is None else poll_seconds
+    read_state = read_state or _read_indeed_state
+    sleep = sleep or _time.sleep
+    said = None
+    for _ in range(max(1, wait_seconds // max(1, poll_seconds))):
+        state, detail = read_state()
+        if state == "ready":
+            print("✅ Chrome готов. НЕ закрывай его — поиск и отклик Indeed идут через него.")
+            return True
+        if state != said:
+            said = state
+            print({
+                "challenge": "   … Indeed показывает проверку, жду.",
+                "unreachable": f"   … Chrome по CDP пока недоступен ({detail}).",
+            }.get(state, f"   … {state}"))
+        sleep(poll_seconds)
+    print("⏱  Не дождался. Chrome оставь открытым и запусти команду снова — "
+          "она подхватит уже пройденную проверку.")
+    return False
+
+
+def _read_indeed_state():
+    """(состояние, подробность) вкладки Indeed через CDP. Ничего не меняет."""
+    try:
+        from patchright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(config.INDEED_CDP_URL)
+            try:
+                ctx = browser.contexts[0] if browser.contexts else None
+                pages = list(ctx.pages) if ctx else []
+                # Вкладок у настоящего Chrome много, нужная — та, что на Indeed.
+                page = next((p for p in pages if "indeed.com" in (p.url or "")),
+                            pages[0] if pages else None)
+                if page is None:
+                    return ("unreachable", "нет открытых вкладок")
+                title = (page.title() or "").lower()
+                if "security check" in title or "just a moment" in title:
+                    return ("challenge", page.url)
+                return ("ready", page.url)
+            finally:
+                browser.close()      # только отключение — Chrome остаётся жить
+    except Exception as exc:  # noqa: BLE001
+        return ("unreachable", str(exc)[:80])
+
+
 # Ждать входа приходится ОПРОСОМ, а не по Enter: команду запускают из оболочки
 # без stdin, и `input()` там падает с EOFError, не дав человеку залогиниться
 # вовсе — живьём 2026-08-29, ровно как раньше с `make login_browser`. Окно при
@@ -1512,6 +1604,8 @@ def run_login_all():
         # гостевая сессия на диске неотличима от рабочей — поэтому здесь
         # просто наличие, а живость проверяет сам канал на первом отклике.
         "jobicy": Path(config.JOBICY_STATE_PATH).exists(),
+        # У площадок на CDP «сессия» — это живой Chrome, а не файл.
+        "indeed": cdp_alive(config.INDEED_CDP_URL),
         "wellfound": cdp_alive(config.WELLFOUND_CDP_URL),
     }
     todo = platforms_needing_login(has_session)
@@ -1530,6 +1624,7 @@ def run_login_all():
                "hh": run_login_hh, "remoteok": run_login_remoteok,
                "jobicy": run_login_jobicy,
                "threads": run_login_threads,
+               "indeed": run_login_indeed,
                "wellfound": run_login_wellfound}
     for p in todo:
         print(f"\n🔑 {p}: вход...")

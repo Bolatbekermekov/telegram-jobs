@@ -45,6 +45,10 @@ sender/.remoteok_chrome/
 # Профиль Chrome для входа в Jobicy. Как и соседние: внутри Cookies, Login Data
 # и кэш — в репозиторий это не уезжает никогда.
 sender/.jobicy_chrome/
+# То же для Indeed. Правило заводится ВМЕСТЕ с площадкой, а не после:
+# 2026-09-12 профиль Jobicy уехал в публичный репозиторий именно потому,
+# что строку добавили позже, чем сделали `git add -A`.
+sender/.indeed_chrome/
 
 # DOM dumps + screenshots written when an hh selector breaks. A logged-in page's
 # HTML carries the CSRF token, the full name and resume data — never commit it.

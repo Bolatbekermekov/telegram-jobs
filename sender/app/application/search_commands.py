@@ -5,6 +5,7 @@ _TOKEN_TO_PLATFORM = {
     "search": "all",
     "search_linkedin": "linkedin",
     "search_wellfound": "wellfound",
+    "search_indeed": "indeed",
     "search_remoteok": "remoteok",
     "search_remotive": "remotive",
     "search_jobicy": "jobicy",

@@ -5,6 +5,7 @@ from app.infrastructure.channels.ats import AtsChannel
 from app.infrastructure.channels.email_channel import EmailChannel
 from app.infrastructure.channels.external import ExternalChannel
 from app.infrastructure.channels.headhunter import HeadHunterChannel
+from app.infrastructure.channels.indeed import IndeedChannel
 from app.infrastructure.channels.jobicy import JobicyChannel
 from app.infrastructure.channels.linkedin import LinkedInChannel
 from app.infrastructure.channels.remoteok import RemoteOKChannel
@@ -133,6 +134,14 @@ def build_channel(platform: str, config):
         return _with_answer_log(JobicyChannel(
             config.JOBICY_STATE_PATH, headless=config.BROWSER_HEADLESS,
             external_apply_deps=_external_apply_deps(config, log)), log)
+    if platform == "indeed":
+        # Своей формы у площадки нет: отклик живёт на сайте работодателя,
+        # куда ведёт редирект. Транспорт — тот же CDP, что у поиска.
+        log = AnswerLog()
+        return _with_answer_log(IndeedChannel(
+            config.INDEED_CDP_URL,
+            external_apply_deps=_external_apply_deps(config, log),
+            dry_run=getattr(config, "APPLY_DRY_RUN", False)), log)
     if platform == "threads":
         # The DM fallback: only reached when the thread carried no contact at all.
         return ThreadsChannel(config.THREADS_STATE_PATH, config.BROWSER_HEADLESS)

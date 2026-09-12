@@ -229,7 +229,7 @@ def test_worker_request_searches_everything_but_the_paused_platform(monkeypatch)
     run_one(SearchRequest(id="1", platform="all", status="running"))
 
     assert [p for p, s in searchers.items() if s.started] == [
-        "wellfound", "remoteok", "remotive", "jobicy", "remocate", "hh"]
+        "wellfound", "indeed", "remoteok", "remotive", "jobicy", "remocate", "hh"]
 
 
 def test_pausing_remocate_stops_its_search_too(monkeypatch):

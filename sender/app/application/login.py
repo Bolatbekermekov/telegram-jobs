@@ -6,8 +6,10 @@ After that the worker runs headless without prompting.
 """
 
 # `make login` walks this list; wellfound goes last — its Chrome stays open (CDP).
+# Хвост списка — площадки на CDP: их Chrome обязан остаться открытым, и
+# открывать его раньше остальных входов значит держать окно зря.
 LOGIN_ORDER = ["telegram", "linkedin", "hh", "remoteok", "jobicy", "threads",
-               "wellfound"]
+               "indeed", "wellfound"]
 
 
 def telegram_session_file(session_path: str) -> str:

@@ -20,6 +20,8 @@
 #   make search_remoteok -> one-shot RemoteOK search
 #   make search_remotive -> one-shot Remotive search
 #   make search_jobicy   -> one-shot Jobicy search (open JSON API, no login)
+#   make search_indeed   -> one-shot Indeed search (needs make login_indeed Chrome open)
+#   make login_indeed    -> open your Chrome for Indeed and LEAVE IT OPEN (CDP, like wellfound)
 #   make search_remocate -> one-shot Remocate search (public feed, no login)
 #   make search_hh       -> one-shot HeadHunter search (needs make login_hh once)
 #   make bot_menu        -> register the bot's command menu in Telegram (one-time)
@@ -29,7 +31,7 @@
 PYTHON ?= sender/.venv/bin/python
 TO ?= @bolatbek_yermekov
 
-.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login_remoteok login_jobicy login_threads login search search_linkedin search_wellfound search_remoteok search_remotive search_jobicy search_remocate search_hh bot_menu test-unit apply_probe
+.PHONY: dry test run worker login_telegram login_browser login_wellfound login_hh login_remoteok login_jobicy login_threads login search search_linkedin search_wellfound search_remoteok search_remotive search_jobicy search_indeed login_indeed search_remocate search_hh bot_menu test-unit apply_probe
 
 dry:
 	$(PYTHON) sender/test_send.py --dry-run
@@ -69,6 +71,12 @@ search_remotive:
 
 search_jobicy:
 	$(PYTHON) sender/run.py search_jobicy
+
+search_indeed:
+	$(PYTHON) sender/run.py search_indeed
+
+login_indeed:
+	$(PYTHON) sender/run.py login_indeed
 
 search_remocate:
 	$(PYTHON) sender/run.py search_remocate

@@ -3,6 +3,7 @@ import time
 
 from app import config
 from app.infrastructure.search.hh_search import HHSearcher
+from app.infrastructure.search.indeed_search import IndeedSearcher
 from app.infrastructure.search.jobicy_search import JobicySearcher
 from app.infrastructure.search.linkedin_search import LinkedInSearcher
 from app.infrastructure.search.remocate_search import RemocateSearcher
@@ -42,6 +43,14 @@ def build_searcher(platform: str):
             api_url=config.REMOTEOK_API_URL,
             user_agent=config.HTTP_USER_AGENT,
             timeout=config.HTTP_TIMEOUT_SECONDS,
+        )
+    if platform == "indeed":
+        # Только CDP: площадку не открыть ничем, кроме окна человека.
+        return IndeedSearcher(
+            cdp_url=config.INDEED_CDP_URL,
+            per_keyword=config.INDEED_PER_KEYWORD,
+            pages=config.INDEED_PAGES,
+            location=config.INDEED_LOCATION,
         )
     if platform == "remotive":
         return RemotiveSearcher(

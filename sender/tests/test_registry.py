@@ -16,7 +16,7 @@ class _Cfg:
     LINKEDIN_STATE_PATH = "l.json"; WELLFOUND_STATE_PATH = "w.json"
     WELLFOUND_CDP_URL = "http://127.0.0.1:9222"; APPLY_DRY_RUN = True
     THREADS_STATE_PATH = "t.json"; REMOTEOK_STATE_PATH = "ro.json"
-    JOBICY_STATE_PATH = "jo.json"
+    JOBICY_STATE_PATH = "jo.json"; INDEED_CDP_URL = "http://127.0.0.1:9226"
     EXTERNAL_APPLY_ENABLED = True; APPLY_PROFILE_PATH = "apply.yml"
     CV_PATH = "cv.pdf"; OPENAI_API_KEY = ""
     BROWSER_HEADLESS = True

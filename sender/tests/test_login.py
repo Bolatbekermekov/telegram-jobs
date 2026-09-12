@@ -50,7 +50,8 @@ def test_telegram_session_file_appends_telethon_suffix():
 
 def test_platforms_needing_login_keeps_order_and_skips_existing():
     has = {"telegram": True, "linkedin": False, "hh": False, "remoteok": True,
-           "jobicy": True, "threads": False, "wellfound": True}
+           "jobicy": True, "threads": False, "wellfound": True,
+           "indeed": True}
     assert platforms_needing_login(has) == ["linkedin", "hh", "threads"]
 
 
