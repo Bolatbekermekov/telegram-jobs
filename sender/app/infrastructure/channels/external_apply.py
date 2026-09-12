@@ -180,46 +180,51 @@ _SCRAPE_JS = r"""() => {
     }
     return own;
   };
-  // Вопрос, ответ на который держат КНОПКИ, а не сам контрол.
+  // Вопрос, нарисованный ГРУППОЙ КНОПОК, а не радиокнопками.
   //
   // Живьём 2026-09-12, три отклика на формы Ashby (Polymath, Basis Research,
-  // Blacksmith Agency): «Do you require visa sponsorship?*» нарисован парой
-  // <button aria-pressed> со СПРЯТАННЫМ рядом <input type=checkbox
-  // tabindex="-1">. В FormData уедет чекбокс, но переключают его кнопки, и
-  // читается тут единственное: скрапер видел одинокий безымянный флажок без
-  // вариантов. Ответить на него было нечем, вопрос оставался пустым, форма
-  // молча не отправлялась — а отчёт говорил «возможно, заявка ушла».
+  // Blacksmith Agency): «Do you require visa sponsorship?*» — это пара
+  // <button aria-pressed> и спрятанный рядом <input type=checkbox
+  // tabindex="-1">. Скрапер не видел вопроса ВООВСЕ: чекбокс лежит под
+  // `display:none` (замер сохранённой страницы: `getClientRects().length === 0`)
+  // и отсеивается фильтром видимости раньше всякого разбора. Обязательный
+  // вопрос оставался без ответа, форма молча не отправлялась, а отчёт говорил
+  // «возможно, заявка ушла, проверь почту» — то есть посылал человека искать
+  // письмо, которого не будет.
   //
-  // Правило общее, а не про Ashby: контрол, рядом с которым лежит группа
-  // <button aria-pressed>, — это вопрос с вариантами, и варианты суть подписи
-  // кнопок. Контейнер обязан описывать ОДИН вопрос: чужое поле внутри значит,
-  // что мы поднялись слишком высоко и собрали кнопки соседних вопросов.
-  const pressButtons = e => {
-    let node = e.parentElement;
-    for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
-      const btns = [...node.querySelectorAll('button[aria-pressed]')];
-      if (btns.length >= 2) {
-        const others = [...node.querySelectorAll('input,select,textarea')].filter(
-          x => x !== e && !['hidden','submit','button','reset','image'].includes(x.type));
-        return others.length ? [] : btns;
-      }
+  // Поэтому зацепка — КНОПКИ, а не контрол рядом: они единственное, что на
+  // странице видно. Правило общее, а не про Ashby: два и более
+  // `button[aria-pressed]` в одном контейнере суть один вопрос, а подписи
+  // кнопок — его варианты.
+  const pressGroups = () => {
+    const byBox = new Map();
+    for (const b of document.querySelectorAll('button[aria-pressed]')) {
+      const box = b.parentElement;
+      if (!box) continue;
+      if (!byBox.has(box)) byBox.set(box, []);
+      byBox.get(box).push(b);
     }
-    return [];
+    return [...byBox.values()].filter(
+      g => g.length >= 2 && g.some(b => b.getClientRects().length > 0));
+  };
+  // Подпись и обязательность лежат на <label> уровнем выше: у самой кнопки нет
+  // ни имени, ни id, а `for` у метки указывает на спрятанный чекбокс. Берётся
+  // САМЫЙ ТЕСНЫЙ охватывающий блок, в котором метка вообще есть, иначе с
+  // соседнего вопроса.
+  const pressLabelNode = g => {
+    let node = g[0].parentElement;
+    for (let i = 0; i < 4 && node; i++, node = node.parentElement) {
+      const l = node.querySelector('label');
+      if (l) return l;
+    }
+    return null;
   };
   // Обязательность, которой нет ни в `required`, ни в `aria-required`: вендор
   // помечает её КЛАССОМ на метке и рисует звёздочку стилем (Ashby:
   // `_required_f7cvd_91`), так что в тексте её нет вовсе. Не прочитав этого,
   // незаполненный обязательный вопрос считался необязательным, и никто не
   // возражал против пустого ответа.
-  const labelNodeFor = el => {
-    if (el.id) {
-      const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
-      if (l) return l;
-    }
-    return el.closest('label');
-  };
-  const markedRequired = el => {
-    const l = labelNodeFor(el);
+  const markedRequiredNode = l => {
     if (!l) return false;
     if (/(^|[^a-z])required([^a-z]|$)/i.test(l.className || '')) return true;
     return /\*\s*$/.test((l.textContent || '').trim());
@@ -232,23 +237,6 @@ _SCRAPE_JS = r"""() => {
     // согласие, у которого подпись и есть вопрос («Acme has my consent…»), и
     // сгруппировать его значило бы подменить вопрос ответом «Yes»; поэтому для
     // чекбоксов группа начинается с двух.
-    // Раньше радио- и чекбокс-групп: контрол здесь один, общего `name` у
-    // группы нет, и по прежним правилам он уходил в одинокий чекбокс — то
-    // есть в согласие, у которого подпись и есть вопрос. Вопрос с вариантами
-    // подменялся флажком «да/нет», и вариант выбрать было нечем.
-    const press = pressButtons(e);
-    if (press.length >= 2) {
-      const on = press.find(b => b.getAttribute('aria-pressed') === 'true');
-      fields.push({
-        tag: 'input', type: e.type, label: labelFor(e), name: e.name || '',
-        required: e.required || e.getAttribute('aria-required') === 'true'
-                  || markedRequired(e),
-        options: press.map(b => norm(b.textContent)),
-        value: on ? norm(on.textContent) : '',
-        ref: String(i),
-      });
-      return;
-    }
     if (e.name && (e.type === 'radio'
                    || (e.type === 'checkbox' && sameGroup(e).length > 1))) {
       const key = e.type + '|' + e.name;
@@ -293,6 +281,28 @@ _SCRAPE_JS = r"""() => {
       combobox: e.getAttribute('role') === 'combobox'
                 || ['list','both'].includes(e.getAttribute('aria-autocomplete')),
       max_len: maxLenOf(e),
+      ref: String(i),
+    });
+  });
+  // Кнопочные вопросы — после контролов и с продолжением их нумерации: план
+  // хранит `ref`, и столкновение указало бы на чужое поле.
+  let nextRef = controls.length;
+  pressGroups().forEach(g => {
+    // Если рядом лежал ВИДИМЫЙ контрол, вопрос уже описан по нему — второй раз
+    // он поехал бы как отдельное обязательное поле, которое нечем закрыть.
+    const box = g[0].parentElement;
+    if (box && box.querySelector('input[data-af],select[data-af],textarea[data-af]')) return;
+    const i = nextRef++;
+    g[0].setAttribute('data-af', String(i));
+    const lab = pressLabelNode(g);
+    const on = g.find(b => b.getAttribute('aria-pressed') === 'true');
+    fields.push({
+      tag: 'input', type: 'radio',
+      label: lab ? norm(lab.textContent) : '',
+      name: '',
+      required: markedRequiredNode(lab),
+      options: g.map(b => norm(b.textContent)),
+      value: on ? norm(on.textContent) : '',
       ref: String(i),
     });
   });
@@ -1320,6 +1330,14 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
     # почте владельца, а на 2026-09-03 таких лидов накопилось девять и ни один
     # не закрыт. Снимок и разметка отвечают на него без чужого ящика.
     _dump_form_debug(page, f"unknown-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
+    # Капча без токена при оставшейся форме — не «не знаю», а отказ, и назвать
+    # его надо прямо: «возможно, ушла, проверь почту» посылает человека искать
+    # письмо, которого не будет, и отговаривает подать вручную.
+    if captcha_held_the_form(page):
+        raise ManualApplyRequired(
+            "ATS не пропустил автоматическую отправку: капча не подтвердила "
+            f"отправителя, форма осталась на экране — заявка НЕ ушла, "
+            f"подай вручную: {url}")
     raise ManualApplyRequired(
         "кнопка отправки нажата, но подтверждения не видно — ВОЗМОЖНО, ЗАЯВКА "
         f"УЖЕ УШЛА, проверь почту прежде чем откликаться повторно: {url}")
@@ -1341,6 +1359,48 @@ _CAPTCHA_SEL = ('iframe[src*="recaptcha/api2/bframe"], iframe[title="reCAPTCHA"]
                 'iframe[title*="challenge" i]')
 # Меньше этого — значок, а не вызов. Реальный вызов hCaptcha — примерно 400×570.
 _CAPTCHA_MIN_SIDE = 200
+
+
+# Поле, куда капча кладёт свой токен. Пустое при оставшейся на экране форме —
+# это отказ: отправку не приняли, потому что доказательства «за браузером
+# человек» не было.
+_CAPTCHA_TOKEN_JS = """() => {
+  const t = [...document.querySelectorAll(
+    'textarea[name^=g-recaptcha-response], textarea[name^=h-captcha-response], '
+    + 'input[name^=g-recaptcha-response], input[name^=h-captcha-response]')];
+  return {boxes: t.length, tokens: t.filter(e => (e.value || '').trim().length > 0).length};
+}"""
+
+
+def captcha_held_the_form(page) -> bool:
+    """Осталась ли форма на экране из-за НЕПРОЙДЕННОЙ капчи.
+
+    Живьём 2026-09-12 на трёх формах Ashby: анкета заполнена целиком, резюме
+    приложено, обязательный вопрос отвечен, «Submit Application» нажата — и
+    пятнадцать секунд ожидания не дали ни подтверждения, ни перехода, ни
+    ошибки. На странице бейдж невидимой reCAPTCHA 256×60 и ОДНО поле токена,
+    пустое.
+
+    Оба признака нужны вместе. Пустой токен сам по себе ничего не значит: на
+    многих формах капча выполняется в момент отправки и поле пустует всегда.
+    Оставшаяся форма сама по себе тоже: бывало, что подтверждения нет, а заявка
+    ушла (Ashby, лиды 119, 127, 128, 129) — потому отчёт и говорит «не знаю».
+    Вместе они значат ровно одно, и молчать об этом дороже: прежний отчёт
+    посылал человека искать письмо, которого не будет.
+
+    Ошибка здесь не имеет права ни ронять отклик, ни выдумывать причину:
+    не смогли спросить — значит не знаем, и остаётся честное «не знаю».
+    """
+    try:
+        seen = page.evaluate(_CAPTCHA_TOKEN_JS)
+    except Exception:  # noqa: BLE001 — страницу не опросить
+        return False
+    if not isinstance(seen, dict) or not seen.get("boxes") or seen.get("tokens"):
+        return False
+    try:
+        return page.locator(SEL_SUBMIT).count() > 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _captcha_blocking(page) -> bool:

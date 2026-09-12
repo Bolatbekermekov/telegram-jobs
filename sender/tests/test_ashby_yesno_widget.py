@@ -52,9 +52,21 @@ def page():
 
 
 # Снято с сохранённой страницы Polymath (jobs.ashbyhq.com), лид #1148: классы,
-# порядок узлов и `tabindex="-1"` — как у площадки. Живая кнопка меняет
-# `aria-pressed` и чекбокс через React; здесь тот же обработчик написан руками,
-# иначе тест проверял бы вёрстку, а не то, что ответ ЗАСЧИТАН.
+# порядок узлов, `tabindex="-1"` и ОТСУТСТВИЕ `type` у кнопок — как у площадки.
+# Последнее не мелочь: без `type` кнопка внутри формы это submit, и живой
+# обработчик Ashby гасит событие сам — здесь то же сделано руками.
+#
+# `display:none` на чекбоксе — не украшение, а суть задачи. На живой странице
+# его прячет класс `_input_1svni_78`; замер сохранённой страницы дал
+# `display: none` и `getClientRects().length === 0`. Значит фильтр видимости
+# скрапера отсеивает чекбокс ДО всякого разбора, и опираться на него нельзя —
+# зацепкой обязаны быть КНОПКИ. Первая версия этого теста стилей не ставила,
+# проходила зелёным, а живой прогон всё равно оставлял вопрос без ответа:
+# проверялась разметка, которой на площадке нет.
+#
+# Живая кнопка меняет `aria-pressed` и чекбокс через React; здесь тот же
+# обработчик написан руками, иначе тест проверял бы вёрстку, а не то, что
+# ответ ЗАСЧИТАН.
 ASHBY_YESNO = """
 <form>
   <div class="_fieldEntry_1e3gg_28 ashby-application-form-field-entry"
@@ -66,7 +78,8 @@ ASHBY_YESNO = """
               aria-pressed="false" data-option="yes">Yes</button>
       <button class="_option_1svni_32 ashby-application-form-input-yesno-option"
               aria-pressed="false" data-option="no">No</button>
-      <input type="checkbox" class="_input_1svni_78" tabindex="-1" name="visa" id="visa">
+      <input type="checkbox" class="_input_1svni_78" tabindex="-1" name="visa" id="visa"
+             style="display:none">
     </div>
   </div>
 </form>
