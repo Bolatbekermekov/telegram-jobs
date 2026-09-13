@@ -278,6 +278,15 @@ _NOT_A_RESUME_UPLOAD_RE = re.compile(
     r"additional\s+document|supporting\s+document|документ",
     re.I)
 
+# Что в `accept` означает «PDF сюда можно».
+_PDF_ACCEPT = frozenset({".pdf", "application/pdf", "application/*", "*/*", "*"})
+
+
+def _takes_documents(accept: str) -> bool:
+    """Примет ли файловое поле PDF — по его `accept`. Пусто — примет что угодно."""
+    tokens = {t.strip().lower() for t in (accept or "").split(",") if t.strip()}
+    return not tokens or bool(tokens & _PDF_ACCEPT)
+
 # «Сколько лет опыта»: и общий вопрос, и привязанный к технологии, EN и RU.
 # «experience» без слова про годы сюда не входит намеренно — это уже просьба
 # рассказать, а не назвать число.
@@ -418,6 +427,10 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     caption_len = len((getattr(f, "question", "") or f.label or "").strip() or low)
 
     if f.type == "file":
+        # Поле, которое по своему `accept` документов не берёт (фото, аватар), не
+        # получает ни резюме, ни письма: подпись могла соврать, объявление — нет.
+        if not _takes_documents(getattr(f, "accept", "")):
+            return FillAction(field=f, source="unmapped")
         # Сопроводительное письмо — отдельный документ, и оно у нас есть: письмо
         # под эту вакансию уже написано, PDF собирается из него же. Раньше поле
         # оставалось пустым, и обязательное утаскивало заявку в `manual`.

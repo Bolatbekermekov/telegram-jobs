@@ -84,8 +84,19 @@ _SCRAPE_JS = r"""() => {
   // aria-hidden ставит сам вендор и означает ровно то, что нам нужно.
   // Файл — исключение, как и в isVisible ниже: почти каждый ATS прячет реальный
   // input[type=file] за своей кнопкой, и заявка без резюме этим уже кончалась.
+  // Спрятанный `aria-hidden` вход ВНУТРИ видимого ARIA-переключателя — это и есть
+  // вопрос, а не дубль: Workable рисует `div[role=radio]` и кладёт в него
+  // настоящий `input type=radio required aria-hidden` с opacity 0 (живьём
+  // 2026-09-13, лид #1164 — восемь обязательных YES/NO, скрапер не видел ни
+  // одного). Дубль Greenhouse под это не подходит: он текстовый и лежит рядом с
+  // комбобоксом, а не внутри переключателя.
+  const insideAriaChoice = e => {
+    if (e.type !== 'radio' && e.type !== 'checkbox') return false;
+    const shell = e.closest('[role=radio],[role=checkbox]');
+    return !!shell && shell.getClientRects().length > 0;
+  };
   const usable = e => e.type === 'file' ? !e.disabled
-    : (e.getAttribute('aria-hidden') !== 'true' && isVisible(e));
+    : ((e.getAttribute('aria-hidden') !== 'true' || insideAriaChoice(e)) && isVisible(e));
   // Предел длины ответа. `maxlength` ставят не все: LinkedIn держит его только
   // в подсказке поля — «Использовано: 37 из 20 символов», — и превышение там же
   // отзывается «Недопустимым значением». Не прочитав предел, модель отвечает
@@ -146,6 +157,12 @@ _SCRAPE_JS = r"""() => {
     if (lg) return norm(lg.textContent);
     const grp = e.closest('[role=group],[role=radiogroup]');
     if (grp && grp.getAttribute('aria-label')) return norm(grp.getAttribute('aria-label'));
+    // Вопрос, на который группа ссылается по id (Workable: `aria-labelledby` на
+    // текст вопроса). Первая строка блока там — одинокая звёздочка «*».
+    const named = grp && (grp.getAttribute('aria-labelledby') || '').split(/\s+/)
+      .map(id => id && document.getElementById(id)).filter(Boolean)
+      .map(n => n.textContent || '').join(' ');
+    if (named && named.trim()) return norm(named);
     const lines = groupBlock(e);
     if (lines) return norm(lines[0]);
     return norm(e.name);
@@ -302,6 +319,7 @@ _SCRAPE_JS = r"""() => {
       combobox: e.getAttribute('role') === 'combobox'
                 || ['list','both'].includes(e.getAttribute('aria-autocomplete')),
       max_len: maxLenOf(e),
+      accept: e.type === 'file' ? (e.getAttribute('accept') || '') : '',
       ref: String(i),
     });
   });
@@ -351,7 +369,8 @@ def observation_to_raw(obs: PageObservation) -> dict:
         "url": obs.url,
         "fields": [{"tag": f.tag, "type": f.type, "label": f.label, "name": f.name,
                     "required": f.required, "options": f.options, "value": f.value,
-                    "combobox": f.combobox, "ref": f.ref, "question": f.question}
+                    "combobox": f.combobox, "ref": f.ref, "question": f.question,
+                    "accept": f.accept}
                    for f in obs.fields],
         "file_inputs": obs.file_inputs, "iframes": obs.iframes,
         "mailto": obs.mailto_links, "apply_buttons": obs.apply_buttons,
@@ -368,7 +387,8 @@ def _build_observation(raw: dict) -> PageObservation:
                        combobox=bool(f.get("combobox")),
                        max_len=int(f.get("max_len") or 0),
                        ref=f.get("ref", ""),
-                       question=f.get("question", "") or "") for f in raw.get("fields", [])]
+                       question=f.get("question", "") or "",
+                       accept=f.get("accept", "") or "") for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),
         iframes=raw.get("iframes", []), mailto_links=raw.get("mailto", []),
@@ -1346,6 +1366,25 @@ def asks_for_emailed_code(page_text: str) -> bool:
     return bool(_EMAILED_CODE_RE.search(page_text or ""))
 
 
+# Поля, из-за которых браузер сам не пускает отправку: `:invalid` в форме без
+# `novalidate`. Только формы с нашими полями (`data-af`) — рассылка или поиск
+# на той же странице к заявке отношения не имеют.
+_INVALID_REQUIRED_JS = r"""() => [...document.querySelectorAll('form')]
+  .filter(f => !f.noValidate && f.querySelector('[data-af]'))
+  .flatMap(f => [...f.querySelectorAll('input:invalid, select:invalid, textarea:invalid')])
+  .map(e => e.name || e.id || e.type)
+  .filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)"""
+
+
+def _invalid_required(page) -> list:
+    """Имена полей, из-за которых браузер не пускает отправку формы, или []."""
+    try:
+        names = page.evaluate(_INVALID_REQUIRED_JS)
+    except Exception:  # noqa: BLE001 — страница ушла, или у фейка нет такого ответа
+        return []
+    return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
+
+
 def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
     """Confirm the application landed, and say so honestly when we can't tell.
 
@@ -1414,6 +1453,17 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
         # только на странице, а её уже нет.
         _dump_form_debug(page, f"rejected-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
         raise ManualApplyRequired(f"форма не приняла: {said} — {url}")
+    # Браузер сам не пустил отправку: в форме без `novalidate` остались пустые
+    # обязательные поля. Подсказка «Please select one of these options» живёт вне
+    # DOM, и `_visible_error` её не видит, — но итог известен: заявка не ушла.
+    # Живьём 2026-09-13 (Workable, лид #1164): восемь вопросов YES/NO без ответа,
+    # а отчёт сказал «ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА».
+    refused = _invalid_required(page)
+    if refused:
+        _dump_form_debug(page, f"rejected-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
+        raise ManualApplyRequired(
+            "форма не приняла: браузер не пустил отправку, пустые обязательные поля "
+            f"{refused} — заявка НЕ ушла: {url}")
     # Единственный случай, где мы уходим, НЕ ЗНАЯ ответа, — значит страницу надо
     # сохранить. Без неё вопрос «ушла заявка или нет» решается только письмом в
     # почте владельца, а на 2026-09-03 таких лидов накопилось девять и ни один

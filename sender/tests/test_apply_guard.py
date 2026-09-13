@@ -125,6 +125,15 @@ def test_a_public_link_the_question_asks_for_is_not_a_leak():
     assert leaked_secrets("https://github.com/bolatbek", gh, asked="Personal URL *") == []
 
 
+def test_a_generic_link_question_takes_any_public_profile_link():
+    """Живьём 2026-09-13, прогон 4, Factorial (лид #1044): на «Personal URL *»
+    модель в этот раз ответила ссылкой на LinkedIn, а не на GitHub, — и защита
+    снова остановила отклик: LinkedIn пропускался, только если вопрос назвал его
+    по имени. Общий вопрос о ссылке одинаково принимает любую из трёх."""
+    assert leaked_secrets("https://linkedin.com/in/bolatbek", _profile(),
+                          asked="Personal URL *") == []
+
+
 def test_a_link_nobody_asked_for_is_still_a_leak():
     assert "linkedin" in leaked_secrets("Профиль: linkedin.com/in/bolatbek", _profile(),
                                         asked="Why do you want to join us?")

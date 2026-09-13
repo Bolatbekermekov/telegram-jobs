@@ -329,12 +329,13 @@ def _digits(s: str) -> str:
 # ответила ссылкой на GitHub, и отклик встал; Workable (лид #1164) одним полем
 # спрашивает «1) LinkedIn URL 2) Current Location …». Ссылку работодатель и так
 # видит в резюме. Почта и телефон сюда не входят: у формы для них свои поля.
+# Общий вопрос о ссылке принимает любую из трёх: в прогоне 4 модель ответила на
+# то же «Personal URL *» уже LinkedIn-ом, а не GitHub-ом.
+_ANY_LINK = r"\burls?\b|\blinks?\b|web\s?site|portfolio|personal (?:site|page)"
 _ASKED_FOR = {
-    "linkedin": re.compile(r"linked\s?in", re.I),
-    "github": re.compile(
-        r"git\s?hub|\burls?\b|\blinks?\b|web\s?site|portfolio|personal (?:site|page)", re.I),
-    "portfolio": re.compile(
-        r"\burls?\b|\blinks?\b|web\s?site|portfolio|personal (?:site|page)", re.I),
+    "linkedin": re.compile(rf"linked\s?in|{_ANY_LINK}", re.I),
+    "github": re.compile(rf"git\s?hub|{_ANY_LINK}", re.I),
+    "portfolio": re.compile(_ANY_LINK, re.I),
 }
 
 
