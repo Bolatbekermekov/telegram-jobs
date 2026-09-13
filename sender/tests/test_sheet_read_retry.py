@@ -68,6 +68,54 @@ def test_it_waits_longer_after_each_failure():
     assert waits == sorted(waits) and len(set(waits)) == len(waits)
 
 
+def test_a_token_refresh_timeout_is_retried():
+    """Живьём 2026-09-13, прогон 5: чтение упало не на `requests`, а на
+    `google.auth.exceptions.TransportError` — google-auth заворачивает таймаут
+    запроса ТОКЕНА (oauth2.googleapis.com) в своё исключение, и повтор его не
+    узнавал: прогон умер после проверки приглашений, не взяв ни одного лида."""
+    from google.auth.exceptions import TransportError
+    calls = []
+
+    def op():
+        calls.append(1)
+        if len(calls) < 2:
+            raise TransportError("HTTPSConnectionPool(host='oauth2.googleapis.com'): "
+                                 "Read timed out.")
+        return ["данные"]
+
+    assert sr._read_with_retry(op, sleep=lambda s: None) == ["данные"]
+
+
+def test_a_write_is_retried_when_the_token_never_arrived():
+    """Запись на таймауте не повторяется: запрос мог дойти, и повтор создал бы
+    дубль строки. Но `TransportError` google-auth рождается в
+    `credentials.before_request` — пока запрашивается ТОКЕН, до отправки самих
+    данных. Такая запись до Google не дошла, и повторить её безопасно."""
+    from google.auth.exceptions import TransportError
+    calls = []
+
+    def op():
+        calls.append(1)
+        if len(calls) < 2:
+            raise TransportError("token endpoint timed out")
+        return "ok"
+
+    assert sr._with_retry(op, sleep=lambda s: None) == "ok"
+
+
+def test_a_write_timeout_is_still_not_retried():
+    """Таймаут самого запроса данных по-прежнему не повторяется."""
+    calls = []
+
+    def op():
+        calls.append(1)
+        raise ReadTimeout("Read timed out")
+
+    with pytest.raises(ReadTimeout):
+        sr._with_retry(op, sleep=lambda s: None)
+    assert len(calls) == 1
+
+
 def test_the_client_gets_a_bounded_timeout(monkeypatch):
     """Без него чтение уходит в `read timeout=None` и ждёт вечно."""
     seen = {}

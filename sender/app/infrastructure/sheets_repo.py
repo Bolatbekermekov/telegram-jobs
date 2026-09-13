@@ -5,6 +5,7 @@ import time
 import gspread
 from requests.exceptions import (ConnectionError as RequestsConnectionError,
                                  Timeout as RequestsTimeout)
+from google.auth.exceptions import TransportError as AuthTransportError
 from google.oauth2.service_account import Credentials
 from gspread.exceptions import APIError
 from gspread.utils import ValueInputOption, rowcol_to_a1
@@ -35,6 +36,13 @@ _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _TRANSIENT_CODES = frozenset({429, 500, 502, 503, 504})
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY_SECONDS = 1.0
+
+# Сбой при получении ТОКЕНА. google-auth заворачивает таймаут запроса к
+# oauth2.googleapis.com в свой `TransportError` — это не `requests`, и прогон
+# 2026-09-13 умер на нём сразу после проверки приглашений. Рождается он в
+# `credentials.before_request`, ДО отправки самих данных, поэтому повторять его
+# безопасно и на записи: запрос до листа не дошёл, дубля строки не будет.
+_TOKEN_ERRORS = (AuthTransportError,)
 
 
 def _status_of(exc: APIError) -> int:
@@ -71,6 +79,10 @@ def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
     for attempt in range(attempts):
         try:
             return op()
+        except _TOKEN_ERRORS:
+            if attempt == attempts - 1:
+                raise
+            _sleep(_RETRY_BASE_DELAY_SECONDS * 2 ** attempt)
         except APIError as exc:
             if _status_of(exc) not in _TRANSIENT_CODES or attempt == attempts - 1:
                 raise
@@ -84,7 +96,7 @@ _HTTP_TIMEOUT_SECONDS = 60
 # Транспортные сбои, на которых ЧТЕНИЕ стоит повторить. Отдельно от `APIError`:
 # 2026-09-05 прогон умер на `requests.exceptions.ReadTimeout`, а `_with_retry`
 # ловит только `APIError` — то есть таймаут не пережил бы и путь записи.
-_TRANSPORT_ERRORS = (RequestsConnectionError, RequestsTimeout)
+_TRANSPORT_ERRORS = (RequestsConnectionError, RequestsTimeout) + _TOKEN_ERRORS
 
 
 def _read_with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
