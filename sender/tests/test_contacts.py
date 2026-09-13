@@ -18,7 +18,7 @@ from app.infrastructure.apply_profile_loader import load_apply_profile
 SIGN = ("С уважением, Bolatbek\n"
         "Telegram: @bolatbek_yermekov\n"
         "Email: ermekovbolatbek50@gmail.com\n"
-        "LinkedIn: https://www.linkedin.com/in/bolatbek-yermekov-9b2261418/")
+        "LinkedIn: https://www.linkedin.com/in/bolatbekermekov/")
 CONTACTS = parse_contacts(SIGN)
 
 
@@ -31,7 +31,7 @@ def _lead(text="Ищем Backend разработчика"):
 
 def test_contacts_come_from_the_signature_block():
     assert CONTACTS.telegram == "@bolatbek_yermekov"
-    assert CONTACTS.linkedin == "https://www.linkedin.com/in/bolatbek-yermekov-9b2261418/"
+    assert CONTACTS.linkedin == "https://www.linkedin.com/in/bolatbekermekov/"
 
 
 def test_a_signature_without_contact_lines_gives_nothing_to_enforce():
