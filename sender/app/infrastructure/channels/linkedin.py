@@ -1119,7 +1119,9 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
     from app.infrastructure.channels.external_apply import (
         _wants_cover_letter_file, fill_fields, scrape_until_ready,
     )
-    from app.application.auto_apply import answer_ai_fields, build_plan
+    from app.application.auto_apply import (
+        ApplyPlan, answer_ai_fields, build_plan, renumber_notice_answers,
+    )
 
     job_id = _job_id(job_url)
     _open_apply_flow(page, job_url)
@@ -1140,6 +1142,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
             _click_via_dom(submit.first)
             return
 
+        plan = None
         if profile is not None:
             # Only scrape when there is something to fill with. LinkedIn prefills
             # the contact step from the account itself, so a run without an apply
@@ -1195,6 +1198,21 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
         # their mere presence as a failure stopped the walk on step 1 with
         # "проверка не пройдена" and nothing to act on.
         said = _first_alert_text(page) or _first_field_error(page)
+        # Срок отработки строкой («1 month») на числовом поле без единицы — LinkedIn
+        # отвечает «Invalid input». Одна попытка тем же сроком в днях, и только после
+        # отказа формы: там, где строка годится, её и оставляем (живьём 2026-09-13,
+        # лиды #339, #866, #997).
+        if said and plan is not None:
+            again = renumber_notice_answers(plan)
+            if again:
+                fill_fields(page, ApplyPlan(actions=again), where="LinkedIn Easy Apply")
+                _click_via_dom(page.locator(SEL_APPLY_NEXT).first)
+                _settle(page)
+                if not _still_on_the_job(page, job_id):
+                    raise ManualApplyRequired(
+                        f"LinkedIn Easy Apply: форма закрылась на шаге {step + 1} "
+                        f"(браузер ушёл со страницы вакансии) — дожми вручную: {job_url}")
+                said = _first_alert_text(page) or _first_field_error(page)
         if said:
             raise ManualApplyRequired(
                 f"LinkedIn Easy Apply, шаг {step + 1}: форма не приняла — "

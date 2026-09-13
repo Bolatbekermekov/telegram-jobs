@@ -846,11 +846,10 @@ _NUMERIC_Q_RE = re.compile(
 # оно отвергает «Недопустимым значением» так же, как фразу (живьём 2026-09-05,
 # вакансии 4461771754 и 4463333146 — «Current CTC», «ECTC in lakhs per annum»).
 #
-# ТЕКУЩАЯ зарплата исключена, и это не осторожность, а граница: ожидаемую модель
-# считает по вакансии — так и написано в профиле («ПУСТО НАМЕРЕННО… пусть
-# считает модель»), — а текущая это ФАКТ о человеке, которого у нас нет. Число
-# на её месте было бы выдумкой о владельце, ушедшей работодателю. Для неё есть
-# `current_salary` в профиле; пока он пуст, поле честно достаётся человеку.
+# ТЕКУЩАЯ зарплата до 2026-09-13 была исключена как факт о владельце. С
+# 2026-09-13 владелец решил иначе: без цифры в `current_salary` модель оценивает
+# её по рынку страны вакансии (Strong Middle, без страны — Казахстан), так что
+# это тоже число.
 def _in_asked_units(question: str, value: str) -> str:
     """Значение в единицах, которые называет вопрос, — или как было.
 
@@ -861,6 +860,31 @@ def _in_asked_units(question: str, value: str) -> str:
     if not _NOTICE_RE.search(question or ""):
         return value
     return notice_period_in(question, value) or value
+
+
+def renumber_notice_answers(plan) -> list:
+    """Срок отработки числом ДНЕЙ — для полей, где форма отвергла строку.
+
+    Живьём 2026-09-13 (лиды #339, #866, #997, LinkedIn Easy Apply): «Notice
+    Period?» без единицы получил строку профиля «1 month», и LinkedIn ответил
+    «Invalid input» — поле числовое. Вопрос без единицы правило перевода не трогает
+    (`notice_period_in` отдаёт пусто), и это верно, пока форма строку принимает; а
+    после отказа нужно число. Дни — так срок считают формы индийского рынка, откуда
+    эти вакансии (рядом у них «Current CTC»).
+
+    Возвращает изменённые действия: их и надо заполнить заново.
+    """
+    changed = []
+    for a in plan.actions:
+        question = getattr(a.field, "question", "") or a.field.label or a.field.name or ""
+        value = (a.value or "").strip()
+        if not value or value.isdigit() or not _NOTICE_RE.search(question):
+            continue
+        days = notice_period_in("notice period in days", value)
+        if days:
+            a.value = days
+            changed.append(a)
+    return changed
 
 
 def _asks_for_a_number(field) -> bool:

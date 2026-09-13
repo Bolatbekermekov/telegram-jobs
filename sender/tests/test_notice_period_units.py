@@ -78,6 +78,36 @@ def test_the_owners_own_answer_is_converted_too():
         assert (action.value, action.source) == (want, "custom"), label
 
 
+def test_a_rejected_notice_answer_becomes_days():
+    """Живьём 2026-09-13 (лиды #339, #866, #997): LinkedIn Easy Apply, «Notice
+    Period?» без единицы — строка профиля «1 month» получила «Invalid input», поле
+    числовое. Единица не названа, поэтому число ставится только ПОСЛЕ отказа формы
+    и в днях: так срок отработки считают формы индийского рынка, откуда эти
+    вакансии (рядом у них «Current CTC»)."""
+    from app.application.auto_apply import ApplyPlan, FillAction, renumber_notice_answers
+
+    notice = FillAction(field=FieldObs(tag="input", type="text", label="Notice Period?", ref="0"),
+                        value="1 month", source="custom")
+    city = FillAction(field=FieldObs(tag="input", type="text", label="City", ref="1"),
+                      value="Astana", source="profile")
+    numeric = FillAction(field=FieldObs(tag="input", type="text", label="Notice period in days",
+                                        ref="2"), value="30", source="profile")
+
+    changed = renumber_notice_answers(ApplyPlan(actions=[notice, city, numeric]))
+
+    assert changed == [notice]
+    assert notice.value == "30"
+    assert (city.value, numeric.value) == ("Astana", "30")
+
+
+def test_nothing_to_renumber_says_so():
+    from app.application.auto_apply import ApplyPlan, FillAction, renumber_notice_answers
+
+    city = FillAction(field=FieldObs(tag="input", type="text", label="City", ref="1"),
+                      value="Astana", source="profile")
+    assert renumber_notice_answers(ApplyPlan(actions=[city])) == []
+
+
 def test_a_custom_answer_without_a_unit_question_is_untouched():
     """Перевод трогает только вопрос про срок отработки с названной единицей.
     Всё остальное в `custom_answers` обязано доехать буква в букву."""

@@ -698,6 +698,34 @@ def test_a_contact_with_neither_entry_in_the_menu_reads_as_accepted(monkeypatch)
     assert _li.read_invite_state(page, "https://www.linkedin.com/in/x/") == "accepted"
 
 
+def test_a_notice_period_the_form_rejected_is_retried_in_days(monkeypatch):
+    """Живьём 2026-09-13 (лиды #339, #866, #997): «Notice Period?» без единицы,
+    строка «1 month» — LinkedIn «Invalid input», поле числовое, и обход вставал
+    «форма не приняла». После отказа формы срок уходит числом дней, и «Далее»
+    нажимается ещё раз."""
+    import app.infrastructure.channels.external_apply as ea
+    from app.domain.apply_profile import ApplyProfile
+    from app.domain.page_observation import FieldObs, PageObservation
+
+    notice = FieldObs(tag="input", type="text", label="Notice Period?", required=True, ref="0")
+    monkeypatch.setattr(ea, "scrape_until_ready",
+                        lambda page: (PageObservation(url=page.url, fields=[notice]), None))
+    filled = []
+    monkeypatch.setattr(ea, "fill_fields",
+                        lambda page, plan, where="": filled.append([a.value for a in plan.actions]))
+    errors = iter(["«Notice Period?»: Invalid input 7/20 characters"])
+    monkeypatch.setattr(_li, "_first_field_error", lambda page: next(errors, ""))
+    monkeypatch.setattr(_li, "_still_on_the_job", lambda page, job_id: True)
+
+    page = _FakeApplyPage({SEL_EASY_APPLY: 1, SEL_APPLY_SUBMIT: [0, 1], SEL_APPLY_NEXT: 1},
+                          href="https://www.linkedin.com/jobs/view/9/apply/")
+    easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/9", OutreachContent(body="hi"),
+                        profile=ApplyProfile(full_name="B Y", notice_period="1 month"))
+
+    assert filled == [["1 month"], ["30"]]
+    assert ("native-click", SEL_APPLY_SUBMIT) in page.actions
+
+
 # --- Автор поста, когда ника нет в адресе -----------------------------------
 # Обе ссылки — из очереди прогона 2026-08-27, обе упали «не удалось определить
 # автора»: вместо ника автора в слаге стоят хештеги.
