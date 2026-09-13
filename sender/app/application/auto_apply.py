@@ -556,16 +556,16 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # current salary ?» это уверенно сообщало работодателю неверный факт о
     # человеке (поймано тестом 2026-09-05; ветка существовала задолго до него).
     #
-    # Нечем ответить — оставляем ПУСТЫМ, а не спрашиваем модель: ожидаемую она
-    # считает по вакансии, а текущая это факт о владельце, которого у неё нет.
-    # Пустое обязательное поле назовёт `unmapped_required` — сразу, по имени, до
-    # всякой отправки, и это честнее выдуманного числа.
+    # Цифры владельца нет — спрашиваем модель. Решение владельца 2026-09-13:
+    # средняя Strong Middle по рынку страны вакансии, без страны — по Казахстану
+    # (правило в `_QUESTIONS_SYSTEM`). Прежде поле оставалось пустым, и «Current
+    # CTC» уводил отклик в ручной (лиды #339, #864–#866, #881, #961, #997).
     if (caption_len <= _MAX_LABEL_CHARS
             and _CURRENT_SALARY_RE.search(low)
             and re.search(r"salary|compensation|ctc\b|зарплат|оклад", low)):
         if profile.current_salary:
             return FillAction(field=f, value=profile.current_salary, source="profile")
-        return FillAction(field=f, source="unmapped")
+        return FillAction(field=f, needs_ai=True, source="ai")
 
     if (caption_len <= _MAX_LABEL_CHARS
             and re.search(r"salary|compensation|expected pay|\brate\b|зарплат|оклад", low)):
@@ -869,7 +869,9 @@ def _asks_for_a_number(field) -> bool:
     label = field.label or field.name or ""
     if _NUMERIC_Q_RE.search(label):
         return True
-    return bool(_SALARY_Q_RE.search(label) and not _CURRENT_SALARY_RE.search(label))
+    # Текущая зарплата — тоже число: с 2026-09-13 модель её оценивает (решение
+    # владельца), а поле под неё у LinkedIn числовое и фразу отвергает.
+    return bool(_SALARY_Q_RE.search(label))
 
 
 def _ai_prompt(field) -> str:

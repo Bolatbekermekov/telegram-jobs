@@ -6,10 +6,11 @@
 отвергаются «Недопустимым значением», экран не меняется, обход упирается в
 предел шагов.
 
-Граница проходит между двумя разными вещами. Ожидаемую зарплату модель СЧИТАЕТ
-по тексту вакансии — так и написано в профиле («ПУСТО НАМЕРЕННО… пусть считает
-модель»). Текущая — ФАКТ о владельце, которого у модели нет, и число на её
-месте было бы выдумкой, ушедшей работодателю.
+Ожидаемую зарплату модель СЧИТАЕТ по тексту вакансии — так и написано в профиле
+(«ПУСТО НАМЕРЕННО… пусть считает модель»). Текущую до 2026-09-13 оставляли пустой
+как факт о владельце; с 2026-09-13 владелец решил иначе: без цифры в анкете модель
+называет среднюю Strong Middle по рынку страны вакансии, без страны — по
+Казахстану. Своя цифра владельца по-прежнему главнее.
 """
 from app.application.auto_apply import _asks_for_a_number, build_plan
 from app.domain.apply_profile import ApplyProfile
@@ -27,12 +28,11 @@ def test_expected_salary_asks_for_a_number():
     assert _asks_for_a_number(f("Expected compensation"))
 
 
-def test_current_salary_never_asks_for_a_number():
-    """Число здесь было бы выдумкой о владельце, а не ответом."""
-    assert not _asks_for_a_number(f("What is your current salary ?"))
-    assert not _asks_for_a_number(f("What is your CCTC in lakhs per annum?"))
-    assert not _asks_for_a_number(f("Current CTC"))
-    assert not _asks_for_a_number(f("Текущая зарплата"))
+def test_current_salary_asks_for_a_number_too():
+    """С 2026-09-13 модель её оценивает, а поле у LinkedIn числовое."""
+    assert _asks_for_a_number(f("What is your current salary ?"))
+    assert _asks_for_a_number(f("What is your CCTC in lakhs per annum?"))
+    assert _asks_for_a_number(f("Current CTC"))
 
 
 def test_current_salary_comes_from_the_profile_when_the_owner_filled_it():
@@ -56,9 +56,8 @@ def test_current_salary_is_not_answered_with_the_expected_one():
         profile, "")
     [action] = plan.actions
     assert action.value != "3000000"
-    # И не выдумано моделью: пустое поле назовут по имени до всякой отправки.
-    assert action.value == ""
-    assert "current salary" in " ".join(plan.unmapped_required())
+    # Оценивает модель по рынку страны вакансии (решение владельца 2026-09-13).
+    assert action.needs_ai and action.source == "ai"
 
 
 def test_expected_salary_still_uses_the_profile_when_it_is_set():
