@@ -214,3 +214,66 @@ def test_without_configured_sites_indeed_searches_where_it_always_did(monkeypatc
     monkeypatch.setattr(config, "INDEED_SITES", "")
     assert build_searcher("indeed")._sites == [
         IndeedSite("www.indeed.com", config.INDEED_LOCATION, "")]
+
+
+# --- описание вакансии на страновых сайтах ----------------------------------------
+
+class _DescribeTimeline:
+    """Страница вакансии, как на uk.indeed.com 2026-09-13: блока
+    `[data-testid="viewjob-job-content"]` нет, текст лежит в `#jobDescriptionText`.
+
+    Считает миллисекунды, которые ушли бы на ожидание: ожидание отсутствующего
+    селектора тратит свой таймаут целиком — ровно так ведёт себя Playwright.
+    """
+    PRESENT = {"#jobDescriptionText": "Build RAG pipelines on LangGraph.",
+               "body": "Skip to main content Build RAG pipelines on LangGraph."}
+
+    def __init__(self):
+        self.wasted_ms = 0
+        self.url = "https://uk.indeed.com/viewjob?jk=7777777777777777"
+
+    def goto(self, url, **kw):
+        self.url = url
+
+    def wait_for_selector(self, selector, timeout=None, state=None):
+        if not any(s.strip() in self.PRESENT for s in selector.split(",")):
+            self.wasted_ms += timeout or 30000
+            raise TimeoutError(selector)
+
+    def evaluate(self, script, *args):
+        return 0
+
+    def title(self):
+        return "AI Engineer - London - Indeed.com"
+
+    def locator(self, selector):
+        page = self
+
+        class _Loc:
+            @property
+            def first(self_inner):
+                return self_inner
+
+            def count(self_inner):
+                return 1 if selector in page.PRESENT else 0
+
+            def inner_text(self_inner, timeout=None):
+                if selector not in page.PRESENT:
+                    page.wasted_ms += timeout or 30000
+                    raise TimeoutError(selector)
+                return page.PRESENT[selector]
+
+        return _Loc()
+
+
+def test_a_page_without_the_new_block_is_read_without_waiting_it_out():
+    """Замер живого прогона 2026-09-13: каждая вакансия uk/ae.indeed.com была
+    открыта 20,7–21,2 с. Паузы там нет — `describe` ждал блок
+    `[data-testid="viewjob-job-content"]`, которого на этих страницах нет вовсе:
+    12 с на `wait_for_selector` и ещё 8 с на `inner_text` того же селектора, и
+    только потом читал `#jobDescriptionText`, где лежал весь текст (9721 символ).
+    126 вакансий по 21 с — сорок четыре минуты ожидания пустоты."""
+    page = _DescribeTimeline()
+    text = _searcher(page).describe(page.url)
+    assert text.startswith("Build RAG pipelines on LangGraph.")
+    assert page.wasted_ms == 0

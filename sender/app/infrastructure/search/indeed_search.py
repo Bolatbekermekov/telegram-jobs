@@ -410,10 +410,17 @@ class IndeedSearcher:
         честно оценит низко, а память отказников запомнит вакансию НАВСЕГДА и
         больше её не оценит. Поэтому проверка — исключение: `score_and_filter`
         пропускает такую вакансию, не записывая вердикта.
+
+        Ждётся ЛЮБОЙ из блоков описания, и отсутствующий пропускается сразу.
+        Замер живого прогона 2026-09-13: на uk/ae.indeed.com блока
+        `viewjob-job-content` нет вовсе, текст лежит в `#jobDescriptionText`, а
+        код ждал первый блок 12 с и ещё 8 с пытался прочитать его же — каждая
+        вакансия стоила 21 с ожидания пустоты.
         """
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            self._page.wait_for_selector(_DESCRIPTION_SELECTORS[0], timeout=12000)
+            self._page.wait_for_selector(", ".join(_DESCRIPTION_SELECTORS[:-1]),
+                                         timeout=12000, state="attached")
         except Exception:  # noqa: BLE001 — описание не обязано открыться
             state, detail = self._page_state()
             if state == "challenge":
@@ -422,7 +429,16 @@ class IndeedSearcher:
         text = ""
         for selector in _DESCRIPTION_SELECTORS:
             try:
-                text = self._page.locator(selector).first.inner_text(timeout=8000)
+                loc = self._page.locator(selector)
+            except Exception:  # noqa: BLE001 — блока может не быть, идём к запасному
+                continue
+            try:
+                if loc.count() == 0:
+                    continue
+            except Exception:  # noqa: BLE001 — не смогли спросить: пробуем прочитать
+                pass
+            try:
+                text = loc.first.inner_text(timeout=8000)
             except Exception:  # noqa: BLE001 — блока может не быть, идём к запасному
                 continue
             if (text or "").strip():
