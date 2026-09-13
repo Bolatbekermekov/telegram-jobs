@@ -229,6 +229,21 @@ _SCRAPE_JS = r"""() => {
     if (/(^|[^a-z])required([^a-z]|$)/i.test(l.className || '')) return true;
     return /\*\s*$/.test((l.textContent || '').trim());
   };
+  // Вопрос из заголовка блока поля — только для полей БЕЗ своей подписи.
+  // Живьём 2026-09-13, Ashby (лид #1163): поле даты без label[for] и aria-label
+  // подписывалось плейсхолдером «Pick date...», а вопрос «When is the earliest you
+  // would want to start…» стоял заголовком того же блока — и ни правило даты, ни
+  // модель не понимали, о чём спрашивают. Радио и чекбоксы сюда не ходят: их
+  // подписи — варианты ответа, и заголовок сделал бы все варианты одинаковыми.
+  const ownLabelled = el => !!(el.getAttribute('aria-label')
+      || (el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]'))
+      || el.closest('label'));
+  const questionTitle = el => {
+    const entry = el.closest('.ashby-application-form-field-entry, [data-field-path]');
+    const t = entry && entry.querySelector('.ashby-application-form-question-title, label');
+    return t ? norm(t.textContent) : '';
+  };
+  const fieldLabel = el => (ownLabelled(el) ? '' : questionTitle(el)) || labelFor(el);
   const seenGroup = new Set();
   const fields = [];
   controls.forEach((e, i) => {
@@ -256,7 +271,7 @@ _SCRAPE_JS = r"""() => {
     fields.push({
       tag: e.tagName.toLowerCase(),
       type: (e.type||'').toLowerCase(),
-      label: e.type === 'checkbox' ? checkboxLabel(e) : labelFor(e),
+      label: e.type === 'checkbox' ? checkboxLabel(e) : fieldLabel(e),
       name: e.name||'',
       required: e.required || e.getAttribute('aria-required')==='true',
       options: e.tagName==='SELECT' ? [...e.options].map(o=>norm(o.textContent)) : [],

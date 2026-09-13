@@ -150,7 +150,12 @@ SEL_INVITE_SEND = ("button[aria-label*='Отправить пригла'], butto
 # персонализированные приглашения") instead of the note field — so the note (our
 # cover letter) can't be attached at all. Detected to stop the platform for the
 # run rather than send note-less invites (verified live 2026-07-22).
-SEL_INVITE_LIMIT = "text=/персонализированны[хе] приглашени|personalized invitation/i"
+# Английский аккаунт (живьём 2026-09-13): «Send unlimited personalized invites with
+# Premium — You’ve used all your monthly custom invites». Прежний шаблон знал только
+# «personalized invitation», и девять приглашений упали «поле записки не найдено»,
+# вместо того чтобы уйти без записки.
+SEL_INVITE_LIMIT = ("text=/персонализированны[хе] приглашени|personalized invit|"
+                    "custom invites/i")
 # An invite already sent and not yet answered. Captured live 2026-07-29 on a
 # profile invited days earlier: an <a> reading «На рассмотрении» whose aria-label
 # is «На рассмотрении – нажмите, чтобы отозвать приглашение, отправленное
@@ -1339,6 +1344,12 @@ class LinkedInChannel:
                 f"LinkedIn: пост опубликован страницей компании ({href}) — "
                 f"ни сообщения, ни запроса на контакт ей не отправить, "
                 f"отклик руками: {post_url}")
+        # Удалённый пост (живьём 2026-09-13, «Post not found — This post was deleted
+        # or removed») — не «не нашли автора»: поста нет, и находка должна
+        # называться так же, как снятая вакансия.
+        if _job_page_is_gone(self._page):
+            from app.domain.page_gone import GONE_NOTE
+            raise ManualApplyRequired(f"{GONE_NOTE}: {post_url}")
         raise ChannelError(f"LinkedIn пост: не удалось определить автора: {post_url}")
 
     def invite_state(self, target: str) -> str:

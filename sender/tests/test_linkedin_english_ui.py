@@ -130,3 +130,26 @@ def test_an_english_invalid_input_is_found_and_names_the_field(page):
 def test_a_plain_character_counter_is_not_an_error(page):
     show(page, _COUNTER_EN)
     assert _first_field_error(page) == ""
+
+
+# --- лимит записок к приглашению --------------------------------------------------
+
+_UPSELL_EN = """
+<div role="dialog">
+  <h2>Send unlimited personalized invites with Premium</h2>
+  <p>You’ve used all your monthly custom invites. With Premium, personalize every
+     connection request, see who’s viewed your profile, and more.</p>
+  <button>Activate Premium for €0</button>
+</div>
+"""
+
+
+def test_the_english_note_quota_upsell_is_recognised(page):
+    """Живьём 2026-09-13: две записки ушли, девять следующих — нет. После «Add a
+    note» вместо поля записки открывалось окно Premium «You’ve used all your
+    monthly custom invites», а проверка лимита знала только «personalized
+    invitation» — и лиды падали «поле записки не найдено», вместо того чтобы уйти
+    приглашением без записки."""
+    from app.infrastructure.channels.linkedin import SEL_INVITE_LIMIT
+    show(page, _UPSELL_EN)
+    assert page.locator(SEL_INVITE_LIMIT).count() > 0

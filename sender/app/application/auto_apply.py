@@ -27,6 +27,8 @@ _MAX_LABEL_CHARS = 80
 # «Start date year*» (замер 2026-08-26).
 _AVAILABILITY_DATE_RE = re.compile(
     r"availab|available start|start date|starting date|joining|can you start|"
+    # «When is the earliest you would want to start at …?» (Ashby, 2026-09-13).
+    r"earliest\b.{0,40}\bstart|want to start|"
     r"notice period|дата выхода|когда.*готов", re.IGNORECASE)
 
 # Вопрос про срок отработки — без требования даты. Отдельно от

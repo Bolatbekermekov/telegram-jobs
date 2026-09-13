@@ -797,3 +797,20 @@ def test_invite_state_reads_the_author_off_the_page_too(monkeypatch):
 
     assert ch.invite_state(_SHARE_POST) == "pending"
     assert seen["url"] == "https://www.linkedin.com/in/rodion/"
+
+
+def test_a_deleted_post_is_a_gone_page_not_a_missing_author(monkeypatch):
+    """Живьём 2026-09-13, лиды #1049 и #1168 (один пост): страница отвечает «Post not
+    found — This post was deleted or removed», автора на ней нет, и канал падал
+    `failed` «не удалось определить автора». Поста просто нет — это та же находка,
+    что снятая вакансия, и называться она должна так же."""
+    from app.domain.channel import ManualApplyRequired
+    from app.domain.page_gone import GONE_NOTE
+    called = _patch_routes(monkeypatch)
+    monkeypatch.setattr(_li, "read_post_author_href", lambda page, url: "")
+    monkeypatch.setattr(_li, "_job_page_is_gone", lambda page: True)
+    ch = LinkedInChannel("state.json")
+    ch._page = object()
+    with pytest.raises(ManualApplyRequired, match=GONE_NOTE):
+        ch.send(_SHARE_POST, OutreachContent(body="hi"))
+    assert called == {}

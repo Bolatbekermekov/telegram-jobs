@@ -252,3 +252,14 @@ def test_a_contact_number_field_is_the_phone_from_the_profile():
 
 def test_a_whatsapp_number_is_the_phone_too():
     assert _m("WhatsApp number").value == "+7 775 720 0604"
+
+
+def test_the_earliest_start_question_gets_the_availability_date():
+    """Живьём 2026-09-13, Ashby (лид #1163): «When is the earliest you would want to
+    start at Ankar AI?» — правило даты выхода знало «start date» и «can you start»,
+    но не «earliest … start», и обязательное поле осталось пустым."""
+    from app.application.auto_apply import availability_iso
+    a = map_field(FieldObs(tag="input", type="date",
+                           label="When is the earliest you would want to start at Ankar AI?"),
+                  PROF, CV)
+    assert a.value == availability_iso(PROF.notice_period)

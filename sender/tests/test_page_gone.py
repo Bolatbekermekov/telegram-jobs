@@ -94,3 +94,11 @@ def test_linkedin_not_currently_accepting_applications_is_gone():
     assert page_is_gone("AI Engineer - Health care | LinkedIn",
                         "AI Nexus Innovations Hub\nAI Engineer - Health care\n"
                         "Not currently accepting applications") is True
+
+
+def test_a_deleted_linkedin_post_is_gone():
+    """Живьём 2026-09-13, лиды #1049 и #1168 (один и тот же пост): «Post not found —
+    This post was deleted or removed». Канал искал автора на пустой странице и
+    падал «не удалось определить автора», хотя поста просто нет."""
+    assert page_is_gone("Post | LinkedIn",
+                        "Profile viewers 45\nPost not found\nThis post was deleted or removed") is True
