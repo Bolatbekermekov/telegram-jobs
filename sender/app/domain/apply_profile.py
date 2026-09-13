@@ -130,3 +130,36 @@ class ApplyProfile:
         """
         return not (self.full_name.strip() or self.first_name.strip()
                     or self.email.strip())
+
+
+def apply_profile_facts(profile: ApplyProfile) -> str:
+    """Анкетные факты кандидата для модели, отвечающей на вопросы формы.
+
+    Правила форм берут ответы из этого профиля только для коротких подписей.
+    Вопрос-абзац уходит модели, а она видит резюме и profile.md, где нет ни
+    ссылки на LinkedIn, ни срока выхода, ни разрешения на работу, — и по правилу
+    честности оставляет такой факт пустым. Живьём 2026-09-13 (Workable, лид
+    #1164) так осталось пустым обязательное «1) LinkedIn URL 2) Current Location
+    3) Expected salary … 6) when you are available to start».
+
+    Почты и телефона здесь нет намеренно: у формы для них свои поля, а в
+    свободном ответе их остановит `apply_guard.leaked_secrets`.
+    """
+    if profile.is_blank():
+        return ""
+    years = profile.min_experience_years
+    rows = (
+        ("LinkedIn", profile.linkedin),
+        ("GitHub", profile.github),
+        ("Портфолио / сайт", profile.portfolio),
+        ("Где живёт", ", ".join(x for x in (profile.city, profile.country) if x)),
+        ("Разрешение на работу", profile.work_authorization),
+        ("Нужна визовая поддержка", "да" if profile.needs_visa_sponsorship else "нет"),
+        ("Готов к переезду", "да" if profile.open_to_relocation else "нет"),
+        ("Срок выхода на новую работу", profile.notice_period),
+        ("Лет коммерческого опыта", str(years) if years > 0 else ""),
+        ("Желаемая зарплата", profile.desired_salary),
+        ("Текущая зарплата", profile.current_salary),
+    )
+    lines = [f"- {name}: {value}" for name, value in rows if value]
+    return "=== АНКЕТА: факты кандидата для форм ===\n" + "\n".join(lines)

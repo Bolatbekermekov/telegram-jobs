@@ -490,6 +490,67 @@ def test_a_forbidden_page_is_named_instead_of_an_unrecognised_form():
     assert "не распознана" not in str(caught.value)
 
 
+class _RoutedPage(FakePage):
+    """Страница, у которой наблюдение зависит от адреса: goto меняет и то, и другое."""
+
+    def __init__(self, url, by_url):
+        super().__init__(by_url[url])
+        self.url, self._by_url, self.visited = url, by_url, []
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.visited.append(url)
+        self.url = url
+        self._obs = self._by_url[url]
+        self.present |= {f'[data-af="{f.ref}"]' for f in self._obs.fields}
+
+    def content(self):
+        return ""
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+def test_a_vendor_chat_iframe_still_leads_to_the_vendor_form():
+    """Живьём 2026-09-13, лид #1004 через LinkedIn: страница вакансии Teamtailor
+    встраивает чат-бота iframe-ом `…/messenger?job_id=N`. Хост вендора, значит
+    маршрут IFRAME_ATS, и мы уходили внутрь — в чат, где полей нет, и лид ложился
+    «форма не распознана». Переход к форме вендора делался только для пустой
+    страницы ДО iframe, а для пустой страницы, найденной ВНУТРИ, — нет."""
+    job = "https://acme.teamtailor.com/jobs/77-dev"
+    chat = "https://acme.teamtailor.com/messenger?job_id=77"
+    form = "https://acme.teamtailor.com/jobs/77/applications/new"
+    page = _RoutedPage(job, {
+        job: PageObservation(url=job, iframes=[chat]),
+        chat: PageObservation(url=chat),
+        form: PageObservation(url=form, file_inputs=1, fields=[
+            FieldObs(tag="input", type="email", label="Email", required=True, ref="0")]),
+    })
+    page.present.add(ea.SEL_SUBMIT)
+    ea.external_apply(page, job, OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert page.visited == [chat, form]
+    assert page.filled['[data-af="0"]'] == "a@b.com"
+    assert ea.SEL_SUBMIT in page.clicks
+
+
+def test_a_public_link_the_form_asks_for_goes_out():
+    """Живьём 2026-09-13, Factorial (лид #1044): обязательное «Personal URL *» ушло
+    модели, та честно ответила ссылкой на GitHub — и защита личных данных
+    остановила отклик, хотя именно эту ссылку поле и спрашивало."""
+    prof = ApplyProfile(full_name="B Y", email="a@b.com", github="https://github.com/bolatbek")
+    page = FakePage(PageObservation(url="https://careers.factorialhr.com/apply/x", file_inputs=1, fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),
+        FieldObs(tag="input", type="text", label="Personal URL *", required=True, ref="1"),
+    ]), present=[ea.SEL_SUBMIT])
+
+    def answerer(questions, vacancy_context):
+        return {q["id"]: {"text": "https://github.com/bolatbek"} for q in questions}
+
+    ea.external_apply(page, "https://careers.factorialhr.com/apply/x", OutreachContent(body="hi"),
+                      prof, "C:/cv.pdf", answerer=answerer)
+    assert page.filled['[data-af="1"]'] == "https://github.com/bolatbek"
+    assert ea.SEL_SUBMIT in page.clicks
+
+
 # --- injection guards -------------------------------------------------------
 
 def _obs_form_with_free_text(label, url="https://boards.greenhouse.io/acme/jobs/1"):

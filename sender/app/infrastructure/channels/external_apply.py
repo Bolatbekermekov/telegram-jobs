@@ -50,7 +50,11 @@ SEL_SUBMIT = (
 # Tags each fillable control with data-af=<idx> (a stable fill handle) and returns
 # a compact form snapshot. Mirrors the recon extractor used live on 2026-07-14.
 _SCRAPE_JS = r"""() => {
-  const norm = s => (s||'').replace(/\s+/g,' ').trim().slice(0,80);
+  let normLimit = 80;
+  const norm = s => (s||'').replace(/\s+/g,' ').trim().slice(0, normLimit);
+  // Та же подпись, но целиком — для модели (`question`). Подпись для правил
+  // остаётся короткой: по её длине они отличают подпись от абзаца.
+  const whole = read => { normLimit = 600; try { return read(); } finally { normLimit = 80; } };
   const labelFor = el => {
     if (el.getAttribute('aria-label')) return norm(el.getAttribute('aria-label'));
     if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]'); if (l) return norm(l.textContent); }
@@ -261,6 +265,7 @@ _SCRAPE_JS = r"""() => {
       const picked = g.find(r => r.checked);
       fields.push({
         tag: 'input', type: e.type, label: groupLabel(e), name: e.name,
+        question: whole(() => groupLabel(e)),
         required: g.some(r => r.required || r.getAttribute('aria-required')==='true'),
         options: groupOptions(e),
         value: picked ? labelFor(picked) : '',
@@ -272,6 +277,7 @@ _SCRAPE_JS = r"""() => {
       tag: e.tagName.toLowerCase(),
       type: (e.type||'').toLowerCase(),
       label: e.type === 'checkbox' ? checkboxLabel(e) : fieldLabel(e),
+      question: whole(() => e.type === 'checkbox' ? checkboxLabel(e) : fieldLabel(e)),
       name: e.name||'',
       required: e.required || e.getAttribute('aria-required')==='true',
       options: e.tagName==='SELECT' ? [...e.options].map(o=>norm(o.textContent)) : [],
@@ -314,6 +320,7 @@ _SCRAPE_JS = r"""() => {
     fields.push({
       tag: 'input', type: 'radio',
       label: lab ? norm(lab.textContent) : '',
+      question: lab ? whole(() => norm(lab.textContent)) : '',
       name: '',
       required: markedRequiredNode(lab),
       options: g.map(b => norm(b.textContent)),
@@ -344,7 +351,7 @@ def observation_to_raw(obs: PageObservation) -> dict:
         "url": obs.url,
         "fields": [{"tag": f.tag, "type": f.type, "label": f.label, "name": f.name,
                     "required": f.required, "options": f.options, "value": f.value,
-                    "combobox": f.combobox, "ref": f.ref}
+                    "combobox": f.combobox, "ref": f.ref, "question": f.question}
                    for f in obs.fields],
         "file_inputs": obs.file_inputs, "iframes": obs.iframes,
         "mailto": obs.mailto_links, "apply_buttons": obs.apply_buttons,
@@ -360,7 +367,8 @@ def _build_observation(raw: dict) -> PageObservation:
                        value=f.get("value", "") or "",
                        combobox=bool(f.get("combobox")),
                        max_len=int(f.get("max_len") or 0),
-                       ref=f.get("ref", "")) for f in raw.get("fields", [])]
+                       ref=f.get("ref", ""),
+                       question=f.get("question", "") or "") for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),
         iframes=raw.get("iframes", []), mailto_links=raw.get("mailto", []),
@@ -1192,6 +1200,12 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     if route is Route.IFRAME_ATS:
         _enter_ats_iframe(page, obs)
         obs, route = scrape_until_ready(page)
+        if route is Route.NONE:
+            # Внутри iframe вендора бывает не форма, а его же чат-бот. Живьём
+            # 2026-09-13 (лид #1004): страница вакансии Teamtailor встраивает
+            # `…/messenger?job_id=N`, полей там нет — а форма лежит у того же
+            # вендора по соседнему адресу.
+            obs, route = _hop_to_embedded_form(page, obs, route)
     if route is Route.GATED:
         raise ManualApplyRequired(f"за гейтом (CAPTCHA/логин): {obs.url}")
     if route is not Route.FORM:
@@ -1244,9 +1258,11 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
 
     # The ATS collects contact details in their own fields, so a model-written
     # answer restating them means the page asked for them. Checked on AI answers
-    # only — profile-sourced fields are supposed to carry these values.
+    # only — profile-sourced fields are supposed to carry these values. Публичная
+    # ссылка, о которой спрашивает сам вопрос, утечкой не считается.
     for a in plan.ai_fields:
-        leaked = leaked_secrets(a.value, profile)
+        leaked = leaked_secrets(a.value, profile,
+                                asked=a.field.question or a.field.label or a.field.name)
         if leaked:
             raise ManualApplyRequired(
                 f"ответ ИИ содержит личные данные {leaked} "

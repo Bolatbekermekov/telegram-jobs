@@ -113,6 +113,30 @@ def test_empty_text_leaks_nothing():
     assert leaked_secrets("", _profile()) == []
 
 
+def test_a_public_link_the_question_asks_for_is_not_a_leak():
+    """Живьём 2026-09-13. Factorial (лид #1044): «Personal URL *», модель честно
+    ответила ссылкой на GitHub, отклик остановлен. Workable (лид #1164): одно поле
+    «1) LinkedIn URL 2) Current Location 3) Expected salary …». Публичную ссылку
+    работодатель и так видит в резюме; подозрительна она только в ответе на
+    вопрос, который её не спрашивал."""
+    assert leaked_secrets("Профиль: linkedin.com/in/bolatbek", _profile(),
+                          asked="1) LinkedIn URL 2) Current Location") == []
+    gh = _profile(github="https://github.com/bolatbek")
+    assert leaked_secrets("https://github.com/bolatbek", gh, asked="Personal URL *") == []
+
+
+def test_a_link_nobody_asked_for_is_still_a_leak():
+    assert "linkedin" in leaked_secrets("Профиль: linkedin.com/in/bolatbek", _profile(),
+                                        asked="Why do you want to join us?")
+
+
+def test_email_and_phone_stay_leaks_even_when_the_question_names_them():
+    """Для почты и телефона у формы свои поля — в свободном тексте они лишние."""
+    found = leaked_secrets("bolatbek@example.com, 77001234567", _profile(),
+                           asked="Email, phone and LinkedIn URL")
+    assert set(found) == {"email", "phone"}
+
+
 # --- routes seen live on 2026-07-20 (make apply_probe) ----------------------
 
 def test_ats_vendor_behind_a_company_page_is_allowed():

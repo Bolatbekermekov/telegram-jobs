@@ -21,6 +21,8 @@ def _hh_answerer(config):
         return None
 
     def answer(questions, vacancy_context):
+        from app.domain.apply_profile import apply_profile_facts
+        from app.infrastructure.apply_profile_loader import load_apply_profile
         from app.infrastructure.cv_loader import load_cv_text, load_text_file
         from app.infrastructure.openai_client import OpenAIMessageGenerator
         ai = OpenAIMessageGenerator(api_key, config.LLM_MODEL,
@@ -28,6 +30,13 @@ def _hh_answerer(config):
                                     base_url=getattr(config, "LLM_BASE_URL", None))
         cv = load_cv_text(config.CV_PATH)
         profile = load_text_file(config.PROFILE_PATH)
+        # Анкета из apply_profile.yml — к профилю: вопрос-абзац формы спрашивает
+        # ссылку на LinkedIn, срок выхода и разрешение на работу, а в резюме и
+        # profile.md их нет (см. apply_profile_facts).
+        facts = apply_profile_facts(load_apply_profile(
+            getattr(config, "APPLY_PROFILE_PATH", ""), getattr(config, "CONTACTS", None)))
+        if facts:
+            profile = f"{profile}\n\n{facts}"
         answers = ai.answer_questions(cv, profile, vacancy_context, questions)
         # Один и тот же ник во всех ответах — тот, что стоит в подписи. Правка
         # здесь, а не в каждом канале: этот answerer обслуживает и hh, и внешние

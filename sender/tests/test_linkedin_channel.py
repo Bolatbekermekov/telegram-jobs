@@ -663,6 +663,41 @@ def test_a_page_with_no_message_affordance_reads_as_pending():
     assert read_invite_state(page, "https://linkedin.com/in/x") == "pending"
 
 
+def _no_topcard_connect(monkeypatch):
+    """`_topcard_connect` ищет Connect рядом со ссылкой на сообщение через xpath,
+    а фейку это не по силам. На карточке #1172 Connect нет — это и подставляем."""
+    from app.infrastructure.channels import linkedin as _li
+    monkeypatch.setattr(_li, "_topcard_connect", lambda page: None)
+
+
+def test_a_pending_invite_hidden_in_the_more_menu_is_still_pending(monkeypatch):
+    """Живьём 2026-09-13, лид #1172 (/in/fernandaferrari2/): на карточке профиля
+    «Follow», «Message» и «More», а «Pending» — пунктом внутри «More». Отметки на
+    карточке нет, Connect нет, ссылка на сообщение есть — и проверка отвечала
+    «accepted». Прогон писал письмо (платная генерация), упирался в InMail и
+    оставлял лида 'invited' — и так на каждом прогоне заново."""
+    from app.infrastructure.channels import linkedin as _li
+    _no_topcard_connect(monkeypatch)
+    page = _FakePage({_li.SEL_MORE_BTN: 1, _li.SEL_COMPOSE: 1,
+                      _li.SEL_MENU_INVITE_ENTRY: 1, _li.SEL_MENU_PENDING: 1})
+    assert _li.read_invite_state(page, "https://www.linkedin.com/in/x/") == "pending"
+
+
+def test_a_connect_entry_in_the_more_menu_still_means_gone(monkeypatch):
+    from app.infrastructure.channels import linkedin as _li
+    _no_topcard_connect(monkeypatch)
+    page = _FakePage({_li.SEL_MORE_BTN: 1, _li.SEL_COMPOSE: 1,
+                      _li.SEL_MENU_INVITE_ENTRY: 1, _li.SEL_MENU_CONNECT: 1})
+    assert _li.read_invite_state(page, "https://www.linkedin.com/in/x/") == "gone"
+
+
+def test_a_contact_with_neither_entry_in_the_menu_reads_as_accepted(monkeypatch):
+    from app.infrastructure.channels import linkedin as _li
+    _no_topcard_connect(monkeypatch)
+    page = _FakePage({_li.SEL_MORE_BTN: 1, _li.SEL_COMPOSE: 1})
+    assert _li.read_invite_state(page, "https://www.linkedin.com/in/x/") == "accepted"
+
+
 # --- Автор поста, когда ника нет в адресе -----------------------------------
 # Обе ссылки — из очереди прогона 2026-08-27, обе упали «не удалось определить
 # автора»: вместо ника автора в слаге стоят хештеги.

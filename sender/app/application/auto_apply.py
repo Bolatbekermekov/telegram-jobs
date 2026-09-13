@@ -411,7 +411,11 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # limit and switch off every keyword rule for it. That is what kept the
     # salary question unanswered on lead 123 after the model was already
     # answering it correctly in isolation (measured 2026-07-29).
-    caption_len = len((f.label or "").strip() or low)
+    # И на ВОПРОСЕ целиком, а не на подписи: скрапер режет подпись до 80 знаков,
+    # и абзац в 250 знаков сходил за короткую подпись. Живьём 2026-09-13 (Workable,
+    # лид #1164) правило текущей зарплаты нашло в обрубке «2) Current Location
+    # 3) Expected salary» и оставило обязательное поле пустым, не спросив модель.
+    caption_len = len((getattr(f, "question", "") or f.label or "").strip() or low)
 
     if f.type == "file":
         # Сопроводительное письмо — отдельный документ, и оно у нас есть: письмо
@@ -829,7 +833,8 @@ def _ai_prompt(field) -> str:
     отсутствие стоит отклика: ответ, который в поле не влезает, LinkedIn не
     отвергает вслух — он молча не даёт экрану смениться.
     """
-    prompt = field.label or field.name or ""
+    # Вопрос целиком, а не обрезанная подпись: см. FieldObs.question.
+    prompt = getattr(field, "question", "") or field.label or field.name or ""
     if _asks_for_a_number(field):
         prompt += " (ответ: ТОЛЬКО число, без валюты, символов и слов)"
     limit = getattr(field, "max_len", 0) or 0

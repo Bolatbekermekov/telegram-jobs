@@ -100,6 +100,13 @@ SEL_CONNECT_TEXT = ("a:has-text('Установить контакт'), button:h
 SEL_MORE_BTN = f"{_TOPCARD} button[aria-label='Еще'], {_TOPCARD} button[aria-label='More']"
 SEL_MENU_CONNECT = ("a[role='menuitem']:has-text('Установить контакт'), "
                     "a[role='menuitem']:has-text('Connect')")
+# «Pending» пунктом меню «More». У части профилей карточка показывает Follow +
+# Message, а отметка о висящем приглашении живёт в меню (живьём 2026-09-13,
+# лид #1172) — там её и надо искать, прежде чем назвать приглашение принятым.
+SEL_MENU_PENDING = ("[role='menuitem']:has-text('Pending'), "
+                    "[role='menuitem']:has-text('На рассмотрении'), "
+                    "[role='menuitem']:has-text('Ожидание')")
+SEL_MENU_INVITE_ENTRY = f"{SEL_MENU_CONNECT}, {SEL_MENU_PENDING}"
 # Message overlay (LinkedIn msg-form; classes are language-independent).
 SEL_MSG_BOX = ("div.msg-form__contenteditable[contenteditable='true'], "
                "[role='textbox'][contenteditable='true']")
@@ -454,6 +461,26 @@ def _open_more_menu(page) -> bool:
     return False
 
 
+def _more_menu_invite_entry(page) -> str:
+    """Что меню «More» говорит о приглашении: "connect", "pending" или "".
+
+    Оба пункта ждём разом: у второго-третьего круга в меню Connect, у висящего
+    приглашения — Pending, у контакта — ни того, ни другого. Ждать их по очереди
+    значило бы платить таймаутом первого на каждом профиле.
+    """
+    for attempt in range(2):
+        try:
+            _click_via_dom(page.locator(SEL_MORE_BTN).first)
+        except Exception:  # noqa: BLE001 — stale handle; the retry re-resolves it
+            pass
+        if _visible(page, SEL_MENU_INVITE_ENTRY, timeout=4000):
+            entry = "pending" if page.locator(SEL_MENU_PENDING).count() > 0 else "connect"
+            page.keyboard.press("Escape")      # leave the menu off the message button
+            return entry
+        page.wait_for_timeout(800)
+    return ""
+
+
 def _topcard_connect(page):
     """The profile's OWN top-card Connect control, or None if it has none.
 
@@ -572,9 +599,12 @@ def read_invite_state(page, profile_url: str) -> str:
         return "pending"
     if _topcard_connect(page) is not None:
         return "gone"
-    if page.locator(SEL_MORE_BTN).count() > 0 and _open_more_menu(page):
-        page.keyboard.press("Escape")      # leave the menu off the message button
-        return "gone"
+    if page.locator(SEL_MORE_BTN).count() > 0:
+        entry = _more_menu_invite_entry(page)
+        if entry == "connect":
+            return "gone"
+        if entry == "pending":
+            return "pending"               # отметка в меню, а не на карточке (#1172)
     if page.locator(SEL_COMPOSE).count() == 0:
         return "pending"                   # not a profile card we can read
     return "accepted"

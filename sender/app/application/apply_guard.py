@@ -324,13 +324,30 @@ def _digits(s: str) -> str:
     return re.sub(r"\D", "", s or "")
 
 
-def leaked_secrets(text: str, profile) -> list[str]:
+# Публичная ссылка кандидата — не утечка, когда о ней спрашивает сам вопрос.
+# Живьём 2026-09-13: Factorial (лид #1044) «Personal URL *» — модель честно
+# ответила ссылкой на GitHub, и отклик встал; Workable (лид #1164) одним полем
+# спрашивает «1) LinkedIn URL 2) Current Location …». Ссылку работодатель и так
+# видит в резюме. Почта и телефон сюда не входят: у формы для них свои поля.
+_ASKED_FOR = {
+    "linkedin": re.compile(r"linked\s?in", re.I),
+    "github": re.compile(
+        r"git\s?hub|\burls?\b|\blinks?\b|web\s?site|portfolio|personal (?:site|page)", re.I),
+    "portfolio": re.compile(
+        r"\burls?\b|\blinks?\b|web\s?site|portfolio|personal (?:site|page)", re.I),
+}
+
+
+def leaked_secrets(text: str, profile, asked: str = "") -> list[str]:
     """Names of the profile's contact details that `text` reproduces.
 
     A model answering "tell us about yourself" has no reason to restate the
     candidate's email or phone number — the ATS collects those in their own
     fields. When one shows up in free text, the likeliest cause is a page that
     asked for it, so the answer must not be submitted.
+
+    `asked` — the question itself: a public link it names is the answer, not a
+    leak (see `_ASKED_FOR`).
     """
     found = []
     low = (text or "").lower()
@@ -346,7 +363,7 @@ def leaked_secrets(text: str, profile) -> list[str]:
 
     for attr in ("linkedin", "github", "portfolio"):
         val = (getattr(profile, attr, "") or "").strip().lower()
-        if len(val) >= 8 and val in low:
+        if len(val) >= 8 and val in low and not _ASKED_FOR[attr].search(asked or ""):
             found.append(attr)
 
     return found
