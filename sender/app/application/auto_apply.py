@@ -42,7 +42,11 @@ _CURRENT_SALARY_RE = re.compile(r"\bcurrent\b|\bcctc\b|текущ", re.I)
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
     (re.compile(r"e-?mail", re.I), lambda p: p.email),
-    (re.compile(r"phone|mobile|\btel\b", re.I), lambda p: p.phone),
+    # «Contact Number» и WhatsApp — тоже телефон (живьём 2026-09-13, лид #1163:
+    # поле ушло модели, та подставила номер, и защита личных данных остановила
+    # отклик). Телефон — факт профиля, а не ответ модели.
+    (re.compile(r"phone|mobile|\btel\b|телефон|whats\s?app|contact\s*(?:number|no\b)", re.I),
+     lambda p: p.phone),
     (re.compile(r"first name|given name", re.I), lambda p: p.first_name),
     (re.compile(r"last name|surname|family name", re.I), lambda p: p.last_name),
     (re.compile(r"full name|your name|\bname\b", re.I), lambda p: p.full_name),
@@ -74,7 +78,8 @@ _LABEL_RULES = [
 # Подписи взяты у самих правил, а не написаны заново: «\bname\b» покрывает
 # first/last/full/given/family name, «surname» словом не режется.
 _ONE_TRUE_VALUE_RE = re.compile(
-    r"e-?mail|phone|mobile|\btel\b|\bname\b|surname|linkedin|telegram|телеграм|"
+    r"e-?mail|phone|mobile|\btel\b|телефон|whats\s?app|contact\s*(?:number|no\b)|"
+    r"\bname\b|surname|linkedin|telegram|телеграм|"
     r"\btg\b|github|portfolio|personal website|website|\burl\b", re.I)
 
 
@@ -707,7 +712,8 @@ def _option_index_for(options: list[str], value: str) -> int | None:
 
 
 _COUNTRY_CODE_LABEL_RE = re.compile(r"country code|код страны", re.IGNORECASE)
-_PHONE_LABEL_RE = re.compile(r"phone|mobile|телефон", re.IGNORECASE)
+_PHONE_LABEL_RE = re.compile(r"phone|mobile|телефон|whats\s?app|contact\s*(?:number|no\b)",
+                             re.IGNORECASE)
 _LEADING_COUNTRY_CODE_RE = re.compile(r"^\+\d{1,3}[\s\-()]*")
 
 

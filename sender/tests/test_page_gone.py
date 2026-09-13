@@ -84,3 +84,13 @@ def test_the_same_words_inside_a_live_description_are_not_a_state():
             "You will handle job not found errors in the scheduler.\n"
             "If the page you are looking for doesn't exist, we render a 404.")
     assert page_is_gone("Senior Backend Engineer — Acme", text) is False
+
+
+def test_linkedin_not_currently_accepting_applications_is_gone():
+    """Живьём 2026-09-13, вакансия 4462691533 (лид #998): английский LinkedIn пишет
+    «Not currently accepting applications», а правило знало «not accepting
+    applications» подряд — лишнее слово ломало совпадение, и закрытая вакансия
+    ушла в ручные как «нет ссылки внешнего отклика»."""
+    assert page_is_gone("AI Engineer - Health care | LinkedIn",
+                        "AI Nexus Innovations Hub\nAI Engineer - Health care\n"
+                        "Not currently accepting applications") is True

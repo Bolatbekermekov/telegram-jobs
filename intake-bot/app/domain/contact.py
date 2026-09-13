@@ -14,6 +14,7 @@ Threads is deliberately last: a recruiter who drops a thread link next to their 
 post. Only the post author's own handle is exempt (see detect_contact).
 """
 import re
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 from dataclasses import dataclass
 
 
@@ -147,6 +148,33 @@ _SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 _LINKEDIN_APEX_RE = re.compile(r"^https?://linkedin\.com/", re.IGNORECASE)
 
 
+# Обёртки, за которыми LinkedIn прячет настоящую ссылку, открытую без входа.
+# Живьём 2026-09-13: четыре лида пришли с целью
+# `linkedin.com/signup/cold-join?session_redirect=<пост>`, канал шёл на страницу
+# регистрации, не находил ни «Сообщение», ни «Контакт» — и все четыре `failed`.
+_LINKEDIN_WRAPPER_RE = re.compile(
+    r"^https?://(?:www\.)?linkedin\.com/(?:signup/cold-join|authwall|login|uas/login)\b", re.I)
+_LINKEDIN_REDIRECT_PARAMS = ("session_redirect", "sessionRedirect")
+_LINKEDIN_INNER_RE = re.compile(r"^https?://(?:[\w-]+\.)*linkedin\.com/", re.I)
+# Метки «поделиться»: адрес поста от них не зависит, а дубли по ним плодятся.
+_SHARE_TRACKING_RE = re.compile(r"^(?:utm_\w+|rcm|trk|lipi|trackingId|refId)$")
+
+
+def _unwrap_linkedin(url: str) -> str:
+    """Настоящая ссылка из обёртки регистрации/входа LinkedIn — или `url` как был."""
+    if not _LINKEDIN_WRAPPER_RE.match(url):
+        return url
+    params = parse_qs(urlsplit(url).query)
+    for name in _LINKEDIN_REDIRECT_PARAMS:
+        inner = (params.get(name) or [""])[0]
+        if inner and _LINKEDIN_INNER_RE.match(inner):
+            parts = urlsplit(inner)
+            kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                    if not _SHARE_TRACKING_RE.match(k)]
+            return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), ""))
+    return url
+
+
 def canonical_linkedin_url(url: str) -> str:
     """A LinkedIn link -> one the fetcher can actually open.
 
@@ -157,9 +185,13 @@ def canonical_linkedin_url(url: str) -> str:
     downstream could tell them apart — the read just came back empty. Subdomains
     other than the apex are left as written: they were not measured, and a guess
     here is a silently empty read.
+
+    Обёртка регистрации или входа разворачивается в ссылку, которую она прячет
+    (см. `_unwrap_linkedin`): страница регистрации — не пост и не профиль.
     """
     if not _SCHEME_RE.match(url):
         url = f"https://{url}"
+    url = _unwrap_linkedin(_LINKEDIN_APEX_RE.sub("https://www.linkedin.com/", url, count=1))
     return _LINKEDIN_APEX_RE.sub("https://www.linkedin.com/", url, count=1)
 
 

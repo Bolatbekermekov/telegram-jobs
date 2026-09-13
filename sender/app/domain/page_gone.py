@@ -25,7 +25,7 @@ GONE_NOTE = "страница недоступна / вакансия неакт
 _GONE_RE = re.compile(
     r"no longer (available|accepting|active)"
     r"|(position|role|job|vacancy|posting) (has been |is )?(closed|filled|expired|removed)"
-    r"|not accepting applications|page (not found|does ?n'?t exist)|404 error"
+    r"|not (currently )?accepting applications|page (not found|does ?n'?t exist)|404 error"
     r"|вакансия (снят|закрыт|не найден|неактивн|больше не)|страница не найдена|больше не принима",
     re.I)
 

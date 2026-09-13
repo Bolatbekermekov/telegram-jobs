@@ -335,3 +335,23 @@ def test_a_confirmation_at_the_bottom_counts_too():
     ea._verify_submitted(_Page(text=long_page,
                                fields=[FieldObs(tag="input", label="Email", ref="0")]),
                          "https://ats.example/apply")
+
+
+def test_an_emailed_code_prompt_is_named_not_reported_as_maybe_sent(monkeypatch):
+    """Живьём 2026-09-13, лид #1177 (Greenhouse, SumUp): после отправки форма
+    осталась, а внизу — «A verification code was sent to …. To submit your
+    application, enter the 8-character code to confirm you're a human». Исход
+    известен точно: заявка не ушла, нужен код из почты владельца. «Возможно, уже
+    ушла» здесь неправда, и она отговаривает довести отклик до конца."""
+    monkeypatch.setattr(ea, "_dump_form_debug", lambda page, tag, locator=None: None)
+    page = _Page(text=("Security code A verification code was sent to someone@gmail.com. "
+                       "To submit your application, enter the 8-character code to confirm "
+                       "you're a human. Submit application"),
+                 fields=[FieldObs(tag="input", label="Security code", ref="0")],
+                 url="https://job-boards.greenhouse.io/embed/job_app?for=acme")
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, "https://job-boards.greenhouse.io/embed/job_app?for=acme")
+
+    said = str(err.value)
+    assert "код" in said and "НЕ ушла" in said
+    assert "ВОЗМОЖНО" not in said

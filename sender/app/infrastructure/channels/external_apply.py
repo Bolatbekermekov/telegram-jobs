@@ -1227,6 +1227,9 @@ _SUBMITTED_RE = re.compile(
     r"thank you for (?:applying|your application)|thanks for applying|"
     r"application (?:submitted|received|complete)|"
     r"we(?:'ve| have) received your application|your application (?:was|has been) sent|"
+    # Recruitee: «All done! Your application has been successfully submitted!» —
+    # слова между «application» и «submitted» ломали прежнее совпадение.
+    r"application has been (?:successfully )?(?:submitted|received|sent)|"
     r"заявка (?:отправлена|принята|получена)|спасибо за (?:отклик|заявку)",
     re.IGNORECASE)
 # An Ashby submit uploads the CV and then re-renders; six seconds was not enough
@@ -1266,6 +1269,25 @@ def _submit_count(page) -> int:
         return page.locator(SEL_SUBMIT).count()
     except Exception:  # noqa: BLE001
         return -1
+
+
+_EMAILED_CODE_RE = re.compile(
+    r"verification code (?:was |has been )?sent|enter the \d+[- ]character code|"
+    r"confirm (?:that )?you'?re a human|код подтверждения (?:отправлен|выслан)|"
+    r"введите код из письма",
+    re.IGNORECASE)
+
+
+def asks_for_emailed_code(page_text: str) -> bool:
+    """Просит ли страница после отправки код из письма, чтобы подтвердить человека.
+
+    Живьём 2026-09-13, Greenhouse (лид #1177): «A verification code was sent to
+    …@gmail.com. To submit your application, enter the 8-character code to
+    confirm you're a human». Код приходит на почту владельца, и доставать его
+    оттуда автоматически — значит обходить проверку. Исход при этом известен
+    точно: заявка не ушла, и человеку надо сказать ровно это.
+    """
+    return bool(_EMAILED_CODE_RE.search(page_text or ""))
 
 
 def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
@@ -1318,6 +1340,11 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
         raise ManualApplyRequired(
             "ATS показал капчу после отправки — заявка НЕ ушла, "
             f"подать можно только вручную: {url}")
+    # Код из письма «подтвердите, что вы человек» — известный исход, не «не знаю».
+    if asks_for_emailed_code(_page_text(page)):
+        raise ManualApplyRequired(
+            "ATS прислал на почту код подтверждения («подтвердите, что вы человек») — "
+            f"заявка НЕ ушла: введи код из письма и отправь вручную: {url}")
     said = _visible_error(page)
     if _BOT_BLOCKED_RE.search(said) or _BOT_BLOCKED_RE.search(_page_text(page)):
         raise ManualApplyRequired(

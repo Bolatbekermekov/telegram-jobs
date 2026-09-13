@@ -241,3 +241,14 @@ def test_a_lone_unrecognised_checkbox_is_not_ticked_by_a_guess():
     «на всякий случай» значит согласиться за человека неизвестно с чем."""
     a = _m("Subscribe me to the newsletter", type="checkbox")
     assert a.value == "" and a.source == "unmapped"
+
+
+def test_a_contact_number_field_is_the_phone_from_the_profile():
+    """Живьём 2026-09-13, лид #1163 (Ashby): поле «Contact Number» не узналось как
+    телефон и ушло модели; модель подставила номер, а защита «ответ ИИ содержит
+    личные данные» остановила отклик. Телефон — факт профиля, а не ответ модели."""
+    assert _m("Contact Number").value == "+7 775 720 0604"
+
+
+def test_a_whatsapp_number_is_the_phone_too():
+    assert _m("WhatsApp number").value == "+7 775 720 0604"

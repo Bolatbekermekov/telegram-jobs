@@ -133,7 +133,11 @@ SEL_MSG_BUBBLE = "div.msg-overlay-conversation-bubble"
 # once they accept — that lands out of context (they often reply first), so the
 # connection request + cover-letter note is the whole outreach; the CV goes only
 # when we can message directly (an existing 1st-degree connection).
-SEL_PERSONALIZE = "button:has-text('Персонализировать'), button:has-text('Personalize')"
+# Английский аккаунт (живьём 2026-09-13) показывает «Add a note to your
+# invitation?» с кнопками «Add a note» / «Send without a note», и без этой строки
+# каждое приглашение считалось неоткрывшимся: 10 лидов `failed` за прогон.
+SEL_PERSONALIZE = ("button:has-text('Персонализировать'), button:has-text('Personalize'), "
+                   "button:has-text('Add a note'), button:has-text('Добавить заметку')")
 SEL_NOTE_BOX = "textarea"                       # the modal's only textarea (shadow DOM)
 # The send button reads "Отправить" but its accessible label is the fuller
 # "Отправить приглашение" — :text-is misses it (nested markup gives it no exact
@@ -194,8 +198,16 @@ _NOTE_LIMIT = 200
 # подходит тоже: живьём оно дало 0 совпадений на всех трёх страницах, LinkedIn
 # оставил только имена элементов. Два хука вместо одного — на случай, если одно
 # из имён уедет: href у обоих, по замеру, один и тот же.
+# Новая лента (живьём 2026-09-13) без говорящих классов и без `data-view-name`:
+# старые два селектора находили 0, и посты уходили в `failed`. Устойчиво одно —
+# карточка поста `div[role=listitem]` с `componentkey` на `update-card`; первая
+# ссылка на профиль или страницу В НЕЙ и есть автор. Ссылки вне карточки
+# (подсказки поиска, свой профиль в шапке) стоят в разметке раньше неё.
+_UPDATE_CARD = "div[role='listitem'][componentkey^='update-card']"
 SEL_POST_ACTOR = ("a.update-components-actor__meta-link, "
-                  "a.update-components-actor__image")
+                  "a.update-components-actor__image, "
+                  f"{_UPDATE_CARD} a[href*='/in/'], {_UPDATE_CARD} a[href*='/company/'], "
+                  f"{_UPDATE_CARD} a[href*='/showcase/'], {_UPDATE_CARD} a[href*='/school/']")
 # Блок автора монтируется клиентом уже после domcontentloaded. Столько же ждут
 # кнопку отправки; страница поста тяжелее профиля из-за комментариев.
 _POST_ACTOR_TIMEOUT_MS = 15000
@@ -994,7 +1006,10 @@ _FIELD_ERROR_JS = r"""
       const info = document.getElementById(id);
       if (info) txt += ' ' + (info.textContent || '');
     }
-    if (!/недопустимое значение|invalid value|введите допустимый/i.test(txt)) continue;
+    // Английский аккаунт пишет «Invalid input» (живьём 2026-09-13, лид #1001):
+    // без него обход жал Review по одному экрану до предела шагов. Счётчик
+    // символов («1/20») ошибкой не является и сюда не подпадает.
+    if (!/недопустимое значение|invalid value|введите допустимый|введите число|invalid input|please enter a valid|enter a (?:whole|decimal) number|must be (?:a )?number/i.test(txt)) continue;
     bad.push({
       label: (el.getAttribute('aria-label') || el.name || '').trim().slice(0, 70),
       info: txt.replace(/\s+/g, ' ').trim().slice(0, 90),
