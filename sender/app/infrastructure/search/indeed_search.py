@@ -17,13 +17,58 @@ in the United States». Кандидату из Казахстана они за
 стеку и порекомендует недостижимое.
 """
 import re
+from dataclasses import dataclass
 from urllib.parse import quote_plus
 
 from app.domain.candidate import KIND_JOB, Candidate
 from app.domain.indeed_apply import job_key
 from app.domain.search_request import per_keyword_limit
 
-INDEED_BASE_URL = "https://www.indeed.com"
+INDEED_HOST = "www.indeed.com"
+INDEED_BASE_URL = f"https://{INDEED_HOST}"
+
+
+@dataclass(frozen=True)
+class IndeedSite:
+    """Где искать: страновой сайт Indeed, его локация и хвост запроса.
+
+    Хвост дописывается к каждому слову. На uk.indeed.com это `"visa
+    sponsorship"`, и выдача сама отбирает вакансии, где спонсорство названо, —
+    ровно то, что профиль разрешает кандидату без права на работу в этой стране.
+    Пустая локация — вся страна.
+    """
+    host: str
+    location: str
+    suffix: str
+
+
+# Хост из настройки открывается в НАСТОЯЩЕМ Chrome человека, под его сессией.
+# Поэтому сравнение по меткам, как в `left_indeed`: `indeed.com.evil.example`
+# площадкой не является, а `uk.indeed.com` — является.
+_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)*indeed\.com$")
+
+
+def parse_indeed_sites(spec: str) -> list[IndeedSite]:
+    """Сайты из одной строки настройки: `хост|локация|хвост; хост|…`.
+
+    Разделитель записей — `;`, а не запятая: в локации запятая законна
+    («Dubai, UAE»), в хвосте тоже. Пустые части разрешены: `ae.indeed.com` —
+    вся страна без хвоста.
+
+    Чужой хост — ошибка, а не пропуск. Молча выброшенная опечатка тихо сделала
+    бы прогон меньше задуманного, и узнать об этом было бы не из чего.
+    """
+    sites: list[IndeedSite] = []
+    for entry in (spec or "").split(";"):
+        if not entry.strip():
+            continue
+        host, location, suffix = (entry.split("|") + ["", ""])[:3]
+        host = re.sub(r"^https?://", "", host.strip().lower()).rstrip("/")
+        if not _HOST_RE.match(host):
+            raise ValueError(
+                f"INDEED_SITES: «{host}» — не сайт Indeed; ожидается хост вида uk.indeed.com")
+        sites.append(IndeedSite(host, location.strip(), suffix.strip()))
+    return sites
 # Смещение выдачи у Indeed считается в вакансиях, а не в страницах.
 _PAGE_STEP = 10
 _DESCRIPTION_CAP = 6000
@@ -83,14 +128,20 @@ def page_state(title: str, body_text: str, card_count: int) -> str:
     return "challenge" if _CHALLENGE.search(blob) else "empty"
 
 
-def build_jobs_url(keyword: str, location: str, page: int = 1) -> str:
-    """Адрес страницы выдачи. Смещение в вакансиях: start=0, 10, 20."""
+def build_jobs_url(keyword: str, location: str, page: int = 1,
+                   host: str = INDEED_HOST, suffix: str = "") -> str:
+    """Адрес страницы выдачи. Смещение в вакансиях: start=0, 10, 20.
+
+    `host` — страновой сайт (`uk.indeed.com`), `suffix` — хвост запроса
+    (`"visa sponsorship"`), см. IndeedSite. Без них адрес ровно прежний.
+    """
     start = max(0, (max(1, page) - 1) * _PAGE_STEP)
-    parts = [f"q={quote_plus((keyword or '').strip())}", f"start={start}"]
+    query = " ".join(p for p in ((keyword or "").strip(), (suffix or "").strip()) if p)
+    parts = [f"q={quote_plus(query)}", f"start={start}"]
     loc = (location or "").strip()
     if loc:
         parts.insert(1, f"l={quote_plus(loc)}")
-    return f"{INDEED_BASE_URL}/jobs?" + "&".join(parts)
+    return f"https://{host}/jobs?" + "&".join(parts)
 
 
 def parse_indeed_cards(cards, limit: int) -> list[Candidate]:
@@ -141,6 +192,14 @@ class _LiveCard:
         return self._href
 
 
+class IndeedChallenge(RuntimeError):
+    """Indeed показал проверку вместо страницы.
+
+    Отдельный класс, чтобы обход отличал проверку от любой другой поломки:
+    проверка посреди обхода — не повод выбросить уже найденное.
+    """
+
+
 class IndeedSearcher:
     name = "indeed"
 
@@ -178,7 +237,8 @@ class IndeedSearcher:
 
     def __init__(self, cdp_url: str | None = None, per_keyword: int = 25,
                  pages: int = 2, location: str = "Remote", keywords=None,
-                 min_delay: float = 8.0, max_delay: float = 20.0, sleep=None):
+                 min_delay: float = 8.0, max_delay: float = 20.0, sleep=None,
+                 sites=None):
         self._cdp_url = cdp_url
         # Своя выборка слов, а не общая. Причина в устройстве выдачи: Indeed
         # привязан к США, и по общим словам («golang developer», «qa engineer»)
@@ -190,6 +250,9 @@ class IndeedSearcher:
         self._per_keyword = per_keyword
         self._pages = pages
         self._location = location
+        # Страновые сайты, см. IndeedSite. Пусто — прежний единственный сайт:
+        # www.indeed.com с общей локацией, и адреса выдачи побайтно те же.
+        self._sites = list(sites or []) or [IndeedSite(INDEED_HOST, location, "")]
         # Пауза между обращениями. Площадка ловит по частоте: замер 2026-09-12
         # показал, что одиночные запросы проходят, а шесть подряд дают «Security
         # Check» с Ray ID в том же Chrome, где ручной просмотр работает.
@@ -250,7 +313,7 @@ class IndeedSearcher:
             if state == "challenge":
                 # Наружу, а не в «пусто»: run_search назовёт это ошибкой, и
                 # человек увидит причину вместо молчаливого нуля.
-                raise RuntimeError(
+                raise IndeedChallenge(
                     "Indeed показывает проверку вместо выдачи — открой Chrome, "
                     f"пройди её и повтори (make login_indeed поднимает то же окно). {detail}")
             # Пусто — но ПОЧЕМУ пусто, по логу было не понять, и это стоило
@@ -285,34 +348,50 @@ class IndeedSearcher:
 
     def search(self, keywords_list, location, limit) -> list[Candidate]:
         # `location` из общего конфига сюда не годится: «Worldwide» — понятие
-        # LinkedIn, а Indeed ждёт либо город, либо «Remote».
-        loc = self._location
+        # LinkedIn, а Indeed ждёт либо город, либо «Remote». Локация своя у
+        # каждого сайта, см. IndeedSite.
         # Уровень (junior/senior/lead) НЕ фильтруется ни здесь, ни в адресе
         # выдачи: берём любой grade, а годится он или нет решает скорер.
         keywords_list = self._keywords or keywords_list
         per_kw = per_keyword_limit(limit, len(keywords_list), self._per_keyword)
         found: list[Candidate] = []
         seen: set[str] = set()
-        empty: set[str] = set()
+        # «Пусто» запоминается на пару (сайт, слово): слово, ничего не давшее на
+        # одном сайте, на другом может дать полную страницу.
+        empty: set = set()
+        # Страница снаружи, сайт посередине, слово внутри. Бюджет обрывает
+        # перебор, и при обходе «сайт снаружи» первая страна съела бы его целиком.
         for page in range(1, max(1, self._pages) + 1):
-            for kw in keywords_list:
-                if kw in empty:
-                    continue
-                self._pause()
-                self._page.goto(build_jobs_url(kw, loc, page),
-                                wait_until="domcontentloaded", timeout=45000)
-                cards = self._job_cards()
-                if not cards:
-                    empty.add(kw)
-                    continue
-                for cand in parse_indeed_cards(cards, limit=per_kw):
-                    key = job_key(cand.url)      # см. parse_indeed_cards
-                    if key in seen:
+            for site in self._sites:
+                for kw in keywords_list:
+                    if (site, kw) in empty:
                         continue
-                    seen.add(key)
-                    found.append(cand)
-                    if len(found) >= limit:
+                    self._pause()
+                    try:
+                        self._page.goto(
+                            build_jobs_url(kw, site.location, page,
+                                           host=site.host, suffix=site.suffix),
+                            wait_until="domcontentloaded", timeout=45000)
+                        cards = self._job_cards()
+                    except IndeedChallenge as exc:
+                        if not found:
+                            raise
+                        # Найденное дороже полноты: исключение отсюда `run_search`
+                        # ловит на площадку ЦЕЛИКОМ и в таблицу не пишет ничего.
+                        print(f"   ⚠️ indeed: проверка на {site.host} посреди обхода — "
+                              f"останавливаюсь и отдаю найденное ({len(found)}). {exc}")
                         return found
+                    if not cards:
+                        empty.add((site, kw))
+                        continue
+                    for cand in parse_indeed_cards(cards, limit=per_kw):
+                        key = job_key(cand.url)      # см. parse_indeed_cards
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        found.append(cand)
+                        if len(found) >= limit:
+                            return found
         return found
 
     def describe(self, url: str) -> str:
@@ -326,12 +405,20 @@ class IndeedSearcher:
 
         Вся страница остаётся запасным ходом: вёрстка меняется, и остаться
         совсем без текста хуже, чем с шумной шапкой.
+
+        Кроме одного случая: вместо вакансии стоит проверка. Её текст скорер
+        честно оценит низко, а память отказников запомнит вакансию НАВСЕГДА и
+        больше её не оценит. Поэтому проверка — исключение: `score_and_filter`
+        пропускает такую вакансию, не записывая вердикта.
         """
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=45000)
             self._page.wait_for_selector(_DESCRIPTION_SELECTORS[0], timeout=12000)
         except Exception:  # noqa: BLE001 — описание не обязано открыться
-            pass
+            state, detail = self._page_state()
+            if state == "challenge":
+                raise IndeedChallenge(
+                    f"Indeed показывает проверку вместо вакансии. {detail}")
         text = ""
         for selector in _DESCRIPTION_SELECTORS:
             try:

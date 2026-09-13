@@ -195,6 +195,18 @@ INDEED_KEYWORDS = [k.strip() for k in os.environ.get(
     "INDEED_KEYWORDS",
     "ai engineer,llm engineer,machine learning engineer,ai software engineer,"
     "generative ai engineer,applied ai engineer").split(",") if k.strip()]
+# Страновые сайты Indeed: `хост|локация|хвост запроса`, записи через «;».
+# Пусто — прежний единственный www.indeed.com с INDEED_LOCATION.
+#
+# Замер 2026-09-13, первая страница выдачи в живом Chrome, карточек:
+#   www «ai engineer», Remote 17 · ae «ai engineer» 16 ·
+#   uk и de «ai engineer "visa sponsorship"» по 16 · ca 8 · nl 2.
+# Американская «Remote» почти вся закрыта правом на работу в США, а профиль
+# допускает переезд при спонсорстве визы — это и лежит на страновых сайтах.
+# В ОАЭ рабочую визу оформляет работодатель, поэтому хвоста там нет.
+# Отклик чинить не пришлось: канал открывает полную ссылку лида и уходит на
+# `/rc/clk` относительно неё, а `left_indeed` понимает страновые поддомены.
+INDEED_SITES = os.environ.get("INDEED_SITES", "")
 
 # --- Vacancy search (sub-project C) ---
 SEARCH_KEYWORDS = [
