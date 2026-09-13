@@ -34,12 +34,12 @@ and a datacenter IP that any of these sites may throttle, so every failure retur
 # where a layer below the network can reach them.
 from app.domain.vacancy_text import (  # noqa: F401 — re-exported, see above
     extract_external_url, extract_hh_vacancy, extract_linkedin_post,
-    extract_linkedin_vacancy, extract_threads_post, expand_short_links,
+    extract_linkedin_vacancy, extract_teletype_post, extract_threads_post, expand_short_links,
     aggregator_apply_url, extract_aggregator_vacancy, extract_ats_vacancy,
     is_aggregator_job_url, is_ats_job_url,
     is_fetchable_vacancy_url, is_hh_vacancy_url,
     is_linkedin_job_url, is_linkedin_post_url, is_lnkd_in_url,
-    is_remoteok_job_url, is_threads_post_url, iter_urls,
+    is_remoteok_job_url, is_teletype_post_url, is_threads_post_url, iter_urls,
     pick_vacancy_url, strip_tracking_params,
 )
 
@@ -154,6 +154,10 @@ def fetch_vacancy_text(url: str, timeout: float = _TIMEOUT_SECONDS) -> str:
     elif is_threads_post_url(url):
         extract = extract_threads_post
         ua = _CLIENT_UA          # a browser UA gets an empty JS shell here
+    elif is_teletype_post_url(url):
+        # Статья teletype.in: страница серверная, текст целиком в `<article>`,
+        # ответ за 0,3–0,45 с (замер 2026-09-13 по 19 статьям сети Inflow).
+        extract = extract_teletype_post
     elif is_aggregator_job_url(url) or is_remoteok_job_url(url):
         # Доска вакансий: страница публичная, логина не просит, но структуры в
         # ней нет — ни JSON-LD, ни og-тегов, ни meta description (замер живьём

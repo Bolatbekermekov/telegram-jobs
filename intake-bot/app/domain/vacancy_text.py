@@ -24,7 +24,7 @@ from app.domain.contact import canonical_linkedin_url
 # and the left boundary keeps the host from matching inside an email address.
 _KNOWN_HOST = (r"(?:[\w-]+\.)*(?:linkedin\.com|lnkd\.in|t\.me|telegram\.me|"
                r"hh\.(?:ru|kz|uz|by|kg|az|tj)|wellfound\.com|angel\.co|"
-               r"remocate\.app|remoteok\.com|"
+               r"remocate\.app|remoteok\.com|teletype\.in|"
                # ATS работодателей: вакансия там живёт на поддомене
                # (boards.greenhouse.io, jobs.lever.co, <компания>.recruitee.com),
                # а поддомены уже покрыты префиксом выше. Путь после хоста
@@ -195,6 +195,10 @@ _LINKEDIN_POST_RE = re.compile(
     r"^https?://(?:[\w.-]*\.)?linkedin\.com/(?:posts/|feed/update/)", re.IGNORECASE)
 _THREADS_POST_RE = re.compile(
     r"^https?://(?:www\.)?threads\.(?:com|net)/@[\w.]+/post/[\w-]+", re.IGNORECASE)
+# Статья teletype.in: `teletype.in/@автор/слаг`. Страница автора (`/@автор`) —
+# лента, а не статья, и вакансии в ней нет.
+_TELETYPE_POST_RE = re.compile(
+    r"^https?://(?:www\.)?teletype\.in/@[\w.-]+/[\w-]+", re.IGNORECASE)
 
 
 def is_hh_vacancy_url(url: str) -> bool:
@@ -213,11 +217,67 @@ def is_threads_post_url(url: str) -> bool:
     return bool(_THREADS_POST_RE.match((url or "").strip()))
 
 
+# Разметка статьи teletype.in. Замер 2026-09-13 по 19 живым статьям сети каналов
+# Inflow: страница серверная, текст целиком в `<article itemprop="articleBody">`,
+# у каждого блока пустой якорь `<a name>` и Vue-комментарии `<!--[-->`, а контакт —
+# ссылка, в половине статей спрятанная под словом «APPLY».
+_TELETYPE_ARTICLE_RE = re.compile(r"<article\b[^>]*>(.*?)</article>", re.IGNORECASE | re.DOTALL)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_LINK_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_LINE_BREAK_RE = re.compile(r"<br\s*/?>|</(?:p|h[1-6]|li|blockquote|figcaption|pre)>",
+                            re.IGNORECASE)
+
+
+def is_teletype_post_url(url: str) -> bool:
+    return bool(_TELETYPE_POST_RE.match((url or "").strip()))
+
+
+def _teletype_link(match) -> str:
+    """Ссылка так, как её должен увидеть детектор контактов.
+
+    «APPLY» — всё, что видит читатель статьи, а адрес отклика живёт только в
+    href. Выброшенный вместе с тегом, он пропадал бы из текста, и контакт
+    находился бы в половине статей из тех, где он есть. Поэтому спрятанный адрес
+    выводится рядом с подписью — через двоеточие, а не в скобках: `https?://\\S+`
+    унёс бы закрывающую скобку в адрес, и лид ушёл бы на несуществующую страницу.
+    Видимый адрес второй раз не дописывается.
+    """
+    label = " ".join(_html.unescape(_ANY_TAG_RE.sub(" ", match.group(2))).split())
+    m = _HREF_ATTR_RE.search(match.group(1))
+    href = _html.unescape(m.group(1)).strip() if m else ""
+    if href.lower().startswith("mailto:"):
+        href = href[len("mailto:"):]
+    if not href or href.rstrip("/") in label:
+        return label
+    if not label:
+        return href
+    return f"{label.rstrip(':')}: {href}"
+
+
+def extract_teletype_post(html: str, max_chars: int = 5000) -> str:
+    """Текст статьи teletype.in построчно, спрятанные адреса наружу — или "".
+
+    Читается только `<article>`: вокруг неё ссылки автора и подвала сайта, и
+    детектор принял бы их за контакт работодателя. Строки сохраняются — ими
+    разделены пункты списка, а одной строкой пересказ теряет структуру. Пустой
+    якорь `<a name>` без адреса исчезает вместе с тегом. Удалённая статья
+    отвечает 404 со страницей-заглушкой без `<article>` — здесь это "".
+    """
+    m = _TELETYPE_ARTICLE_RE.search(str(html or ""))
+    if not m:
+        return ""
+    body = _HTML_COMMENT_RE.sub("", m.group(1))
+    body = _LINK_RE.sub(_teletype_link, body)
+    body = _ANY_TAG_RE.sub(" ", _LINE_BREAK_RE.sub("\n", body))
+    lines = (" ".join(_html.unescape(line).split()) for line in body.split("\n"))
+    return "\n".join(line for line in lines if line)[:max_chars]
+
+
 def is_fetchable_vacancy_url(url: str) -> bool:
     return (is_hh_vacancy_url(url) or is_linkedin_job_url(url)
             or is_linkedin_post_url(url) or is_threads_post_url(url)
             or is_aggregator_job_url(url) or is_remoteok_job_url(url)
-            or is_ats_job_url(url))
+            or is_ats_job_url(url) or is_teletype_post_url(url))
 
 
 def pick_vacancy_url(text: str) -> str:

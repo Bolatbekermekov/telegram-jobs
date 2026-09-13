@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi import FastAPI, Header, Request  # noqa: E402
 
 from app import config  # noqa: E402
-from app.application.extract_lead import ExtractLeadFromText  # noqa: E402
+from app.application.extract_lead import (  # noqa: E402
+    ArticleWithoutContact, ExtractLeadFromText,
+)
 from app.domain.contact import detect_contact  # noqa: E402
 from app.domain.telegram_message import message_text  # noqa: E402
 from app.infrastructure.openai_client import OpenAISummarizer  # noqa: E402
@@ -253,6 +255,25 @@ def health():
     return {"ok": True, "service": "telegram-jobs-intake"}
 
 
+def _article_reply(exc: ArticleWithoutContact) -> str:
+    """Почему лид из статьи teletype не сохранён — так, чтобы это можно было проверить.
+
+    Три разных случая, и общий «Не нашёл контакт» путал бы их: статья не открылась
+    (тогда поможет прислать текст), отклик ведёт туда, куда мы не откликаемся
+    (решение владельца 2026-09-13 — не сохранять, а назвать куда), и контакта в
+    статье нет вовсе.
+    """
+    if not exc.read:
+        return (f"⚠️ Не смог прочитать статью: {exc.url}\n"
+                "Пришли текст вакансии сообщением — контакт найду в нём.")
+    if exc.hosts:
+        return ("⚠️ В статье нет контакта, по которому я откликаюсь: отклик ведёт на "
+                f"{', '.join(exc.hosts)}. Такие ссылки не сохраняю — нужен Telegram, "
+                "почта, hh или ATS (Greenhouse, Lever, Ashby и др.).")
+    return ("⚠️ В статье не нашёл контакт: ни Telegram, ни почты, ни ссылки на hh или "
+            f"ATS. Статья: {exc.url}")
+
+
 @app.post("/")
 async def telegram_webhook(
     request: Request,
@@ -332,11 +353,15 @@ async def telegram_webhook(
             f"✅ Сохранил лид\nПлатформа: {lead.platform}\nИсточник: {lead.target}"
             f"{routing}\nВакансия: {vacancy}{_match_line(lead)}{extra}",
         )
+    except ArticleWithoutContact as exc:
+        # Раньше общего ValueError: это его подкласс, и общий ответ перечислил бы
+        # всё подряд, не сказав, что статью мы как раз прочитали.
+        _reply(chat_id, _article_reply(exc))
     except ValueError:
         _reply(
             chat_id,
             "⚠️ Не нашёл контакт. Пришли вакансию с одним из: @ник, t.me-ссылка, "
-            "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads / "
+            "email, или ссылка LinkedIn / hh.ru / Wellfound / Threads / Teletype / "
             "Remocate / RemoteOK, либо прямая ссылка на отклик в Greenhouse, "
             "Lever, Ashby, Workable, SmartRecruiters, Workday, Teamtailor, "
             "Recruitee или Personio.",

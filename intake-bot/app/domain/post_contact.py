@@ -12,8 +12,11 @@ Pure text handling, no network: undoing LinkedIn's link rewrite is injected, so
 this stays testable without touching the site.
 """
 import re
+from urllib.parse import urlparse
 
-from app.domain.vacancy_text import is_lnkd_in_url, iter_urls
+from app.domain.vacancy_text import (
+    is_ats_job_url, is_hh_vacancy_url, is_lnkd_in_url, iter_urls,
+)
 
 # The two channels a lead can be delivered to directly, in `detect_contact`'s own
 # order (telegram first, then email). Everything else it answers — hh, linkedin,
@@ -98,3 +101,53 @@ def pick_post_contact(post_text: str, detect, resolve_link=None):
         if contact is not None:
             return contact
     return None
+
+
+# Хосты, которые в объяснение «куда ведёт отклик» не попадают: сама статья и
+# Telegram. Ссылка на канал отвергнута оракулом «человек или канал», и назвать
+# её адресом отклика было бы неправдой.
+_SILENT_HOSTS = ("teletype.in", "t.me", "telegram.me")
+_URL_IN_TEXT_RE = re.compile(r"https?://\S+")
+
+
+def pick_article_contact(article_text: str, detect):
+    """(контакт, хосты чужих ссылок отклика) из текста статьи teletype.
+
+    Контакт ищется по кускам, а не одним вызовом детектора на весь текст. В
+    детекторе ссылка LinkedIn стоит РАНЬШЕ ATS: для сообщения это верно, а в
+    статье ссылка на страницу компании в LinkedIn — не адрес отклика и не вправе
+    перекрыть «APPLY». Порядок тот же, что у детектора, но только из того, куда
+    лид может уйти сам: человек в Telegram, затем ник или почта в тексте, затем
+    hh, затем ATS.
+
+    Всё прочее — hirify.me, career.habr.com, Google-формы, сайты компаний — по
+    решению владельца 2026-09-13 не сохраняется. Их хосты возвращаются вторым
+    значением: по ним бот объясняет, куда ведёт отклик, вместо немого «не нашёл».
+    """
+    text = article_text or ""
+    urls = list(iter_urls(text))
+    for url in urls:
+        if _host(url) in ("t.me", "telegram.me"):
+            found = detect(url)
+            if found is not None and found.platform == "telegram":
+                return found, []
+    found = detect(_URL_IN_TEXT_RE.sub(" ", text))
+    if found is not None and found.platform in DIRECT_PLATFORMS:
+        return found, []
+    for platform, is_route in (("hh", is_hh_vacancy_url), ("ats", is_ats_job_url)):
+        for url in urls:
+            if is_route(url):
+                found = detect(url)
+                if found is not None and found.platform == platform:
+                    return found, []
+    hosts: list[str] = []
+    for url in urls:
+        host = _host(url)
+        if host and host not in _SILENT_HOSTS and host not in hosts:
+            hosts.append(host)
+    return None, hosts
+
+
+def _host(url: str) -> str:
+    host = urlparse(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host

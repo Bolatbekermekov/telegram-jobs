@@ -1,11 +1,12 @@
 """Use-case: detect contact + summarize a raw vacancy message, then save a lead."""
 from app.domain.lead import ExtractedLead
 from app.domain.post_contact import (
-    DIRECT_PLATFORMS, pick_post_contact, post_author_profile_url,
+    DIRECT_PLATFORMS, pick_article_contact, pick_post_contact, post_author_profile_url,
 )
 from app.domain.vacancy_text import (
     expand_short_links, is_fetchable_vacancy_url, is_link_only,
-    is_ats_job_url, is_linkedin_post_url, pick_vacancy_url,
+    is_ats_job_url, is_linkedin_post_url, is_teletype_post_url, iter_urls,
+    pick_vacancy_url,
 )
 
 _FALLBACK_LEN = 280
@@ -17,6 +18,22 @@ _FALLBACK_LEN = 280
 # сильнее нельзя: уровень («Principal») и запреты («must be authorized to work
 # in the US») живут в середине текста, а не в первом абзаце.
 _SCORE_INPUT_LIMIT = 6000
+
+
+class ArticleWithoutContact(ValueError):
+    """В статье teletype нет контакта, по которому лид может уйти сам.
+
+    Подкласс `ValueError("no_contact")` намеренно: всё, что ловило «нет
+    контакта», ловит и это. Вебхук перехватывает его раньше и говорит конкретнее:
+    открылась ли статья (`read`) и куда ведёт её ссылка отклика (`hosts`) — по
+    решению владельца 2026-09-13 такие лиды не сохраняются, а объясняются.
+    """
+
+    def __init__(self, url: str, hosts, read: bool):
+        super().__init__("no_contact")
+        self.url = url
+        self.hosts = list(hosts)
+        self.read = read
 
 
 class ExtractLeadFromText:
@@ -59,14 +76,26 @@ class ExtractLeadFromText:
         text = expand_short_links(raw_text, self._resolve_link)
 
         contact = self._detect(text)
-        if contact is None:
+        # Статья teletype.in несёт контакт ВНУТРИ себя: пост канала — это заголовок
+        # и ссылка на статью, и «в сообщении контакта нет» здесь ещё не ответ.
+        # Контакт, названный в самом сообщении, по-прежнему главнее статьи.
+        article = "" if contact is not None else next(
+            (u for u in iter_urls(text) if is_teletype_post_url(u)), "")
+        if contact is None and not article:
             raise ValueError("no_contact")
 
-        url = self._vacancy_url(text, contact)
+        url = article or self._vacancy_url(text, contact)
         read = self._worth_reading(text, url)
         page_text = self._fetch(url) if read else ""
 
-        platform, target, note = self._route(contact, url, page_text)
+        if contact is None:
+            found, hosts = pick_article_contact(page_text, self._detect)
+            if found is None:
+                raise ArticleWithoutContact(article, hosts, read=bool(page_text))
+            platform, target = found.platform, found.target
+            note = f"контакт из статьи teletype: {article}"
+        else:
+            platform, target, note = self._route(contact, url, page_text)
         # Один и тот же текст кормит и суммаризацию, и оценку — иначе оценка
         # считалась бы по пересказу, написанному под сопроводительное письмо.
         source = self._vacancy_source(text, page_text, read)
@@ -135,8 +164,10 @@ class ExtractLeadFromText:
         """
         if self._fetch is None or not url:
             return False
+        # Статья teletype — по той же причине, что пост LinkedIn: контакт для
+        # отклика живёт только в ней, в сообщении из канала его нет.
         return (is_linkedin_post_url(url) or is_ats_job_url(url)
-                or is_link_only(raw_text))
+                or is_teletype_post_url(url) or is_link_only(raw_text))
 
     def _route(self, contact, url: str, page_text: str):
         """(platform, target, note) — whom this lead is for.
