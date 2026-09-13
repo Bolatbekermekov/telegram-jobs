@@ -41,3 +41,15 @@ def test_the_model_is_told_how_to_estimate_it():
 
 def test_expectations_are_not_below_the_current_salary():
     assert "не ниже текущей" in _QUESTIONS_SYSTEM.lower()
+
+
+def test_ctc_is_a_yearly_figure_in_full_units():
+    """Живьём 2026-09-13, лид #866 (Frontend, Бангалор): на «What is your current
+    CTC?» модель ответила «3500», а на «expected CTC» — «4500», будто в месяц или в
+    тысячах. CTC — годовой доход: для Индии это рупии в год полным числом (1500000 =
+    15 LPA), в лакхах — только если вопрос сам так спрашивает («in lakhs», «LPA»).
+    Тот же прогон, лид #997, ответил верно — 1500000 и 1800000."""
+    low = _QUESTIONS_SYSTEM.lower()
+    assert "ctc" in low and "в год" in low
+    assert "полным числом" in low
+    assert "лакх" in low and "lpa" in low
