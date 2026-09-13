@@ -7,6 +7,7 @@ collects "card" wrappers and hands them to the pure parsers.
 from urllib.parse import urlencode
 
 from app.domain.candidate import Candidate, KIND_JOB, KIND_PROFILE
+from app.infrastructure.linkedin_session import LOGIN_WAIT_SECONDS
 from app.infrastructure.search.describe_http import http_vacancy_text
 
 
@@ -157,7 +158,8 @@ class LinkedInSearcher:
                  people_enabled: bool = False,
                  experience: str = "1,2,3", posted_within: str = "r604800",
                  workplace: str = "", per_keyword: int = PAGE_SIZE,
-                 pages: int = 1, locations=None, rotate_by: int = 0):
+                 pages: int = 1, locations=None, rotate_by: int = 0,
+                 login_wait_seconds: int = LOGIN_WAIT_SECONDS, login_sleep=None):
         self._storage_state_path = storage_state_path
         self._headless = headless
         self._people_enabled = people_enabled
@@ -168,6 +170,9 @@ class LinkedInSearcher:
         self._pages = max(1, pages)
         self._locations = list(locations) if locations else []
         self._rotate_by = rotate_by
+        self._login_wait_seconds = login_wait_seconds
+        # Поздним связыванием: тест подменяет сон, иначе ждал бы по-настоящему.
+        self._login_sleep = login_sleep
         self._pw = None
         self._browser = None
         self._page = None
@@ -175,7 +180,7 @@ class LinkedInSearcher:
     def start(self) -> None:
         from playwright.sync_api import sync_playwright
 
-        from app.infrastructure.linkedin_session import has_valid_session
+        from app.infrastructure.linkedin_session import has_valid_session, wait_for_login
 
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=self._headless)
@@ -188,7 +193,13 @@ class LinkedInSearcher:
         self._page = context.new_page()
         if state is None:
             self._page.goto("https://www.linkedin.com/login")
-            input("Залогинься в LinkedIn в открытом окне, потом нажми Enter здесь...")
+            print(f"Залогинься в LinkedIn в открытом окне — жду до "
+                  f"{max(1, self._login_wait_seconds // 60)} мин, нажимать здесь ничего не нужно.")
+            # Опрос кук, а не input(): без TTY тот падал мгновенно, и окно
+            # закрывалось раньше, чем человек успевал войти (см. wait_for_login).
+            if not wait_for_login(context, self._login_wait_seconds, sleep=self._login_sleep):
+                raise RuntimeError(
+                    "не дождался входа в LinkedIn — сессия не сохранена, запусти вход снова")
             context.storage_state(path=self._storage_state_path)
 
     def stop(self) -> None:
