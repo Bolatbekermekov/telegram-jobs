@@ -69,6 +69,45 @@ def page_is_gone(title: str, text: str) -> bool:
                for line in (text or "").splitlines())
 
 
+# --- страница, которую нам не показали вовсе ---------------------------------
+#
+# Замер 2026-09-13, прогон 65 лидов. Betterteam (#1154, #1157) вместо вакансии
+# отдаёт проверку Cloudflare: заголовок «Just a moment...», iframe
+# challenges.cloudflare.com с Turnstile. TalentRecruit (#1161) — «403 Forbidden».
+# Все три легли «форма не распознана», и это ложный след: форму никто не разбирал,
+# страницу с формой нам просто не показали. Проходить проверку на бота автоматика
+# не будет — это обход защиты, — так что причина называется прямо, а отклик
+# остаётся ручным.
+#
+# Узко, как и правила выше: заголовок или ЦЕЛАЯ строка, а не слово в тексте, —
+# «403 open roles» в описании вакансии состоянием не является.
+_CHALLENGE_TITLE_RE = re.compile(
+    r"^(?:just a moment|один момент|attention required! \| cloudflare)\W*$", re.I)
+_CHALLENGE_TEXT_RE = re.compile(
+    r"verifying you are human|needs to review the security of your connection"
+    r"|checking your browser before accessing", re.I)
+_CHALLENGE_HOSTS = ("challenges.cloudflare.com",)
+_FORBIDDEN_LINE_RE = re.compile(
+    r"^(?:(?:http error |error )?403(?: forbidden)?|forbidden|access denied)\.?$", re.I)
+# Chrome рисует пустой ответ 403 своей страницей, и «HTTP ERROR 403» там третья
+# строка; дальше начинается уже содержимое, а не состояние.
+_FORBIDDEN_LINES = 8
+
+
+def page_block_reason(title: str, text: str, frame_urls=()) -> str:
+    """Почему страницу нам не показали: "cloudflare", "forbidden" или ""."""
+    title = (title or "").strip()
+    if _CHALLENGE_TITLE_RE.match(title) or _CHALLENGE_TEXT_RE.search(text or ""):
+        return "cloudflare"
+    if any(_urlsplit(u or "").hostname in _CHALLENGE_HOSTS for u in frame_urls or ()):
+        return "cloudflare"
+    lines = [title, *(line.strip() for line in
+                      (text or "").splitlines()[:_FORBIDDEN_LINES])]
+    if any(_FORBIDDEN_LINE_RE.match(line) for line in lines):
+        return "forbidden"
+    return ""
+
+
 # --- то же правило, но по сырой разметке ------------------------------------
 #
 # Браузер отдаёт `page.title()` и `body.inner_text()` уже разложенными по

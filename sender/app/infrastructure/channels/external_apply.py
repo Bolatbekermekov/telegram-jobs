@@ -9,7 +9,7 @@ import time
 from urllib.parse import unquote, urlsplit
 
 from app.application.apply_guard import (
-    host_or_vendor_allowed, leaked_secrets, vendor_behind,
+    host_or_vendor_allowed, leaked_secrets, vendor_of,
 )
 from app.application.hidden_date import wants_availability_date
 from app.application.auto_apply import (
@@ -32,7 +32,7 @@ from app.domain.legal_page import looks_like_legal_page
 # спрашивает то же самое ДО генерации письма, обычным GET. Имя остаётся здесь,
 # чтобы уже написанные вызовы (и тесты на снятых живьём строках) не переезжали.
 from app.domain.page_gone import (  # noqa: F401 — переэкспорт, см. выше
-    GONE_NOTE, page_is_gone,
+    GONE_NOTE, page_block_reason, page_is_gone,
 )
 from app.domain.page_observation import FieldObs, PageObservation, Route
 
@@ -869,7 +869,7 @@ def _requires_signup_or_login(page) -> bool:
         return False
 
 
-def _page_unavailable(page) -> bool:
+def _title_and_text(page) -> tuple[str, str]:
     title = text = ""
     try:
         title = page.title() or ""
@@ -879,7 +879,29 @@ def _page_unavailable(page) -> bool:
         text = page.locator("body").inner_text(timeout=3000)[:4000]
     except Exception:  # noqa: BLE001
         pass
-    return page_is_gone(title, text)
+    return title, text
+
+
+def _page_unavailable(page) -> bool:
+    return page_is_gone(*_title_and_text(page))
+
+
+# Как причина называется в «Заметке». Проверку на бота автоматика не проходит:
+# это обход защиты, а не поломка разбора формы (см. `page_gone.page_block_reason`).
+_BLOCK_NOTES = {
+    "cloudflare": "сайт показал проверку на бота (Cloudflare) вместо вакансии, "
+                  "обходить её бот не будет — отклик руками",
+    "forbidden": "сайт отказал в доступе (403 Forbidden) — отклик руками",
+}
+
+
+def _page_block_note(page) -> str:
+    frames = []
+    try:
+        frames = [frame.url for frame in page.frames]
+    except Exception:  # noqa: BLE001 — нет фреймов, судим по заголовку и тексту
+        pass
+    return _BLOCK_NOTES.get(page_block_reason(*_title_and_text(page), frames), "")
 
 
 def _wants_cover_letter_file(obs) -> bool:
@@ -1125,12 +1147,12 @@ def _hop_to_embedded_form(page, obs, route):
         return obs, route
     if not url:
         # Вендор кладёт форму рядом со страницей вакансии: у Teamtailor это
-        # `…/applications/new`, у Recruitee `…/c/new`. Кто вендор — решает
-        # делегирование в DNS, а не вёрстка, поэтому спрашиваем apply_guard.
+        # `…/applications/new`, у Recruitee `…/c/new`. Кто вендор — решает хост
+        # или делегирование в DNS, а не вёрстка, поэтому спрашиваем apply_guard.
         # Замер 2026-08-24: у careers.bluethrone.io кнопка подписана «Join us»,
         # под селектор раскрытия не попадает, и без этого перехода форма из 19
         # полей оставалась недостижимой.
-        url = vendor_apply_url(page.url, vendor_behind(page.url))
+        url = vendor_apply_url(page.url, vendor_of(page.url))
     if not url:
         return obs, route
     try:
@@ -1175,6 +1197,9 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     if route is not Route.FORM:
         if _requires_signup_or_login(page):
             raise ManualApplyRequired(f"требует Sign Up / Login: {obs.url}")
+        blocked = _page_block_note(page)
+        if blocked:
+            raise ManualApplyRequired(f"{blocked}: {obs.url}")
         if _page_unavailable(page):
             raise ManualApplyRequired(f"{GONE_NOTE}: {obs.url}")
         raise ManualApplyRequired(f"форма не распознана: {obs.url}")

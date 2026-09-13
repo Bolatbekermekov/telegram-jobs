@@ -35,6 +35,10 @@ ALLOWED_APPLY_HOSTS = frozenset({
     "hh.ru",
     "wellfound.com",
     "linkedin.com",
+    # Замер 2026-09-13 (лид #1044): форма careers.factorialhr.com читается целиком,
+    # 16 полей с настоящими подписями. Keka (`*.keka.com`, лиды #1046–#1048) НЕ
+    # добавлен: подписи у полей мусорные — ровно та беда, что у Rippling ниже.
+    "factorialhr.com",
 })
 
 # --- открытое решение владельца: jobs.micro1.ai ------------------------------
@@ -292,6 +296,18 @@ def vendor_behind(url: str, allowed=ALLOWED_APPLY_HOSTS, resolve=None) -> str | 
         if vendor:
             return vendor
     return None
+
+
+def vendor_of(url: str, allowed=ALLOWED_APPLY_HOSTS, resolve=None) -> str | None:
+    """Запись белого списка, чья это страница, или None.
+
+    Хост самого вендора (`apply.workable.com`, `praktika.teamtailor.com`) —
+    вендор без доказательств: зону держит он. Домен компании — вендор, только
+    если DNS отдал его вендору (`vendor_behind`). Живьём 2026-09-13 не хватало
+    первой половины: на хосте вендора `vendor_behind` честно отвечает None, и
+    у лидов #1004 и #1164 переход к форме не случался.
+    """
+    return _allowed_entry(_host_of(url), allowed) or vendor_behind(url, allowed, resolve)
 
 
 def host_or_vendor_allowed(url: str, allowed=ALLOWED_APPLY_HOSTS,

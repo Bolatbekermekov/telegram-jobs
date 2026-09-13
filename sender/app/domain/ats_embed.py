@@ -9,7 +9,7 @@
 рассказывает. Ни сети, ни браузера — чтобы правило можно было проверить.
 """
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 # Имя доски работодателя внутри Greenhouse. Берётся из скрипта, который
 # компания вставляет к себе на страницу:
@@ -66,26 +66,71 @@ def greenhouse_embed_url(html: str, page_url: str) -> str:
 #
 # Только вендоры, чей путь измерен. Догадка тут стоит дорого: чужой адрес — это
 # отклик не на ту вакансию, а такое уже случалось.
+#
+# Workable (замер 2026-09-13, лид #1164): `apply.workable.com/mlabs/j/C3E3C0C056` —
+# описание без единого поля, форма — на `…/apply/`, 7 полей.
 _VENDOR_APPLY_PATH = {
     "teamtailor.com": "applications/new",
     "recruitee.com": "c/new",
+    "workable.com": "apply",
 }
+
+# У Workable на одном хосте живут и доски компаний, и вакансии, поэтому хвост
+# дописывается только к адресу ОДНОЙ вакансии: к доске `/mlabs/` он дал бы 404.
+_ONE_JOB_PATH = {
+    "workable.com": re.compile(r"^(?:/[^/]+)?/j/[A-Za-z0-9]+$"),
+}
+
+# Teamtailor из LinkedIn иногда ведёт не на вакансию, а в чат-бота:
+# `praktika.teamtailor.com/messenger?job_id=8320426`, «Send a message…», полей
+# нет. Номер вакансии лежит в `job_id`, а у самой вакансии обычный адрес
+# `/jobs/<id>` (замер 2026-09-13, лид #1004: `/jobs/8320426/applications/new` —
+# форма из 14 полей).
+_TEAMTAILOR_MESSENGER_RE = re.compile(r"^/messenger/?$")
+
+
+def _vendor_key(vendor: str | None) -> str:
+    """Ключ `_VENDOR_APPLY_PATH` для записи белого списка — по границам меток.
+
+    Запись бывает и хостом (`apply.workable.com`, когда страница на хосте самого
+    вендора), и доменом (`teamtailor.com`, когда вендора доказал DNS).
+    """
+    v = (vendor or "").lower().strip(".")
+    return next((k for k in _VENDOR_APPLY_PATH
+                 if v == k or v.endswith("." + k)), "")
+
+
+def _job_page(page_url: str, key: str) -> str:
+    """Адрес страницы вакансии: чат-бот Teamtailor заменён её собственным адресом."""
+    if key != "teamtailor.com":
+        return page_url
+    parts = urlsplit(page_url)
+    if not _TEAMTAILOR_MESSENGER_RE.match(parts.path):
+        return page_url
+    job_id = parse_qs(parts.query).get("job_id", [""])[0]
+    if not job_id.isdigit():
+        return ""      # чат без вакансии: форму взять неоткуда
+    return f"{parts.scheme}://{parts.netloc}/jobs/{job_id}"
 
 
 def vendor_apply_url(page_url: str, vendor: str | None) -> str:
     """Адрес формы отклика рядом со страницей вакансии, или "".
 
-    `vendor` — имя из белого списка, доказанное делегированием в DNS
-    (`apply_guard.vendor_behind`), а не вычитанное из вёрстки: вёрстку пишет сам
-    сайт. Поэтому функция вендора не определяет, а только знает, куда у него
-    ходить.
+    `vendor` — запись белого списка, доказанная хостом самого вендора или
+    делегированием в DNS (`apply_guard.vendor_of`), а не вычитанная из вёрстки:
+    вёрстку пишет сам сайт. Поэтому функция вендора не определяет, а только
+    знает, куда у него ходить.
     """
-    tail = _VENDOR_APPLY_PATH.get((vendor or "").lower())
-    if not tail:
+    key = _vendor_key(vendor)
+    if not key:
         return ""
-    base = (page_url or "").split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    tail = _VENDOR_APPLY_PATH[key]
+    base = _job_page(page_url or "", key).split("?", 1)[0].split("#", 1)[0].rstrip("/")
     if not base:
         return ""
     if base.endswith("/" + tail):
         return ""      # уже на форме: иначе ходили бы по кругу
+    one_job = _ONE_JOB_PATH.get(key)
+    if one_job and not one_job.match(urlsplit(base).path):
+        return ""
     return f"{base}/{tail}"

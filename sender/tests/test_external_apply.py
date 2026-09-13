@@ -453,6 +453,43 @@ def test_external_apply_gone_page_gets_short_unavailable_note():
         ea.external_apply(_GonePage(), "https://boards.greenhouse.io/acme/jobs/1", OutreachContent(body="hi"), PROF, "C:/cv.pdf")
 
 
+class _BlockedPage(_GonePage):
+    """Страница, которую сайт нам не показал. Живьём 2026-09-13: Betterteam отдал
+    проверку Cloudflare (лиды #1154, #1157), TalentRecruit — 403 (лид #1161)."""
+
+    def __init__(self, title, body, frame_urls=()):
+        self._title, self._body = title, body
+        self.frames = [type("F", (), {"url": u})() for u in frame_urls]
+
+    def title(self):
+        return self._title
+
+    def locator(self, sel):
+        body = self._body
+        if sel == "body":
+            return type("L", (), {
+                "inner_text": lambda self, timeout=None: body,
+                "count": lambda self: 0})()
+        return type("L", (), {"count": lambda self: 0})()
+
+
+def test_a_cloudflare_check_is_named_instead_of_an_unrecognised_form():
+    page = _BlockedPage("Just a moment...", "Verifying you are human.", [
+        "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0"])
+    with pytest.raises(ManualApplyRequired, match="Cloudflare") as caught:
+        ea.external_apply(page, "https://turing.betterteam.com/remote-software-engineer-81/apply",
+                          OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert "не распознана" not in str(caught.value)
+
+
+def test_a_forbidden_page_is_named_instead_of_an_unrecognised_form():
+    page = _BlockedPage("403 Forbidden", "403 Forbidden\nnginx")
+    with pytest.raises(ManualApplyRequired, match="403") as caught:
+        ea.external_apply(page, "https://dicetek.talentrecruit.com/career-page/apply/x",
+                          OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+    assert "не распознана" not in str(caught.value)
+
+
 # --- injection guards -------------------------------------------------------
 
 def _obs_form_with_free_text(label, url="https://boards.greenhouse.io/acme/jobs/1"):

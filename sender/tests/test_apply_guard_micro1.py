@@ -95,7 +95,7 @@ def test_a_readable_form_on_an_unlisted_host_is_still_not_filled(monkeypatch):
     подписей чужой страницы, а резюме и ответы модели уехали бы в форму, чью
     вёрстку мы не разбирали.
     """
-    monkeypatch.setattr(ea, "vendor_behind", lambda url, *a, **kw: None)
+    monkeypatch.setattr(ea, "vendor_of", lambda url, *a, **kw: None)
     page = _RefusingPage(_micro1_form())
     with pytest.raises(ManualApplyRequired) as e:
         ea.external_apply(page, MICRO1_JOB, OutreachContent(body="hi"),

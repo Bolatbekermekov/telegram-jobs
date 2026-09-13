@@ -313,3 +313,11 @@ def test_the_two_hosts_from_the_2026_08_24_run_resolve_into_their_vendors():
     assert vendor_behind(
         "https://careers.bluethrone.io/jobs/8175038-senior-backend-engineer-golang"
     ) == "teamtailor.com"
+
+
+def test_factorial_hr_is_allowed():
+    """Живьём 2026-09-13 (лид #1044): форма careers.factorialhr.com читается скрапером
+    целиком — 16 полей с человеческими подписями (First name, Last name, Phone,
+    Email, Personal URL, Cover letter, Curriculum vitae). Вендор HR-системы, а не
+    сайт одной компании, поэтому в список, а не разовым исключением."""
+    assert host_allowed("https://careers.factorialhr.com/apply/senior-software-engineer-mobile-293370/")
