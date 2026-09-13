@@ -131,6 +131,21 @@ def test_an_answer_the_page_shows_as_chosen_counts(page):
     assert page.locator("[role=radio]:has(input[value=false])").get_attribute("aria-checked") == "true"
 
 
+def test_a_redrawn_form_finds_the_resume_input_not_the_photo(page):
+    """Живьём 2026-09-13, прогон 7 (лид #1164): после перерисовки формы заполнение
+    ищет поле заново по тегу, типу, подписи и имени. У обоих файловых полей Workable
+    подпись одна — «SVGs not supported by this browser.», имени нет, — и первым
+    находилось фото. Резюме уехало в «Photo», Workable ответил «Please complete
+    this mandatory field» и заявку не принял. Отличает их объявленный `accept`."""
+    resume = next(f for f in _fields(page)
+                  if f.type == "file" and "application/pdf" in f.accept)
+    page.evaluate("() => document.querySelectorAll('[data-af]')"
+                  ".forEach(e => e.removeAttribute('data-af'))")
+    loc = ea._relocate(page, resume)
+    assert loc is not None
+    assert loc.first.get_attribute("data-ui") == "resume"
+
+
 def test_a_photo_upload_is_not_given_the_cv(page):
     photo = next(f for f in _fields(page) if f.type == "file" and "image/png" in f.accept)
     action = map_field(photo, PROF, "/cv.pdf")

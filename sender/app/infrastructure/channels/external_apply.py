@@ -430,8 +430,12 @@ def _relocate(page, field):
     except Exception:  # noqa: BLE001
         return None
     for f in fresh.fields:
+        # И `accept` тоже: у Workable оба файловых поля подписаны одинаково
+        # («SVGs not supported by this browser.») и без имени, и без него после
+        # перерисовки резюме уезжало в «Photo» (живьём 2026-09-13, лид #1164).
         same = (f.tag == field.tag and f.type == field.type
-                and f.label == field.label and f.name == field.name)
+                and f.label == field.label and f.name == field.name
+                and f.accept == field.accept)
         if same and f.ref:
             return page.locator(f'[data-af="{f.ref}"]')
     return None
