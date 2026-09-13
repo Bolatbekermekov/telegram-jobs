@@ -20,3 +20,14 @@ def test_an_unknown_personal_number_is_left_empty_not_invented():
     """Слово «пустого» в промпте уже было — про ответ, нарушающий условие. Проверяется
     именно указание вернуть пустой ответ, а не случайное совпадение слова."""
     assert "верни пустой" in _QUESTIONS_SYSTEM.lower()
+
+
+def test_years_of_experience_without_an_exact_figure_are_three_to_five():
+    """Решение владельца (повторено 2026-09-13, лид #1044): на неясный вопрос о
+    годах опыта — общего или с конкретной технологией — число от 3 до 5. Без этой
+    оговорки правило выше («факта нет, а поле ждёт число — верни пустой») оставило
+    бы пустым «How many years with Kubernetes?», и обязательное поле увело бы
+    отклик в ручной."""
+    low = _QUESTIONS_SYSTEM.lower()
+    assert "от 3 до 5" in low
+    assert "годы опыта" in low
