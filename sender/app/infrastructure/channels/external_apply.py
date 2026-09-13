@@ -1366,6 +1366,22 @@ def asks_for_emailed_code(page_text: str) -> bool:
     return bool(_EMAILED_CODE_RE.search(page_text or ""))
 
 
+# Как страница говорит, что отправка не удалась, когда говорит это не ошибкой
+# поля, а общим уведомлением. Только фразы-итоги: «error» само по себе живёт в
+# подсказках и описаниях.
+_SERVER_FAILED_RE = re.compile(
+    r"something went wrong|try again later|an (?:unexpected )?error (?:has )?occurred|"
+    r"что-то пошло не так|произошла ошибка|попробуйте (?:ещё раз )?позже", re.I)
+
+
+def _server_failure_line(text: str) -> str:
+    """Строка страницы, в которой она сообщает о провале отправки, или ""."""
+    for line in (text or "").splitlines():
+        if _SERVER_FAILED_RE.search(line):
+            return " ".join(line.split())[:120]
+    return ""
+
+
 # Поля, из-за которых браузер сам не пускает отправку: `:invalid` в форме без
 # `novalidate`. Только формы с нашими полями (`data-af`) — рассылка или поиск
 # на той же странице к заявке отношения не имеют.
@@ -1453,6 +1469,16 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
         # только на странице, а её уже нет.
         _dump_form_debug(page, f"rejected-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
         raise ManualApplyRequired(f"форма не приняла: {said} — {url}")
+    # Страница прямо сказала, что отправка не удалась, — но не ошибкой поля, а
+    # уведомлением без role=alert и без «error» в классе, и `_visible_error` его
+    # не видит. Живьём 2026-09-13, Factorial (лид #1044): «Something went wrong.
+    # Try again later.», форма осталась на месте. Итог известен — не ушла.
+    failed = _server_failure_line(_page_text(page))
+    if failed:
+        _dump_form_debug(page, f"rejected-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
+        raise ManualApplyRequired(
+            f"форма ответила ошибкой «{failed}» — заявка НЕ ушла, отклик руками "
+            f"или повтори позже: {url}")
     # Браузер сам не пустил отправку: в форме без `novalidate` остались пустые
     # обязательные поля. Подсказка «Please select one of these options» живёт вне
     # DOM, и `_visible_error` её не видит, — но итог известен: заявка не ушла.

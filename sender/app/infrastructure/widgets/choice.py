@@ -155,13 +155,23 @@ _HELPERS = r"""
     }
     return [el];
   };
+  // Родной input внутри ARIA-переключателя: ответ страницы — в aria-checked
+  // обёртки. React у Workable возвращает родной `checked` к false сразу после
+  // выбора, и в данные формы ответ не попадает (живьём 2026-09-13, лид #1164:
+  // первый вопрос отметился целиком, следующие — только aria-checked). Страница
+  // отправляет своё состояние сама и обязательность у отвеченной группы снимает
+  // тоже сама — у неё `valueMissing` уже false.
+  const shellChecked = el => {
+    const shell = el.closest && el.closest('[role=radio],[role=checkbox]');
+    return !!shell && shell !== el && shell.getAttribute('aria-checked') === 'true';
+  };
   const isPicked = el => {
     // Кнопка раньше `checked`: у <button> его нет вовсе, но проверка стоит
     // первой, чтобы порядок читался как «сначала своё состояние виджета».
     if (el.getAttribute && el.hasAttribute && el.hasAttribute('aria-pressed'))
       return el.getAttribute('aria-pressed') === 'true';
     return typeof el.checked === 'boolean'
-      ? el.checked
+      ? (el.checked || shellChecked(el))
       : (el.getAttribute && el.getAttribute('aria-checked') === 'true');
   };
   // Попал ли ответ в ДАННЫЕ формы. null = проверить нечем (контрол вне <form>
@@ -174,7 +184,7 @@ _HELPERS = r"""
     } catch (e) { return null; }
     return false;
   };
-  const accepted = el => isPicked(el) && inFormData(el) !== false;
+  const accepted = el => isPicked(el) && (inFormData(el) !== false || shellChecked(el));
   // Как найти ТОТ ЖЕ вариант ЗАНОВО, если наш узел заменили. Атрибут-метка это
   // не переживает: она живёт на узле, а React после клика подставляет новый.
   // Имя группы переживает — это `useId` компонента, оно одно и то же до и после

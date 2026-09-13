@@ -110,6 +110,24 @@ def test_an_unreadable_outcome_warns_that_it_may_already_be_sent():
     assert "проверь почту" in said
 
 
+def test_a_server_error_after_submit_is_reported_as_not_sent(monkeypatch):
+    """Живьём 2026-09-13, Factorial (лид #1044): после «Submit» форма осталась на
+    месте, а на странице — «Something went wrong. Try again later.». Это не
+    «возможно, ушла»: страница прямо сказала, что отправка не удалась. Текст
+    живёт в уведомлении без role=alert и без «error» в классе, поэтому
+    `_visible_error` его не видит."""
+    monkeypatch.setattr(ea, "_dump_form_debug", lambda *a, **kw: None)
+    url = "https://careers.factorialhr.com/apply/x"
+    page = _Page(text="Application form\nSomething went wrong. Try again later.", url=url,
+                 fields=[FieldObs(tag="input", label="Email", ref="0")])
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, url)
+
+    said = str(err.value)
+    assert "НЕ ушла" in said and "ВОЗМОЖНО" not in said
+    assert "Something went wrong" in said
+
+
 def test_an_unreadable_outcome_saves_the_page(monkeypatch):
     """Неизвестный исход — единственный, который нельзя проверить потом ничем,
     кроме чужого почтового ящика. Значит страницу надо сохранить на месте: за

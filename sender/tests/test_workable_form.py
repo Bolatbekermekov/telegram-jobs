@@ -101,6 +101,36 @@ def test_the_answer_lands_on_the_aria_radio(page):
     assert page.locator("input[name=QA_12099656][value=false]").is_checked()
 
 
+# React у Workable держит ответ в `aria-checked` обёртки, а родной input после
+# первого выбора остаётся `checked=false`. Замер живьём 2026-09-13 (прогон 6, лид
+# #1164): первый вопрос отметился целиком, у следующих трёх — только aria-checked,
+# и бот отчитался «клик прошёл, но страница ответ не засчитала». Обязательность
+# страница при этом снимает сама: у отвеченной группы `valueMissing` уже false.
+_REACT_LIKE = """
+<script>
+document.addEventListener('click', ev => {
+  const shell = ev.target.closest && ev.target.closest('[role=radio]');
+  if (!shell) return;
+  const group = shell.closest('[role=radiogroup]');
+  group.querySelectorAll('[role=radio]').forEach(w => w.setAttribute('aria-checked', 'false'));
+  shell.setAttribute('aria-checked', 'true');
+  // Как у React: контролируемый input возвращается к своему состоянию в том же
+  // событии — родная галочка снимается, ответ остаётся в aria-checked обёртки.
+  group.querySelectorAll('input[type=radio]').forEach(r => { r.checked = false; r.required = false; });
+}, true);
+</script>
+"""
+
+
+def test_an_answer_the_page_shows_as_chosen_counts(page):
+    from app.infrastructure.widgets.choice import pick_choice_reason
+    page.set_content(f"<body>{_WORKABLE}{_REACT_LIKE}</body>")
+    q = next(f for f in ea.scrape_form(page).fields if f.name == "QA_12099656")
+    ok, why = pick_choice_reason(page, page.locator(f'[data-af="{q.ref}"]'), index=1)
+    assert ok, why
+    assert page.locator("[role=radio]:has(input[value=false])").get_attribute("aria-checked") == "true"
+
+
 def test_a_photo_upload_is_not_given_the_cv(page):
     photo = next(f for f in _fields(page) if f.type == "file" and "image/png" in f.accept)
     action = map_field(photo, PROF, "/cv.pdf")

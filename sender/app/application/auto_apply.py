@@ -607,6 +607,15 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         if converted != profile.notice_period:
             return FillAction(field=f, value=converted, source="profile")
 
+    # Код страны телефона — вариант из списка, а не номер целиком: правило
+    # телефона ниже искало бы среди «Spain (+34)» весь «+7 775 720 0604» и не
+    # нашло бы ничего. Сам номер потом теряет код в `_drop_duplicated_country_code`.
+    if f.options and _COUNTRY_CODE_LABEL_RE.search(low):
+        idx = _country_code_option(f.options, profile)
+        if idx is not None:
+            return FillAction(field=f, choice_index=idx, value=f.options[idx],
+                              source="profile")
+
     if caption_len <= _MAX_LABEL_CHARS:
         for rx, resolver in _LABEL_RULES:
             if rx.search(low):
@@ -730,7 +739,31 @@ def _option_index_for(options: list[str], value: str) -> int | None:
     return None
 
 
-_COUNTRY_CODE_LABEL_RE = re.compile(r"country code|код страны", re.IGNORECASE)
+# «Phone prefix» у Factorial и «Dial code» — тот же вопрос, что «country code» у
+# LinkedIn Easy Apply (живьём 2026-09-13, лид #1044: список остался на «Spain
+# (+34)», в «Phone» ушёл номер с +7, сервер ответил «Something went wrong»).
+_COUNTRY_CODE_LABEL_RE = re.compile(
+    r"country[\s_-]*code|код страны|phone[\s_-]*prefix|dial(?:ing)?[\s_-]*code|"
+    r"calling[\s_-]*code", re.IGNORECASE)
+_PHONE_CODE_RE = re.compile(r"^\s*\+(\d{1,3})")
+
+
+def _country_code_option(options: list[str], profile: ApplyProfile) -> int | None:
+    """Вариант списка кодов страны для телефона из профиля, или None.
+
+    Код бывает общим у нескольких стран (+7 — Россия и Казахстан), поэтому сначала
+    вариант, где есть и код, и страна профиля, и только потом первый с тем же кодом.
+    """
+    m = _PHONE_CODE_RE.match(profile.phone or "")
+    if not m:
+        return None
+    code = re.compile(rf"\+{m.group(1)}(?!\d)")
+    country = (profile.country or "").strip().lower()
+    with_code = [i for i, o in enumerate(options) if code.search(o or "")]
+    for i in with_code:
+        if country and country in (options[i] or "").lower():
+            return i
+    return with_code[0] if with_code else None
 _PHONE_LABEL_RE = re.compile(r"phone|mobile|телефон|whats\s?app|contact\s*(?:number|no\b)",
                              re.IGNORECASE)
 _LEADING_COUNTRY_CODE_RE = re.compile(r"^\+\d{1,3}[\s\-()]*")
