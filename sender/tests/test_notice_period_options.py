@@ -49,6 +49,30 @@ def test_ranges_and_open_ends():
     assert notice_option_index(options, "3 months") == 3
 
 
+LEVER_1264 = ["90 days or less", "60 days or less", "45 days or less", "30 days or less",
+              "15 days or less", "Immediately available"]
+
+
+def test_or_less_options_take_the_tightest_that_holds_the_notice():
+    """Живьём 2026-09-14 (#1264, Lever): «Notice Period» — радиогруппа «90 days or
+    less … 15 days or less, Immediately available». «Or less» — это верхняя
+    граница, и правдивы сразу несколько вариантов; честный — самый узкий."""
+    assert notice_option_index(LEVER_1264, "3 weeks") == 3
+    assert notice_option_index(LEVER_1264, "1 month") == 3
+    assert notice_option_index(LEVER_1264, "10 days") == 4
+    assert notice_option_index(LEVER_1264, "Immediately") == 5
+
+
+def test_the_lever_radio_group_is_answered_from_the_owners_ready_answer():
+    owner = ApplyProfile(full_name="Bolatbek Yermekov", email="a@b.com",
+                         notice_period="1 month",
+                         custom_answers={"notice period": "1 month"})
+    f = FieldObs(tag="input", type="radio", label="Notice Period✱", required=True,
+                 name="cards[5fd76fff-d276-4961-8fa4-a09cd4df4a38][field1]", options=LEVER_1264)
+    a = map_field(f, owner, "/cv.pdf")
+    assert (a.choice_index, a.value) == (3, "30 days or less")
+
+
 def test_nothing_readable_gives_nothing():
     assert notice_option_index(["January", "February"], "1 month") is None
     assert notice_option_index(LEAD_1216, "после защиты диплома") is None
@@ -59,6 +83,38 @@ def test_the_1216_select_is_answered_from_the_profile():
                  required=True, options=LEAD_1216)
     a = map_field(f, PROFILE, "/cv.pdf")
     assert (a.source, a.choice_index, a.value) == ("profile", 3, "30 Days")
+
+
+def test_the_owners_ready_answer_on_a_dropdown_picks_an_option():
+    """Живьём 2026-09-14, повтор #1216 уже с правилом выше: в анкете владельца
+    лежит `custom_answers: "notice period": "1 month"`, готовые ответы
+    проверяются раньше, и строка «1 month» уезжала в `select` текстом —
+    «не смог заполнить обязательное поле». Готовый ответ на список — вариант."""
+    owner = ApplyProfile(full_name="Bolatbek Yermekov", email="a@b.com",
+                         notice_period="1 month",
+                         custom_answers={"notice period": "1 month"})
+    f = FieldObs(tag="select", type="select-one", label="What is your current notice period?*",
+                 required=True, options=LEAD_1216)
+    a = map_field(f, owner, "/cv.pdf")
+    assert (a.source, a.choice_index, a.value) == ("custom", 3, "30 Days")
+
+
+def test_a_ready_answer_that_is_an_option_is_selected():
+    owner = ApplyProfile(full_name="B Y", email="a@b.com",
+                         custom_answers={"how did you hear about us": "LinkedIn"})
+    f = FieldObs(tag="select", type="select-one", label="How did you hear about us?",
+                 required=True, options=["Select an option", "Indeed", "LinkedIn", "Other"])
+    a = map_field(f, owner, "/cv.pdf")
+    assert (a.choice_index, a.value) == (2, "LinkedIn")
+
+
+def test_a_ready_answer_missing_from_the_list_goes_to_the_model():
+    owner = ApplyProfile(full_name="B Y", email="a@b.com",
+                         custom_answers={"how did you hear about us": "LinkedIn"})
+    f = FieldObs(tag="select", type="select-one", label="How did you hear about us?",
+                 required=True, options=["Select an option", "Friend", "Job board"])
+    a = map_field(f, owner, "/cv.pdf")
+    assert a.needs_ai and a.choice_index is None and a.value == ""
 
 
 def test_an_education_start_month_is_still_not_a_notice_period():

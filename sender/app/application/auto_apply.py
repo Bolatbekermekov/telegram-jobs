@@ -443,6 +443,24 @@ def _age_answer(f: FieldObs, age: int | None) -> FillAction | None:
     return FillAction(field=f, value=str(age), source="profile")
 
 
+def _custom_choice(f: FieldObs, low: str, ans: str) -> FillAction:
+    """Готовый ответ владельца на вопрос-список — вариант списка, а не текст.
+
+    Живьём 2026-09-14 (повтор #1216): «notice period: 1 month» из анкеты уезжал в
+    `select` строкой, и заполнение падало на обязательном поле. Вариант ищется
+    по тексту, срок выхода — по дням; не нашёлся — обязательный вопрос уходит
+    модели, как любой другой список без готового ответа.
+    """
+    idx = _option_index_for(f.options, ans)
+    if idx is None and (_NOTICE_RE.search(low) or _AVAILABILITY_DATE_RE.search(low)):
+        idx = notice_option_index(f.options, ans)
+    if idx is not None:
+        return FillAction(field=f, choice_index=idx, value=f.options[idx], source="custom")
+    if field_is_required(f):
+        return FillAction(field=f, needs_ai=True, source="ai")
+    return FillAction(field=f, source="unmapped")
+
+
 def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
               cover_letter_path: str = "") -> FillAction:
     low = f"{f.label} {f.name}".strip().lower()
@@ -553,6 +571,8 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         else:                       # multi-word key: match the phrase in order
             matched = re.search(r"\b" + r"\W+".join(map(re.escape, key_words)) + r"\b", low)
         if matched:
+            if ans and f.options:
+                return _custom_choice(f, low, ans)
             if ans:
                 # Перевод в единицы вопроса — НЕ отмена ответа владельца, а его
                 # выражение. `custom_answers` содержит «notice period: 1 month»,

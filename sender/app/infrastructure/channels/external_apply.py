@@ -14,7 +14,7 @@ from app.application.apply_guard import (
 )
 from app.application.hidden_date import wants_availability_date
 from app.application.auto_apply import (
-    COVER_LETTER_RE, _match_choice, answer_ai_fields, build_plan,
+    COVER_LETTER_RE, _match_choice, _option_index_for, answer_ai_fields, build_plan,
     field_is_required as _required,
 )
 from app.application.classify_apply import classify, known_ats_iframe
@@ -602,6 +602,51 @@ _SET_RANGE_JS = r"""(el, answer) => {
 }"""
 
 
+# Lever «Current location»: вход с подсказками и скрытым `#selected-location`.
+# Текст без выбора подсказки форма не считает — живьём 2026-09-14 (лид #1264,
+# HighLevel) отправку остановил пустой `location`. Подсказки после «Astana»:
+# `div.dropdown-location` «Astana, KAZ» и «Astana, Panjshir, AFG».
+_LEVER_LOCATION_JS = ("el => el.getAttribute('data-qa') === 'location-input' "
+                      "&& !!document.getElementById('selected-location')")
+_LEVER_PICKED_JS = """() => {
+  const s = document.getElementById('selected-location');
+  if (!s || !s.value) return false;
+  try { return !!(JSON.parse(s.value).name || '').trim(); } catch (e) { return false; }
+}"""
+
+
+def _is_lever_location(loc) -> bool:
+    try:
+        return bool(loc.first.evaluate(_LEVER_LOCATION_JS))
+    except Exception:  # noqa: BLE001 — не тот вход или он исчез: обычный путь
+        return False
+
+
+def _fill_lever_location(page, loc, value: str) -> bool:
+    """Набрать город и выбрать подсказку Lever со страной анкеты. True — выбрано."""
+    parts = [p.strip() for p in (value or "").split(",") if p.strip()]
+    if not parts:
+        return False
+    city, country = parts[0], (parts[-1].lower() if len(parts) > 1 else "")
+    field = loc.first
+    field.click(timeout=8000)
+    field.fill("")
+    field.type(city, delay=40)
+    items = page.locator(".dropdown-location")
+    try:
+        items.first.wait_for(state="visible", timeout=8000)
+    except Exception:  # noqa: BLE001 — подсказок нет: такого места Lever не знает
+        return False
+    texts = [items.nth(i).inner_text().strip().lower() for i in range(items.count())]
+    # Страна в подсказке — трёхбуквенным кодом («Astana, KAZ»); у Казахстана он
+    # совпадает с началом названия, как и у большинства стран.
+    pick = next((i for i, t in enumerate(texts) if country and (
+        country in t or t.endswith(", " + country[:3]))), 0)
+    items.nth(pick).click(timeout=5000)
+    page.wait_for_timeout(300)
+    return bool(page.evaluate(_LEVER_PICKED_JS))
+
+
 def fill_fields(page, plan, where: str = "внешняя форма", profile=None) -> None:
     """Type every planned value into the page. Submits nothing.
 
@@ -664,6 +709,19 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                         f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.field.tag == "select" and a.choice_index is not None:
                 loc.first.select_option(index=a.choice_index, timeout=8000)
+            elif a.field.tag == "select" and a.value:
+                # Текст вместо номера варианта. `fill()` на списке бросает, и
+                # отклик уходил в ручной с «не смог заполнить», теряя причину
+                # (лид #1216, 2026-09-14). Вариант с этим текстом — выбираем;
+                # нет такого — так и говорим.
+                idx = _option_index_for(a.field.options, a.value)
+                if idx is None:
+                    if _required(a.field):
+                        raise ManualApplyRequired(
+                            f"{where}: в списке «{a.field.label or a.field.name}» нет "
+                            f"варианта «{a.value[:40]}», нужен ручной отклик")
+                    continue
+                loc.first.select_option(index=idx, timeout=8000)
             elif (a.field.type in ("radio", "checkbox")
                   and a.choice_index is not None):
                 # План хранит одно действие на ГРУППУ и номер выбранного
@@ -734,6 +792,11 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                     raise ManualApplyRequired(
                         f"{where}: на шкале «{a.field.label or a.field.name}» не встал "
                         f"ответ {a.value[:20]!r}, нужен ручной отклик")
+            elif a.value and a.field.name == "location" and _is_lever_location(loc):
+                if not _fill_lever_location(page, loc, a.value) and _required(a.field):
+                    raise ManualApplyRequired(
+                        f"{where}: Lever не нашёл «{a.value[:40]}» в подсказках поля "
+                        f"«{a.field.label or a.field.name}», нужен ручной отклик")
             elif a.value:
                 text = a.value
                 if a.field.type == "number":

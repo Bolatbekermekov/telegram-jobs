@@ -123,10 +123,14 @@ _OPTION_RANGE_RE = re.compile(r"(\d+)\s*(?:[-–—]|to|до)\s*(\d+)\s*" + _OPT
 _OPTION_ONE_RE = re.compile(r"(\d+)\s*(\+)?\s*" + _OPTION_UNIT, re.IGNORECASE)
 # «no more than» и «не более» содержат «more than» и «более» — поэтому «не
 # больше N» проверяется раньше «больше N».
-_OPTION_UP_TO_RE = re.compile(r"within|up to|no more than|не более|\bдо\b", re.IGNORECASE)
+# «30 days or less» (Lever, #1264) — тоже верхняя граница.
+_OPTION_UP_TO_RE = re.compile(
+    r"within|up to|no more than|or less|or fewer|не более|или меньше|и меньше|\bдо\b",
+    re.IGNORECASE)
 _OPTION_BELOW_RE = re.compile(r"less than|under|below|fewer than|менее|меньше", re.IGNORECASE)
-_OPTION_ABOVE_RE = re.compile(r"more than|over|above|longer than|beyond|более|больше|свыше",
-                              re.IGNORECASE)
+_OPTION_ABOVE_RE = re.compile(
+    r"more than|or more|or longer|over|above|longer than|beyond|более|больше|свыше",
+    re.IGNORECASE)
 
 
 def _unit_days(unit: str) -> int:
@@ -174,8 +178,13 @@ def notice_option_index(options: list[str], notice_period: str) -> int | None:
     days = _notice_days(notice_period)
     if days is None:
         return None
+    # Верны бывают сразу несколько («90 days or less» и «30 days or less» для
+    # месяца, Lever #1264); честный — самый узкий из них.
+    best, best_width = None, None
     for i, option in enumerate(options):
         span = _option_days(option)
         if span and span[0] <= days <= span[1]:
-            return i
-    return None
+            width = span[1] - span[0]
+            if best_width is None or width < best_width:
+                best, best_width = i, width
+    return best
