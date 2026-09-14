@@ -48,6 +48,8 @@ _NOTICE_RE = re.compile(r"notice period|срок отработки", re.IGNOREC
 # тот же CTC с приставкой, и «\bctc\b» не поймал бы ни одного.
 _SALARY_Q_RE = re.compile(r"salary|compensation|ctc\b|expected pay|\brate\b", re.I)
 _CURRENT_SALARY_RE = re.compile(r"\bcurrent\b|\bcctc\b|текущ", re.I)
+_POSTAL_RE = re.compile(r"postal|\bzip\b|zip\s?code|post\s?code|почтов\w*\s+индекс|\bиндекс\b",
+                        re.I)
 
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
@@ -720,6 +722,13 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         if idx is not None:
             return FillAction(field=f, choice_index=idx, value=f.options[idx],
                               source="profile")
+
+    # Почтовый индекс — не «город, страна», даже когда имя поля «location-postal-
+    # code»: правило места читает подпись вместе с именем и вписало «Astana,
+    # Kazakhstan» в «Zip code» (Indeed Apply, #1236, 2026-09-14). Индекса в анкете
+    # нет, а выдуманный уйдёт работодателю как адрес.
+    if _POSTAL_RE.search(low):
+        return FillAction(field=f, source="unmapped")
 
     if caption_len <= _MAX_LABEL_CHARS:
         for rx, resolver in _LABEL_RULES:
