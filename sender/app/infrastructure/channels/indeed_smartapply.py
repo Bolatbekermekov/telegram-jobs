@@ -35,9 +35,10 @@ from urllib.parse import urlparse
 
 from app.application.answerer_cv import answerer_for_cv
 from app.application.auto_apply import (
-    ApplyPlan, already_answered, answer_ai_fields, build_plan,
+    ApplyPlan, already_answered, answer_ai_fields, build_plan, map_field,
 )
 from app.domain.channel import ManualApplyRequired
+from app.domain.page_observation import FieldObs
 from app.domain.indeed_apply import on_smartapply
 from app.infrastructure.channels.external_apply import (
     _dump_form_debug, _slug, fill_fields, scrape_form,
@@ -344,6 +345,64 @@ def _fill_screen(page, screen: str, profile, cv_path: str, answerer, context: st
             f"Indeed Apply, экран «{screen}»: не заполнены обязательные поля "
             f"{missing} — дожми вручную: {job_url}")
     fill_fields(page, plan, where="Indeed Apply", profile=profile)
+    _answer_indeed_selects(page, screen, profile, cv_path, answerer, context, job_url)
+
+
+# Вопрос-список Indeed — не `select`, а `div[role=combobox]` с `li[role=option]`
+# во всплывающем окне (живьём 2026-09-14, #1228: «When are you available to start
+# working on a full-time basis? *»). Скрапер форм видит только настоящие поля.
+_INDEED_SELECTS_JS = """() => [...document.querySelectorAll(
+    '[role=combobox][data-testid$="-select-list-select-list"]')].map(box => {
+  const flat = s => (s || '').replace(/\\s+/g, ' ').trim();
+  const label = document.getElementById(box.getAttribute('aria-labelledby') || '');
+  const popup = document.getElementById(box.getAttribute('aria-controls') || '');
+  return {
+    testid: box.getAttribute('data-testid') || '',
+    question: flat(label && label.textContent),
+    current: flat(box.textContent),
+    options: popup ? [...popup.querySelectorAll('[role=option]')].map(o => ({
+      text: flat(o.textContent), testid: o.getAttribute('data-testid') || ''})) : [],
+  };
+})"""
+_VISUALLY_HIDDEN_REQUIRED_RE = re.compile(r"\s*required\s*$", re.IGNORECASE)
+
+
+def _answer_indeed_selects(page, screen: str, profile, cv_path: str, answerer,
+                           context: str, job_url: str) -> None:
+    found = [s for s in (_evaluate(page, _INDEED_SELECTS_JS, default=[]) or [])
+             if s.get("testid") and s.get("options")
+             and not already_answered(FieldObs(tag="select", value=s.get("current", "")))]
+    if not found:
+        return
+    actions = []
+    for s in found:
+        label = _VISUALLY_HIDDEN_REQUIRED_RE.sub("", s["question"])
+        field = FieldObs(tag="select", type="select-one", label=label[:80], question=label,
+                         required="*" in label, options=[o["text"] for o in s["options"]],
+                         ref=s["testid"])
+        actions.append(map_field(field, profile, cv_path))
+    plan = ApplyPlan(actions=actions)
+    answer_ai_fields(plan, answerer_for_cv(answerer, cv_path), context)
+    for s, a in zip(found, plan.actions):
+        if a.choice_index is None:
+            if a.field.required:
+                raise ManualApplyRequired(
+                    f"Indeed Apply, экран «{screen}»: не выбран ответ в списке "
+                    f"«{a.field.label}» — дожми вручную: {job_url}")
+            continue
+        option = s["options"][a.choice_index]
+        box = page.locator(f'[data-testid="{s["testid"]}"]').first
+        box.click(timeout=8000)
+        choice = page.locator(f'[data-testid="{option["testid"]}"]').first
+        try:
+            choice.wait_for(state="visible", timeout=5000)
+        except Exception:  # noqa: BLE001 — окно не показалось: клик ниже скажет, встал ли ответ
+            pass
+        choice.click(timeout=8000)
+        if not _wait_until(page, lambda: box.inner_text().strip() == option["text"], 3000):
+            raise ManualApplyRequired(
+                f"Indeed Apply, экран «{screen}»: в списке «{a.field.label}» не встал "
+                f"вариант «{option['text']}» — дожми вручную: {job_url}")
 
 
 def _advance(page, screen: str, job_url: str) -> None:
@@ -377,7 +436,9 @@ def _submitted(page) -> bool:
 
 def _submit(page, job_url: str) -> None:
     button = page.locator(SEL_SUBMIT)
-    if button.count() == 0:
+    # Экран проверки сначала показывает «Preparing review», кнопка приходит потом
+    # (живьём 2026-09-14, прогон 9: #1230 и #1239 дошли сюда и сдались сразу).
+    if not _wait_until(page, lambda: button.count() > 0, _SUBMIT_WAIT_MS):
         raise ManualApplyRequired(
             f"Indeed Apply: на экране проверки нет «Submit your application» — "
             f"дожми вручную: {job_url}")

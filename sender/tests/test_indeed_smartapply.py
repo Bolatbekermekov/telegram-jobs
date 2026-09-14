@@ -351,3 +351,78 @@ def test_a_visible_captcha_goes_to_the_human(site, ai_cv):
         _apply(page, ai_cv)
 
     assert not any(urlparse(u).path.endswith("/profile-location") for u in visited)
+
+
+REVIEW_PREPARING = """<h1>Review your application</h1><p id="prep">Preparing review</p>
+<script>
+  setTimeout(() => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('data-testid', 'submit-application-button');
+    b.textContent = 'Submit your application';
+    b.addEventListener('click', () => { location.href = '@@post-apply'; });
+    document.getElementById('prep').replaceWith(b);
+  }, 1500);
+</script>"""
+
+
+def test_the_review_screen_is_awaited_while_it_prepares(site, ai_cv):
+    """Живьём 2026-09-14 (#1230, прогон 9): дошли до `review-module`, а там ещё
+    «Preparing review» — кнопки отправки нет, и бот сдавался сразу."""
+    page, screens, visited = site
+    screens["/beta/indeedapply/form/review-module"] = REVIEW_PREPARING
+
+    _apply(page, ai_cv)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+
+
+SELECT_QUESTION = """<h1>Answer these questions from the employer</h1>
+<div id="q_3"><div data-testid="input-q_c357-select-list">
+  <label id="lbl"><span>When are you available to start working on a full-time basis?</span><span
+    aria-hidden="true">&nbsp;*</span></label>
+  <div tabindex="0" id="box" aria-labelledby="lbl" role="combobox" aria-expanded="false"
+       aria-haspopup="dialog" aria-controls="Popup-1"
+       data-testid="input-q_c357-select-list-select-list"><span><span id="cur">Select an option</span></span></div>
+  <div id="Popup-1" role="dialog" style="display:none"><input placeholder="Search to select an option">
+    <ul role="listbox">
+      <li role="option" data-testid="input-q_c357-select-list-1"><span>Immediately</span></li>
+      <li role="option" data-testid="input-q_c357-select-list-2"><span>Within 2 weeks</span></li>
+      <li role="option" data-testid="input-q_c357-select-list-3"><span>Within 1 month</span></li>
+      <li role="option" data-testid="input-q_c357-select-list-4"><span>In 3 months or more</span></li>
+    </ul></div>
+</div></div>
+<div role="alert" id="err"></div>
+<button type="button" id="go">Continue</button>
+<script>
+(() => {
+  const box = document.getElementById('box'), pop = document.getElementById('Popup-1');
+  box.addEventListener('click', () => { pop.style.display = 'block'; box.setAttribute('aria-expanded', 'true'); });
+  pop.querySelectorAll('[role=option]').forEach(o => o.addEventListener('click', () => {
+    document.getElementById('cur').textContent = o.textContent.trim();
+    pop.style.display = 'none';
+    box.setAttribute('aria-expanded', 'false');
+  }));
+  document.getElementById('go').addEventListener('click', () => {
+    const v = document.getElementById('cur').textContent;
+    if (v !== 'Select an option') location.href = '@@review-module?start=' + encodeURIComponent(v);
+    else document.getElementById('err').textContent = 'Choose an option to continue.';
+  });
+})();
+</script>"""
+
+
+def test_indeeds_own_dropdown_question_is_answered(site, ai_cv):
+    """Живьём 2026-09-14 (#1228, прогон 9): «When are you available to start
+    working on a full-time basis? *» — не `select`, а `div[role=combobox]` со
+    списком `li[role=option]` во всплывающем окне. Скрапер его не видел, вопрос
+    оставался «Select an option», и форма отвечала «Choose an option to continue»."""
+    page, screens, visited = site
+    screens["/beta/indeedapply/form/questions-module/question/1"] = SELECT_QUESTION
+    profile = ApplyProfile(**{**PROFILE.__dict__, "notice_period": "1 month"})
+
+    page.goto(JOB)
+    ia.indeed_apply_via_page(page, JOB, OutreachContent(body="letter"), profile=profile,
+                             cv_path=ai_cv, answerer=_yes)
+
+    assert _query(visited, "/review-module")["start"] == ["Within 1 month"]
