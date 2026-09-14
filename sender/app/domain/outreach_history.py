@@ -33,6 +33,11 @@ from app.domain.lead import STATUS_SKIPPED
 
 # Мусор, который площадки клеят к ссылке и который меняется от показа к показу.
 _QUERY = re.compile(r"[?#].*$")
+# Ключ вакансии, который живёт в параметре, а не в пути, — его хвост отбрасывать
+# нельзя. Все ссылки выдачи Indeed — `/rc/clk?jk=…`, и без параметра разные
+# вакансии становились одним адресом: 2026-09-14 #1230 и #1239 ушли в skipped как
+# «та же вакансия», что #1228. У встроенных досок Greenhouse — `?gh_jid=…`.
+_JOB_ID_PARAM = re.compile(r"[?&](jk|gh_jid)=([^&#]+)")
 _SCHEME = re.compile(r"^\w+://")
 _TG_HOST = re.compile(r"^(www\.)?(t\.me|telegram\.me)/")
 
@@ -69,10 +74,12 @@ def normalize_address(target) -> str:
     t = str(target or "").strip().lower()
     if not t:
         return ""
+    job_id = _JOB_ID_PARAM.search(t)
     t = _QUERY.sub("", t)
     t = _SCHEME.sub("", t)
     t = _TG_HOST.sub("", t)
-    return t.lstrip("@").rstrip("/")
+    t = t.lstrip("@").rstrip("/")
+    return f"{t}?{job_id.group(1)}={job_id.group(2)}" if job_id else t
 
 
 def vacancy_similarity(a, b) -> float | None:

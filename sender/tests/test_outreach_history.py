@@ -271,3 +271,21 @@ def test_a_prose_summary_without_a_head_line_is_not_parsed():
 def test_a_long_tail_is_not_taken_for_an_employer():
     long_tail = "Роль — " + "очень длинное описание вместо названия компании" * 2
     assert vacancy_posting(long_tail) is None
+
+
+def test_indeed_redirect_links_to_different_jobs_stay_different():
+    """Живьём 2026-09-14 (прогон 10): все ссылки выдачи Indeed — `/rc/clk?jk=…`,
+    и без параметров #1228 (Particle41) и #1230 (Kavant Solutions) стали одним
+    адресом — #1230 ушёл в skipped как «та же вакансия». Ключ вакансии `jk`
+    живёт в параметре и отбрасываться не должен."""
+    a = "https://www.indeed.com/rc/clk?jk=ed6a7fc3bedd441c&bb=1V5-g5hYg_BiICe"
+    b = "https://www.indeed.com/rc/clk?jk=84f280b9c5186dbd&bb=BK5zOMCKqljslLL"
+    assert normalize_address(a) != normalize_address(b)
+    assert normalize_address(a) == normalize_address(
+        "https://www.indeed.com/rc/clk?bb=other&jk=ED6A7FC3BEDD441C&vjs=3")
+
+
+def test_a_greenhouse_embed_job_id_is_kept_too():
+    a = "https://acme.com/careers?gh_jid=5284201008&gh_src=x"
+    b = "https://acme.com/careers?gh_jid=5284201009"
+    assert normalize_address(a) != normalize_address(b)
