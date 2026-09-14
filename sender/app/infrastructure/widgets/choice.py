@@ -414,10 +414,26 @@ def pick_choice_reason(page, locator, value: str = "",
             except Exception as exc:  # noqa: BLE001 — следующий способ важнее причины
                 tried.append(f"{name}: {str(exc).splitlines()[0][:50]}")
             if _accepted(page, key):
-                return (True, "")
+                if _still_accepted(page, key):
+                    return (True, "")
+                tried[-1] += " (страница сняла ответ)"
         return (False, "клик прошёл, но страница ответ не засчитала — " + "; ".join(tried))
     finally:
         _unstamp(page)
+
+
+# Сколько ждать, прежде чем поверить принятому ответу. Живьём 2026-09-14 (лид
+# #1233, Greenhouse, «What type of employment are you open to?»): после клика
+# скриптом галочка стояла 0–500 мс, на 600 мс React перерисовал группу из своего
+# состояния и снял её — а виджет уже доложил «выбрано», и форма уходила с пустым
+# обязательным вопросом. Клик мышью по метке тот же React засчитывает: до него
+# доходит следующий способ, если ответ не устоял.
+_SETTLE_MS = 1200
+
+
+def _still_accepted(page, key=None) -> bool:
+    page.wait_for_timeout(_SETTLE_MS)
+    return _accepted(page, key)
 
 
 def _native_click(page, found, key=None) -> None:
