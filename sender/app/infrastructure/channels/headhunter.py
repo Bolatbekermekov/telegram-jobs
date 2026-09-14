@@ -659,13 +659,28 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
     # and the form (or the submitted-response chat) to render before going on.
     if page.locator(SEL_COUNTRY_CONFIRM).count() > 0:
         page.locator(SEL_COUNTRY_CONFIRM).first.click()
-        page.wait_for_timeout(2500)
+        # С несколькими резюме после согласия hh открывает окно отклика, и оно
+        # приходит позже прежней паузы в 2,5 с (живьём 2026-09-14, #1263 и
+        # #1265): бот не видел поля письма и уходил в перезагрузку. Ждём само
+        # окно — или отметку об отклике, если hh откликнулся сразу.
+        try:
+            page.wait_for_selector(
+                f"{SEL_SUBMIT}, {SEL_LETTER_TOGGLE}, {SEL_LETTER_INPUT}, "
+                f"{SEL_ALREADY_APPLIED}", timeout=15000)
+        except Exception:  # noqa: BLE001 — окна нет: дальше разберутся проверки ниже
+            pass
+        page.wait_for_timeout(800)
     # Онлайн-резюме той роли, под которую письмо (`hh_resume_title`) — до письма:
     # поле письма живёт в том же окне.
     _choose_resume(page, resume_title)
     # The cover-letter field may need expanding first — also optional.
     if page.locator(SEL_LETTER_TOGGLE).count() > 0:
         page.locator(SEL_LETTER_TOGGLE).first.click()
+        # В окне отклика поле письма дорисовывается после клика, не мгновенно.
+        try:
+            page.wait_for_selector(SEL_LETTER_INPUT, timeout=5000)
+        except Exception:  # noqa: BLE001 — поля нет: его отсутствие разберут ниже
+            pass
     # Mandatory employer questions: answer them with the AI, or skip if there's
     # no answerer wired in (so we never send a half-filled application).
     if page.locator(SEL_QUESTIONS).count() > 0:
