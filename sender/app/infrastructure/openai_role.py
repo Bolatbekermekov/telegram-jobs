@@ -3,8 +3,7 @@
 Отличие одно и намеренное: здесь передаётся response_format=json_object, потому
 что разбор ответа ищет JSON. Сосед его не передаёт и полагается на разбор прозой.
 """
-from openai import OpenAI
-
+from app.infrastructure.openai_sdk import build_openai_client
 from app.infrastructure.rate_limit import with_rate_limit_retry
 
 from app.application.classify_role import build_role_prompt, parse_role_response
@@ -19,7 +18,7 @@ class OpenAIRoleClassifier:
 
     def __init__(self, api_key: str, model: str, max_output_tokens: int = 2000,
                  base_url: str | None = None):
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._client = build_openai_client(api_key, base_url)
         self._model = model
         self._max_output_tokens = max_output_tokens
 
