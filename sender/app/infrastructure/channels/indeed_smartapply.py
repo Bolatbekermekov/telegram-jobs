@@ -27,6 +27,7 @@
 Капчу бот не решает. reCAPTCHA Enterprise там невидимая; если Indeed всё-таки
 покажет проверку, отклик уходит человеку.
 """
+import dataclasses
 import re
 import time
 from pathlib import PurePath
@@ -45,11 +46,22 @@ from app.infrastructure.channels.external_apply import (
 SEL_APPLY_BUTTON = '[data-testid="viewjob-indeed-apply"], #indeedApplyButton'
 SEL_RESUME_FILE = ('[data-testid="resume-selection-file-resume-radio-card-file-input"], '
                    'input[type=file]')
-SEL_SKIP_EXPERIENCE = ('[data-testid="work-experience-page-create-skip-button"], '
-                       '[data-testid="work-experience-page-review-skip-button"]')
 SEL_SUBMIT = '[data-testid="submit-application-button"]'
 
-_CONTINUE_RE = r"^\s*(continue|next|review your application|продолжить|далее)\s*$"
+# «Continue applying» — экран «вакансия в другой стране» (#1236, ae.indeed.com).
+_CONTINUE_RE = (r"^\s*(continue|continue applying|next|review your application|"
+                r"продолжить|далее)\s*$")
+# Разделы резюме, которые работодатель «просит», но разрешает пропустить: опыт
+# работы, образование (#1230, #1239) — у всех кнопка `<раздел>-page-*-skip-button`.
+SEL_SKIP_SECTION = ('[data-testid$="-page-create-skip-button"], '
+                    '[data-testid$="-page-review-skip-button"]')
+_SECTION_WAIT_MS = 5000
+# Формат текстового вопроса-даты Indeed держит не в поле, а в данных страницы:
+# `"name":"q_…", …, "inputDatePattern":"MM/dd/yyyy"` — часто внутри JS-строки,
+# с экранированными кавычками и косыми.
+_DATE_PATTERN_RE = re.compile(
+    r'\\?"name\\?"\s*:\s*\\?"(q_[0-9a-f]+)\\?"(?:(?!\\?"name\\?"\s*:).){0,1200}?'
+    r'\\?"inputDatePattern\\?"\s*:\s*\\?"((?:[^"\\]|\\/)+)\\?"', re.DOTALL)
 _SUCCESS_RE = re.compile(
     r"application has been submitted|application (?:was )?sent|you(?:'|’)ve applied|"
     r"заявка отправлена|отклик отправлен", re.IGNORECASE)
@@ -111,6 +123,12 @@ def has_indeed_apply(page) -> bool:
         return False
 
 
+def date_patterns(html: str) -> dict[str, str]:
+    """{имя поля: формат даты} из данных страницы Indeed Apply (`inputDatePattern`)."""
+    return {m.group(1): m.group(2).replace("\\/", "/")
+            for m in _DATE_PATTERN_RE.finditer(html or "")}
+
+
 def indeed_apply_via_page(page, job_url: str, content, profile=None, cv_path: str = "",
                           answerer=None, dry_run: bool = False,
                           vacancy_context: str = "") -> None:
@@ -150,8 +168,9 @@ def _walk(page, job_url, content, profile, cv_path, answerer, dry_run, vacancy_c
                     f"DRY_RUN: Indeed Apply дошёл до отправки, НЕ отправлено: {job_url}")
             _submit(page, job_url)
             return
-        if "work-experience" in screen:
-            _skip_work_experience(page, screen, job_url)
+        if screen.startswith("resume-module") and _wait_until(
+                page, lambda: page.locator(SEL_SKIP_SECTION).count() > 0, _SECTION_WAIT_MS):
+            _skip_section(page, _screen(page.url), job_url)
             continue
         if "resume-selection" in screen:
             if cv_path:
@@ -285,15 +304,15 @@ def _choose_resume(page, cv_path: str, job_url: str) -> None:
             f"«{_selected_resume(page) or 'ничего'}») — дожми вручную: {job_url}")
 
 
-def _skip_work_experience(page, screen: str, job_url: str) -> None:
-    """«Requested by the employer», но с «Skip». Должности и даты пошли бы в
-    собственное резюме Indeed, а работодатель и так получает наш PDF, где опыт
-    расписан; заполнять профиль Indeed за человека незачем."""
+def _skip_section(page, screen: str, job_url: str) -> None:
+    """Раздел резюме Indeed («Requested by the employer»: опыт работы, образование)
+    — пропустить. Должности, школы и даты ушли бы в собственное резюме Indeed, а
+    работодатель и так получает наш PDF, где всё это расписано."""
     before = page.url
-    skip = page.locator(SEL_SKIP_EXPERIENCE)
+    skip = page.locator(SEL_SKIP_SECTION)
     if skip.count() == 0:
         raise ManualApplyRequired(
-            f"Indeed Apply, экран «{screen}»: нет «Skip», а опыт работы Indeed "
+            f"Indeed Apply, экран «{screen}»: нет «Skip», а раздел резюме Indeed "
             f"заполнять не из чего — дожми вручную: {job_url}")
     _click(skip.first)
     if not _wait_until(page, lambda: page.url != before, _STEP_WAIT_MS):
@@ -305,6 +324,13 @@ def _skip_work_experience(page, screen: str, job_url: str) -> None:
 def _fill_screen(page, screen: str, profile, cv_path: str, answerer, context: str,
                  job_url: str) -> None:
     obs = scrape_form(page)
+    # Формат вопроса-даты — из данных страницы: в самом поле его нет (#1228).
+    patterns = date_patterns(_evaluate(
+        page, "() => document.documentElement.innerHTML", default="") or "")
+    if patterns:
+        obs = dataclasses.replace(obs, fields=[
+            dataclasses.replace(f, placeholder=patterns[f.name])
+            if f.name in patterns and not f.placeholder else f for f in obs.fields])
     plan = build_plan(obs, profile, cv_path)
     # Уже вписанное Indeed из аккаунта не трогаем: телефон там стоит без кода
     # страны рядом с отдельным выбором страны, и строка анкеты «+7 775 720 0604»

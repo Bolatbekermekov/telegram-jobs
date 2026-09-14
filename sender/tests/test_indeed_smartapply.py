@@ -245,6 +245,85 @@ def test_continue_is_awaited_while_the_upload_is_processed(site, ai_cv):
     assert _query(visited, "/create")["resume"] == ["Bolatbek_Yermekov_AI_Engineer.pdf"]
 
 
+EDUCATION = """<h1>Add education</h1>
+<label for="lvl">Level of education *</label><input id="lvl" name="education-level" required>
+<button data-testid="education-page-create-save-button" type="submit">Save and continue</button>
+<button data-testid="education-page-create-skip-button" type="button"
+  onclick="location.href = '@@questions-module/question/1'">Skip</button>"""
+
+
+def test_an_education_section_the_employer_asks_for_is_skipped(site, ai_cv):
+    """Живьём 2026-09-14 (#1230, #1239, прогон 8): после опыта работы Indeed
+    открыл `resume-module/profile-education/create` — «Level of education *» и
+    «Skip». Сначала адрес бывает промежуточным `resume-module`."""
+    page, screens, visited = site
+    screens["/beta/indeedapply/form/resume-module/profile-work-experience/create"] = \
+        EXPERIENCE.replace("@@questions-module/question/1", "@@resume-module")
+    screens["/beta/indeedapply/form/resume-module"] = """<h1>AI Engineer</h1>
+<script>setTimeout(() => location.replace('@@resume-module/profile-education/create'), 800)</script>"""
+    screens["/beta/indeedapply/form/resume-module/profile-education/create"] = EDUCATION
+
+    _apply(page, ai_cv)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+    assert any("/profile-education/create" in u for u in visited)
+
+
+def test_the_out_of_country_notice_is_continued(site, ai_cv):
+    """Живьём 2026-09-14 (#1236, ae.indeed.com, прогон 8): после контактов экран
+    `ooc-continue-or-job-search` — «Search jobs near you / Return to job search /
+    Continue applying». Это предупреждение, а не вопрос: право работать в ОАЭ
+    спросят отдельно, и на него ответят честно."""
+    page, screens, visited = site
+    screens[CONTACT_PATH] = CONTACT.replace("@@profile-location?phone=",
+                                            "@@ooc-continue-or-job-search?phone=")
+    screens["/beta/indeedapply/form/ooc-continue-or-job-search"] = """<h1>AI Engineer</h1>
+<h2>Search for jobs in Kazakhstan instead</h2>
+<button type="button" onclick="location.href = 'https://www.indeed.com/jobs'">Search jobs near you</button>
+<button type="button" onclick="location.href = 'https://www.indeed.com/jobs'">Return to job search</button>
+<button type="button" onclick="location.href = '@@profile-location?phone=775-720-0604'">Continue applying</button>"""
+
+    _apply(page, ai_cv)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+
+
+LAST_WORKING_QUESTION = """<h1>Answer these questions from the employer</h1>
+<label for="lw">What is your last working date? *</label>
+<input id="lw" type="text" required name="q_2bc9198f4bbc8b206c81bbf86b49f469">
+<div role="alert" id="err"></div>
+<button type="button" onclick="const v = document.getElementById('lw').value;
+  if (/^\\d{2}\\/\\d{2}\\/\\d{4}$/.test(v)) { location.href = '@@review-module?date=' + encodeURIComponent(v); }
+  else { document.getElementById('err').textContent = 'Enter a date in mm/dd/yyyy'; }">Continue</button>
+<script>window._initialData = JSON.parse("{\\"questions\\":[{\\"labelHtml\\":\\"What is your last working date?\\",\\"type\\":\\"TEXT\\",\\"name\\":\\"q_2bc9198f4bbc8b206c81bbf86b49f469\\",\\"required\\":true,\\"inputDatePattern\\":\\"MM/dd/yyyy\\"}]}");</script>"""
+
+
+def test_a_date_question_takes_the_pattern_indeed_keeps_in_the_page_data(site, ai_cv):
+    """Живьём 2026-09-14 (#1228, прогон 8): «What is your last working date? *» —
+    простой `input type=text` без placeholder; формат `MM/dd/yyyy` лежит только в
+    данных страницы (`inputDatePattern`). Последний рабочий день — конец срока
+    отработки из анкеты."""
+    page, screens, visited = site
+    screens["/beta/indeedapply/form/questions-module/question/1"] = LAST_WORKING_QUESTION
+    profile = ApplyProfile(**{**PROFILE.__dict__, "notice_period": "1 month"})
+
+    page.goto(JOB)
+    ia.indeed_apply_via_page(page, JOB, OutreachContent(body="letter"), profile=profile,
+                             cv_path=ai_cv, answerer=_yes)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+    (typed,) = _query(visited, "/review-module")["date"]
+    assert len(typed) == 10 and typed[2] == "/" and typed[5] == "/"
+
+
+def test_date_patterns_are_read_from_escaped_page_data():
+    html = ('{\\"id\\":\\"16813535008\\",\\"labelHtml\\":\\"What is your last working date?\\",'
+            '\\"type\\":\\"TEXT\\",\\"name\\":\\"q_2bc9198f4bbc8b206c81bbf86b49f469\\",'
+            '\\"required\\":true,\\"inputDatePattern\\":\\"MM\\/dd\\/yyyy\\",'
+            '\\"localizedDatePattern\\":\\"mm\\/dd\\/yyyy\\"}')
+    assert ia.date_patterns(html) == {"q_2bc9198f4bbc8b206c81bbf86b49f469": "MM/dd/yyyy"}
+
+
 def test_the_apply_button_gets_a_real_click(site, ai_cv):
     """Живьём 2026-09-14 (#1236, ae.indeed.com): «Apply with Indeed» не открыл форму
     от нативного el.click() — «кнопка нажата, а форма не открылась»."""
