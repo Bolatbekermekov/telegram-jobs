@@ -911,7 +911,11 @@ def _ai_prompt(field) -> str:
     """
     # Вопрос целиком, а не обрезанная подпись: см. FieldObs.question.
     prompt = getattr(field, "question", "") or field.label or field.name or ""
-    if _asks_for_a_number(field):
+    lo, hi = getattr(field, "range_min", ""), getattr(field, "range_max", "")
+    if getattr(field, "type", "") == "range" and lo and hi:
+        # Шкала: без границ модель отвечала по своей мерке (лид #1237, шкала 1–5).
+        prompt += f" (ответ: ТОЛЬКО число от {lo} до {hi})"
+    elif _asks_for_a_number(field):
         prompt += " (ответ: ТОЛЬКО число, без валюты, символов и слов)"
     limit = getattr(field, "max_len", 0) or 0
     if limit:

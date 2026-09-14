@@ -45,6 +45,12 @@ class FieldObs:
     # что угодно. Живьём 2026-09-13 (Workable, лид #1164) резюме уехало в «Photo»:
     # подпись у поля была мусорная, а `accept` честно говорил «только картинки».
     accept: str = ""
+    # Границы шкалы `input type=range`, как их объявила страница; у прочих полей
+    # пусто. Живьём 2026-09-14 (лид #1237, Teamtailor): «rate yourself in Python»
+    # от 1 до 5 — без границ модель отвечала по своей мерке.
+    range_min: str = ""
+    range_max: str = ""
+    range_step: str = ""
 
 
 @dataclass

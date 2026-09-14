@@ -320,6 +320,9 @@ _SCRAPE_JS = r"""() => {
                 || ['list','both'].includes(e.getAttribute('aria-autocomplete')),
       max_len: maxLenOf(e),
       accept: e.type === 'file' ? (e.getAttribute('accept') || '') : '',
+      range_min: e.type === 'range' ? (e.getAttribute('min') || '') : '',
+      range_max: e.type === 'range' ? (e.getAttribute('max') || '') : '',
+      range_step: e.type === 'range' ? (e.getAttribute('step') || '') : '',
       ref: String(i),
     });
   });
@@ -370,7 +373,8 @@ def observation_to_raw(obs: PageObservation) -> dict:
         "fields": [{"tag": f.tag, "type": f.type, "label": f.label, "name": f.name,
                     "required": f.required, "options": f.options, "value": f.value,
                     "combobox": f.combobox, "ref": f.ref, "question": f.question,
-                    "accept": f.accept}
+                    "accept": f.accept, "range_min": f.range_min,
+                    "range_max": f.range_max, "range_step": f.range_step}
                    for f in obs.fields],
         "file_inputs": obs.file_inputs, "iframes": obs.iframes,
         "mailto": obs.mailto_links, "apply_buttons": obs.apply_buttons,
@@ -388,7 +392,10 @@ def _build_observation(raw: dict) -> PageObservation:
                        max_len=int(f.get("max_len") or 0),
                        ref=f.get("ref", ""),
                        question=f.get("question", "") or "",
-                       accept=f.get("accept", "") or "") for f in raw.get("fields", [])]
+                       accept=f.get("accept", "") or "",
+                       range_min=f.get("range_min", "") or "",
+                       range_max=f.get("range_max", "") or "",
+                       range_step=f.get("range_step", "") or "") for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),
         iframes=raw.get("iframes", []), mailto_links=raw.get("mailto", []),
@@ -566,6 +573,22 @@ def _dump_form_debug(page, tag: str, locator=None) -> None:
         pass
 
 
+# Ответ на вопрос-шкалу (`input type=range`). fill() для range Playwright не
+# поддерживает, а контроллер страницы (Teamtailor, лид #1237) считает значение
+# выбранным только после события input — поэтому родной сеттер и события, как у
+# скрытых дат ниже. Число достаётся из ответа модели («4 — уверенно»); выход за
+# границы шкалы и её шаг браузер поправляет сам.
+_SET_RANGE_JS = r"""(el, answer) => {
+  const m = String(answer).match(/-?\d+(?:[.,]\d+)?/);
+  if (!m) return '';
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(el, m[0].replace(',', '.'));
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  return el.value;
+}"""
+
+
 def fill_fields(page, plan, where: str = "внешняя форма", profile=None) -> None:
     """Type every planned value into the page. Submits nothing.
 
@@ -693,6 +716,11 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
                         f"{where}: не выбрался вариант «{a.value[:40]}» в "
                         f"обязательном поле «{a.field.label or a.field.name}», "
                         "нужен ручной отклик")
+            elif a.field.type == "range" and a.value:
+                if not loc.first.evaluate(_SET_RANGE_JS, a.value) and _required(a.field):
+                    raise ManualApplyRequired(
+                        f"{where}: на шкале «{a.field.label or a.field.name}» не встал "
+                        f"ответ {a.value[:20]!r}, нужен ручной отклик")
             elif a.value:
                 text = a.value
                 if a.field.type == "number":
