@@ -1,15 +1,12 @@
-"""Чтение листа переживает короткий сбой сети; запись — по-прежнему нет.
+"""Чтение листа переживает короткий сбой сети.
 
 Живьём 2026-09-05: `get_all_records` подвис на `sheets.googleapis.com` и упал
 с `requests.exceptions.ReadTimeout` (read timeout=None — то есть ждал вечно).
 Прогон умер трейсбеком посреди очереди, 66 лидов остались необработанными.
 
-`_with_retry` не помог бы и на записи: он ловит только `APIError`, а таймаут
-это другое исключение.
-
-Разница между чтением и записью не в том, стоит ли повторять, а в ЦЕНЕ ОШИБКИ:
-повтор записи после дошедшего запроса создаёт дубль строки — дубль лида и дубль
-отклика; повтор чтения не создаёт ничего.
+Запись с 2026-09-14 повторяет сбои сети так же (см.
+test_sheet_write_network_change.py): все записи перезаписывают конкретные
+ячейки, и повтор после дошедшего запроса дубля не создаёт.
 """
 import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
@@ -103,17 +100,19 @@ def test_a_write_is_retried_when_the_token_never_arrived():
     assert sr._with_retry(op, sleep=lambda s: None) == "ok"
 
 
-def test_a_write_timeout_is_still_not_retried():
-    """Таймаут самого запроса данных по-прежнему не повторяется."""
+def test_a_write_timeout_is_retried_too():
+    """Запрос мог дойти до Google, но повтор кладёт те же значения в те же
+    ячейки — дубля строки не бывает."""
     calls = []
 
     def op():
         calls.append(1)
-        raise ReadTimeout("Read timed out")
+        if len(calls) < 2:
+            raise ReadTimeout("Read timed out")
+        return "ok"
 
-    with pytest.raises(ReadTimeout):
-        sr._with_retry(op, sleep=lambda s: None)
-    assert len(calls) == 1
+    assert sr._with_retry(op, sleep=lambda s: None) == "ok"
+    assert len(calls) == 2
 
 
 def test_the_client_gets_a_bounded_timeout(monkeypatch):

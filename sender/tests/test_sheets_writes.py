@@ -183,7 +183,7 @@ def test_mark_sent_raises_after_the_last_attempt(monkeypatch):
     with pytest.raises(sr.APIError):
         _repo(ws).mark_sent(_Lead(), "body", "sent")
 
-    assert ws.calls == 3
+    assert ws.calls == 6
     assert ws.updates == []
 
 

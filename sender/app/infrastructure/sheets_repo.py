@@ -36,6 +36,10 @@ _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _TRANSIENT_CODES = frozenset({429, 500, 502, 503, 504})
 _RETRY_ATTEMPTS = 3
 _RETRY_BASE_DELAY_SECONDS = 1.0
+# Запись ждёт дольше чтения: она случается ПОСЛЕ доставки, и её провал
+# останавливает весь прогон. Шесть попыток — это 1+2+4+8+16 = 31 с ожидания;
+# живьём 2026-09-14 (лид #1195) смену сети посреди прогона запись не пережила.
+_WRITE_RETRY_ATTEMPTS = 6
 
 # Сбой при получении ТОКЕНА. google-auth заворачивает таймаут запроса к
 # oauth2.googleapis.com в свой `TransportError` — это не `requests`, и прогон
@@ -61,25 +65,26 @@ def _status_of(exc: APIError) -> int:
     return status if isinstance(status, int) else exc.code
 
 
-def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
-    """Run a Sheets write, retrying transient API errors with exponential backoff.
+def _with_retry(op, attempts: int = _WRITE_RETRY_ATTEMPTS, sleep=None):
+    """Run a Sheets write, retrying transient failures with exponential backoff.
 
     A write that fails *after* the message was already delivered is what leaves a
     lead `new` and gets it sent to the same person again on the next run, so the
     write path is worth retrying.
 
-    Чтение повторяется отдельно (`_read_with_retry`) и по другим правилам:
-    прежняя фраза «читать повторять не стоит» держалась ровно до 2026-09-05,
-    когда один подвисший `get_all_records` уронил прогон посреди очереди из 66
-    лидов. Разница между путями не в том, стоит ли повторять, а в ЦЕНЕ ОШИБКИ:
-    повтор записи после дошедшего запроса создаёт дубль строки, повтор чтения
-    не создаёт ничего.
+    Обрыв соединения повторяется и здесь, а не только на чтении. Все записи этого
+    репозитория — перезапись конкретных ячеек (`update` / `batch_update` по
+    адресам), строк они не добавляют: повтор после дошедшего запроса кладёт те же
+    значения в те же ячейки, и дубля не бывает. Прежде запись обрыв не повторяла,
+    и 2026-09-14 смена сети посреди прогона (лид #1195, `OSError(49, "Can't
+    assign requested address")`) остановила рассылку на пятом лиде из 72: отклик
+    ушёл, а строку пришлось проставлять руками.
     """
     _sleep = time.sleep if sleep is None else sleep
     for attempt in range(attempts):
         try:
             return op()
-        except _TOKEN_ERRORS:
+        except _TRANSPORT_ERRORS:
             if attempt == attempts - 1:
                 raise
             _sleep(_RETRY_BASE_DELAY_SECONDS * 2 ** attempt)
@@ -93,19 +98,18 @@ def _with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
 # «не ответит»: сам лист читается за секунды.
 _HTTP_TIMEOUT_SECONDS = 60
 
-# Транспортные сбои, на которых ЧТЕНИЕ стоит повторить. Отдельно от `APIError`:
-# 2026-09-05 прогон умер на `requests.exceptions.ReadTimeout`, а `_with_retry`
-# ловит только `APIError` — то есть таймаут не пережил бы и путь записи.
+# Транспортные сбои, на которых стоит повторить и чтение, и запись. Отдельно от
+# `APIError`: 2026-09-05 прогон умер на `requests.exceptions.ReadTimeout`, а
+# 2026-09-14 — на `ConnectionError` при смене сети.
 _TRANSPORT_ERRORS = (RequestsConnectionError, RequestsTimeout) + _TOKEN_ERRORS
 
 
 def _read_with_retry(op, attempts: int = _RETRY_ATTEMPTS, sleep=None):
     """Прочитать лист, пережив короткий сбой сети.
 
-    ЧТЕНИЕ, и это существенно. Запись повторять на таймауте нельзя: запрос мог
-    дойти до Google, и второй создал бы дубль строки — дубль лида и дубль
-    отклика. У чтения такой цены нет вовсе, а цена отказа измерена: один
-    подвисший запрос уронил прогон посреди очереди из 66 лидов.
+    Цена отказа измерена: один подвисший запрос уронил прогон посреди очереди из
+    66 лидов. Попыток меньше, чем у записи (`_with_retry`): лист читается до
+    отправок, и провал чтения ничего не теряет — лиды остаются `new`.
     """
     _sleep = time.sleep if sleep is None else sleep
     for attempt in range(attempts):
