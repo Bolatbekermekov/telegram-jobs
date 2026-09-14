@@ -94,19 +94,14 @@ def test_silent_when_wellfound_is_not_in_this_run(monkeypatch, capsys):
 def test_a_dead_port_never_stops_the_other_platforms(monkeypatch, capsys):
     """Предупреждение — это предупреждение, а не отказ: hh и remotive к Chrome
     Wellfound отношения не имеют и обязаны отработать."""
-    import gspread
-    from google.oauth2 import service_account
-
-    from app.infrastructure import search_leads_repo
+    from app.infrastructure import search_leads_repo, sheets_repo
     from app.infrastructure.search import registry
 
     _dead_port(monkeypatch)
     monkeypatch.setattr(config, "RELEVANCE_ENABLED", False)
     monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(config, "PAUSED_PLATFORMS", "")
-    monkeypatch.setattr(service_account.Credentials, "from_service_account_file",
-                        lambda *a, **k: object())
-    monkeypatch.setattr(gspread, "authorize", lambda creds: _FakeBook())
+    monkeypatch.setattr(sheets_repo, "open_book", lambda path, sheet_id: _FakeBook())
     monkeypatch.setattr(search_leads_repo, "SearchLeadsRepo",
                         lambda *a, **k: _FakeCandidates())
     built = []
@@ -124,19 +119,14 @@ def test_a_dead_port_never_stops_the_other_platforms(monkeypatch, capsys):
 def test_search_warns_before_it_starts_scraping(monkeypatch, capsys):
     """Порядок и есть смысл правки: сказать надо ДО того, как поиск потратит
     минуты, а не после, разбором чужого ECONNREFUSED."""
-    import gspread
-    from google.oauth2 import service_account
-
-    from app.infrastructure import search_leads_repo
+    from app.infrastructure import search_leads_repo, sheets_repo
     from app.infrastructure.search import registry
 
     _dead_port(monkeypatch)
     monkeypatch.setattr(config, "RELEVANCE_ENABLED", False)
     monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(config, "PAUSED_PLATFORMS", "")
-    monkeypatch.setattr(service_account.Credentials, "from_service_account_file",
-                        lambda *a, **k: object())
-    monkeypatch.setattr(gspread, "authorize", lambda creds: _FakeBook())
+    monkeypatch.setattr(sheets_repo, "open_book", lambda path, sheet_id: _FakeBook())
     monkeypatch.setattr(search_leads_repo, "SearchLeadsRepo",
                         lambda *a, **k: _FakeCandidates())
     monkeypatch.setattr(registry, "build_searcher", _FakeSearcher)
@@ -150,19 +140,14 @@ def test_search_warns_before_it_starts_scraping(monkeypatch, capsys):
 def test_paused_wellfound_is_not_warned_about(monkeypatch, capsys):
     """Пауза уже сказала своё: площадку не трогают, Chrome ей не нужен.
     Два предупреждения об одном и том же противоречили бы друг другу."""
-    import gspread
-    from google.oauth2 import service_account
-
-    from app.infrastructure import search_leads_repo
+    from app.infrastructure import search_leads_repo, sheets_repo
     from app.infrastructure.search import registry
 
     _dead_port(monkeypatch)
     monkeypatch.setattr(config, "RELEVANCE_ENABLED", False)
     monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(config, "PAUSED_PLATFORMS", "wellfound")
-    monkeypatch.setattr(service_account.Credentials, "from_service_account_file",
-                        lambda *a, **k: object())
-    monkeypatch.setattr(gspread, "authorize", lambda creds: _FakeBook())
+    monkeypatch.setattr(sheets_repo, "open_book", lambda path, sheet_id: _FakeBook())
     monkeypatch.setattr(search_leads_repo, "SearchLeadsRepo",
                         lambda *a, **k: _FakeCandidates())
     monkeypatch.setattr(registry, "build_searcher", _FakeSearcher)

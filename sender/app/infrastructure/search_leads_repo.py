@@ -20,6 +20,7 @@ import datetime as _dt
 
 from app.domain.candidate import CANDIDATE_COLUMNS, Candidate, normalize_url
 from app.domain.lead import COLUMNS, STATUS_NEW
+from app.infrastructure.sheets_repo import _read_with_retry
 
 
 def _vacancy_text(c: Candidate) -> str:
@@ -90,27 +91,33 @@ class SearchLeadsRepo:
         до этой правки).
         """
         keys = set()
-        for tgt in self._main.col_values(COLUMNS.index("Источник") + 1)[1:]:
+        for tgt in self._read(self._main, COLUMNS.index("Источник") + 1):
             if tgt and "http" in tgt:
                 keys.add(normalize_url(tgt))
         if self._legacy is not None:
-            for url in self._legacy.col_values(CANDIDATE_COLUMNS.index("URL") + 1)[1:]:
+            for url in self._read(self._legacy, CANDIDATE_COLUMNS.index("URL") + 1):
                 if url:
                     keys.add(normalize_url(url))
         return keys
 
     def _new_counts(self) -> dict:
         """Сколько необработанных лидов уже стоит в очереди по каждой площадке."""
-        plats = self._main.col_values(COLUMNS.index("Платформа") + 1)[1:]
-        stats = self._main.col_values(COLUMNS.index("Статус") + 1)[1:]
+        plats = self._read(self._main, COLUMNS.index("Платформа") + 1)
+        stats = self._read(self._main, COLUMNS.index("Статус") + 1)
         counts: dict = {}
         for platform, status in zip(plats, stats):
             if status == STATUS_NEW:
                 counts[platform] = counts.get(platform, 0) + 1
         return counts
 
+    @staticmethod
+    def _read(worksheet, column: int) -> list:
+        """Значения колонки без заголовка — с повтором короткого сбоя сети, как у
+        отправки (`sheets_repo._read_with_retry`)."""
+        return _read_with_retry(lambda: worksheet.col_values(column))[1:]
+
     def _next_id(self) -> int:
-        return max(len(self._main.col_values(1)) - 1, 0) + 1
+        return len(self._read(self._main, 1)) + 1
 
     def known_urls(self) -> set:
         """Известные URL-ы — для отсева ДО скоринга, чтобы не платить за дубли."""

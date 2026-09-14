@@ -947,9 +947,6 @@ def run_worker():
     import datetime as _dt
     import time
 
-    import gspread
-    from google.oauth2.service_account import Credentials
-
     from app import config
     from app.application.auto_search import due_auto_search, parse_times
     from app.application.worker_tick import worker_tick
@@ -958,9 +955,10 @@ def run_worker():
     from app.infrastructure.control_repo import ControlRepo
     from app.infrastructure.search.registry import build_searcher
 
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
-    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
+    # Таймаут на каждый запрос к Google, как у отправки: без него поиск
+    # 2026-09-15 час простоял на подвисшем запросе после сбора LinkedIn.
+    from app.infrastructure.sheets_repo import open_book
+    book = open_book(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID)
     main_ws = book.worksheet(config.SHEET_TAB)
     cand_ws = book.worksheet(config.CANDIDATES_TAB)
     ctrl_ws = book.worksheet(config.CONTROL_TAB)
@@ -1019,9 +1017,6 @@ def run_search_once(platforms):
     """
     from pathlib import Path
 
-    import gspread
-    from google.oauth2.service_account import Credentials
-
     from app.application.notify import search_paused_message
     from app.application.run_search import run_search
     from app.infrastructure.search_leads_repo import SearchLeadsRepo
@@ -1042,9 +1037,10 @@ def run_search_once(platforms):
     # иначе он узнает про мёртвый порт минут через десять и уже постфактум.
     _warn_if_wellfound_chrome_down(platforms)
 
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(config.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scopes)
-    book = gspread.authorize(creds).open_by_key(config.SHEET_ID)
+    # Таймаут на каждый запрос к Google, как у отправки: без него поиск
+    # 2026-09-15 час простоял на подвисшем запросе после сбора LinkedIn.
+    from app.infrastructure.sheets_repo import open_book
+    book = open_book(config.GOOGLE_SERVICE_ACCOUNT_FILE, config.SHEET_ID)
     candidates = SearchLeadsRepo(
         book.worksheet(config.SHEET_TAB), book.worksheet(config.CANDIDATES_TAB),
         config.CANDIDATES_PENDING_CAP)

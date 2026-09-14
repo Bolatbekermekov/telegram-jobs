@@ -211,14 +211,23 @@ def record_to_lead(rec: dict, offset: int, status: str = STATUS_NEW) -> Lead:
     )
 
 
+def open_book(service_account_path: str, sheet_id: str):
+    """Таблица с таймаутом на каждый запрос к Google.
+
+    Без него чтение уходит в `read timeout=None`, то есть ждёт вечно. Живьём
+    2026-09-05: Google подвис на `get_all_records`, прогон отправки умер
+    трейсбеком посреди очереди, и 66 лидов остались необработанными. 2026-09-15
+    то же случилось с поиском: он открывал таблицу мимо этой функции и час
+    простоял на подвисшем запросе после сбора карточек LinkedIn.
+    """
+    client = gspread.authorize(_load_credentials(service_account_path))
+    client.set_timeout(_HTTP_TIMEOUT_SECONDS)
+    return client.open_by_key(sheet_id)
+
+
 class SheetsRepo:
     def __init__(self, service_account_path: str, sheet_id: str, tab: str):
-        client = gspread.authorize(_load_credentials(service_account_path))
-        # Без этого чтение уходит в `read timeout=None`, то есть ждёт вечно.
-        # Живьём 2026-09-05: Google подвис на `get_all_records`, прогон умер
-        # трейсбеком посреди очереди, и 66 лидов остались необработанными.
-        client.set_timeout(_HTTP_TIMEOUT_SECONDS)
-        self._ws = client.open_by_key(sheet_id).worksheet(tab)
+        self._ws = open_book(service_account_path, sheet_id).worksheet(tab)
 
     def fetch_by_status(self, status: str) -> list[Lead]:
         """Every lead currently carrying `status`, in sheet order."""

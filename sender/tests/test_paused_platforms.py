@@ -309,6 +309,8 @@ def _no_outside_world(monkeypatch):
     monkeypatch.setattr(service_account.Credentials,
                         "from_service_account_file", _boom)
     monkeypatch.setattr(gspread, "authorize", _boom)
+    from app.infrastructure import sheets_repo
+    monkeypatch.setattr(sheets_repo, "open_book", _boom)
 
 
 def test_search_once_for_a_paused_platform_opens_nothing(monkeypatch, capsys):
@@ -344,17 +346,12 @@ class _FakeBook:
 def test_search_once_builds_searchers_only_for_live_platforms(monkeypatch, capsys):
     # Главное здесь — `built`: searcher приостановленной площадки не создаётся,
     # значит и браузеру с её сессией открыться не на чем.
-    import gspread
-    from google.oauth2 import service_account
-
-    from app.infrastructure import search_leads_repo
+    from app.infrastructure import search_leads_repo, sheets_repo
     from app.infrastructure.search import registry
 
     _offline(monkeypatch)
     monkeypatch.setattr(config, "PAUSED_PLATFORMS", "linkedin")
-    monkeypatch.setattr(service_account.Credentials, "from_service_account_file",
-                        lambda *a, **k: object())
-    monkeypatch.setattr(gspread, "authorize", lambda creds: _FakeBook())
+    monkeypatch.setattr(sheets_repo, "open_book", lambda path, sheet_id: _FakeBook())
     monkeypatch.setattr(search_leads_repo, "SearchLeadsRepo",
                         lambda *a, **k: _FakeCandidates())
     built = []
