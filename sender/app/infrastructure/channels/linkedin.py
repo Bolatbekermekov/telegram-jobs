@@ -3,8 +3,10 @@
 Automating LinkedIn violates its ToS and risks an account ban (accepted by the
 user). DOM interaction is isolated in fill_and_send() because selectors drift.
 """
+import dataclasses
 import json
 import re
+from pathlib import PurePath
 
 from app.domain.channel import (
     ChannelError, ChannelUnavailable, InvitePendingError, InviteWithoutNoteError,
@@ -1079,6 +1081,12 @@ def _first_field_error(page) -> str:
     return "; ".join(p for p in parts if p)[:220]
 
 
+# Сообщение об успехе — тоже `role=alert`. Живьём 2026-09-14: после загрузки
+# резюме LinkedIn показывает тост «Resume uploaded successfully», и обход читал
+# его как отказ формы — заявка с уже выбранным нашим резюме уходила в ручные.
+_SUCCESS_ALERT_RE = re.compile(r"success|успешно", re.IGNORECASE)
+
+
 def _first_alert_text(page, limit: int = 6) -> str:
     """Text of the first non-empty alert on the page, or "" when there is none."""
     alerts = page.locator(SEL_APPLY_ALERT)
@@ -1091,9 +1099,91 @@ def _first_alert_text(page, limit: int = 6) -> str:
             said = (alerts.nth(i).inner_text(timeout=1500) or "").strip()
         except Exception:  # noqa: BLE001 — a live region may vanish mid-read
             continue
-        if said:
+        if said and not _SUCCESS_ALERT_RE.search(said):
             return said[:120]
     return ""
+
+
+# Шаг «Resume» новой формы Easy Apply (живьём 2026-09-14, вакансия 4464869200):
+# сохранённые резюме нарисованы карточками `div[role=radio]` с именем файла в
+# `aria-label`, а «Upload resume» — кнопка без поля для файла: `input[type=file]`
+# на экране нет ни одного, он создаётся по нажатию. Скрапер видел одну радиогруппу
+# «PDF» с вариантом-датой, загружать было некуда, и все заявки через Easy Apply
+# уходили с уже отмеченным резюме — ни одного под роль в аккаунте не нашлось.
+_RESUME_CARDS_JS = r"""() => [...document.querySelectorAll('div[role=radio][aria-label]')]
+  .filter(d => /\.(pdf|docx?)$/i.test((d.getAttribute('aria-label') || '').trim()))
+  .map(d => ({name: d.getAttribute('aria-label').trim(),
+              checked: d.getAttribute('aria-checked') === 'true',
+              group: (d.querySelector('input[type=radio]') || {}).name || ''}))"""
+SEL_UPLOAD_RESUME = ("button:has-text('Upload resume'), "
+                     "button:has-text('Загрузить резюме')")
+# Сколько ждать карточку загруженного резюме: файл уходит на сервер LinkedIn, и
+# отметка встаёт только после ответа.
+_RESUME_WAIT_MS = 15000
+
+
+def _resume_cards(page) -> list:
+    """Карточки сохранённых резюме на экране: имя файла, отмечена ли, её группа."""
+    try:
+        cards = page.evaluate(_RESUME_CARDS_JS)
+    except Exception:  # noqa: BLE001 — экран перерисовался, или у фейка нет ответа
+        return []
+    return cards if isinstance(cards, list) else []
+
+
+def _resume_card_group_names(page) -> set:
+    """Имена радиогрупп карточек резюме: это выбор файла, а не вопрос анкеты.
+
+    Отдай их планировщику — и модель «ответит» датой, отметив ту карточку, что
+    стоит первой, то есть вернёт чужое резюме поверх нашего."""
+    return {c.get("group") for c in _resume_cards(page) if c.get("group")}
+
+
+def _upload_resume(page, cv_path: str) -> None:
+    """Загрузить файл через окно выбора, которое открывает «Upload resume»."""
+    button = page.locator(SEL_UPLOAD_RESUME)
+    if button.count() == 0:
+        return
+    try:
+        with page.expect_file_chooser(timeout=8000) as chooser:
+            button.first.click(timeout=5000)
+        chooser.value.set_files(cv_path)
+    except Exception:  # noqa: BLE001 — окна выбора нет; что файл не встал, скажет проверка
+        pass
+
+
+def _has_resume(page, name: str, checked: bool = False) -> bool:
+    return any(c.get("name") == name and (c.get("checked") or not checked)
+               for c in _resume_cards(page))
+
+
+def _choose_resume(page, cv_path: str, job_url: str,
+                   wait_ms: int = _RESUME_WAIT_MS) -> None:
+    """На шаге «Resume» отметить карточку НАШЕГО резюме, загрузив его при надобности.
+
+    Не шаг «Resume» (ни карточек, ни кнопки загрузки) — ничего не делает. Резюме,
+    уже сохранённое под тем же именем, выбирается без новой загрузки: каждая
+    загрузка добавляет файл в аккаунт. Своё отметить не вышло — ручной отклик:
+    заявка с чужим резюме хуже, чем никакой.
+    """
+    name = PurePath(cv_path).name
+    if not _resume_cards(page) and page.locator(SEL_UPLOAD_RESUME).count() == 0:
+        return
+    if not _has_resume(page, name):
+        _upload_resume(page, cv_path)
+    if not _wait_until(page, lambda: _has_resume(page, name), wait_ms):
+        raise ManualApplyRequired(
+            f"LinkedIn Easy Apply: резюме {name} не загрузилось на шаге «Resume» "
+            f"— отклик руками: {job_url}")
+    if not _has_resume(page, name, checked=True):
+        try:
+            page.get_by_role("radio", name=name, exact=True).first.click(timeout=5000)
+        except Exception:  # noqa: BLE001 — отметилось ли, скажет проверка ниже
+            pass
+    if not _wait_until(page, lambda: _has_resume(page, name, checked=True), 3000):
+        raise ManualApplyRequired(
+            f"LinkedIn Easy Apply: резюме {name} не отметилось на шаге «Resume» "
+            f"— отклик руками: {job_url}")
 
 
 def easy_apply_via_page(page, job_url: str, content: OutreachContent,
@@ -1143,11 +1233,18 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
             return
 
         plan = None
+        if cv_path:
+            # До разбора экрана: карточки резюме планировщику не достаются.
+            _choose_resume(page, cv_path, job_url)
         if profile is not None:
             # Only scrape when there is something to fill with. LinkedIn prefills
             # the contact step from the account itself, so a run without an apply
             # profile can still walk the flow — it just adds nothing of its own.
             obs, _route = scrape_until_ready(page)
+            cards = _resume_card_group_names(page)
+            if cards:
+                obs = dataclasses.replace(obs, fields=[
+                    f for f in obs.fields if not (f.type == "radio" and f.name in cards)])
             seen.append(_screen_key(obs))
             # Easy Apply тоже спрашивает сопроводительное письмо файлом — там
             # это отдельный шаг «Дополнительные документы». Собираем PDF из уже
