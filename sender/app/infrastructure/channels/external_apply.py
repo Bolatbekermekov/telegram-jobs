@@ -811,10 +811,41 @@ def fill_hidden_required_dates(page, profile) -> list:
     return filled
 
 
+def _reassert_choices(page, plan) -> None:
+    """Перед отправкой ещё раз подтвердить выбранные варианты.
+
+    Живьём 2026-09-14 (лид #1233, Greenhouse, два прогона подряд): форма приходит
+    готовым HTML, React подключается к ней позже — сеть на странице затихла через
+    14 с — и сбрасывает всё, что отмечено до подключения, из своего пустого
+    состояния. Выбор делался сразу после загрузки, и к «Submit» группа снова была
+    пуста. Виджет по уже отмеченному не кликает, поэтому проход трогает только
+    слетевшее. Отказ здесь не повод бросать заявку: её исход скажет проверка
+    после отправки.
+    """
+    for a in plan.actions:
+        if a.field.type not in ("radio", "checkbox"):
+            continue
+        if a.choice_index is not None:
+            value, index = a.value, a.choice_index
+        elif a.field.type == "checkbox" and _is_affirmative(a.value):
+            value, index = "", 0
+        else:
+            continue
+        try:
+            loc = page.locator(f'[data-af="{a.field.ref}"]')
+            if loc.count() == 0:
+                loc = _relocate(page, a.field)
+            if loc is not None:
+                _pick_choice_reason(page, loc, value=value, index=index)
+        except Exception:  # noqa: BLE001 — лучшая попытка; исход скажет проверка отправки
+            pass
+
+
 def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
     fill_fields(page, plan, profile=profile)
     if dry_run:
         return
+    _reassert_choices(page, plan)
     submit = page.locator(SEL_SUBMIT)
     if submit.count() == 0:
         raise ManualApplyRequired("внешняя форма: не нашёл кнопку отправки, нужен ручной отклик")
@@ -1458,7 +1489,12 @@ def _server_failure_line(text: str) -> str:
 # на той же странице к заявке отношения не имеют.
 _INVALID_REQUIRED_JS = r"""() => [...document.querySelectorAll('form')]
   .filter(f => !f.noValidate && f.querySelector('[data-af]'))
-  .flatMap(f => [...f.querySelectorAll('input:invalid, select:invalid, textarea:invalid')])
+  .flatMap(f => [...f.querySelectorAll('input:invalid, select:invalid, textarea:invalid')]
+    // Группа галочек с `required` на каждой (Greenhouse, лид #1233) отвечена,
+    // если отмечена хоть одна: неотмеченные браузер держит `:invalid` и после ответа.
+    .filter(e => !(e.type === 'checkbox' && e.name
+                   && [...f.querySelectorAll('input[type=checkbox]')]
+                        .some(o => o.name === e.name && o.checked))))
   .map(e => e.name || e.id || e.type)
   .filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)"""
 
