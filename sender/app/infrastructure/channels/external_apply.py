@@ -397,8 +397,26 @@ def _build_observation(raw: dict) -> PageObservation:
         text_excerpt=raw.get("text_excerpt", ""))
 
 
+# Страница может уйти на другой адрес прямо во время чтения. Живьём 2026-09-14
+# (лид #1214, Synapxe на SAP SuccessFactors): «Apply now »» начинает переход на
+# страницу входа, повторное чтение уже идёт, и evaluate падает с «Execution
+# context was destroyed» — лид уходил в failed. Переход — не поломка: дождаться
+# новой страницы и прочитать её. Любая другая ошибка летит наружу сразу.
+_NAVIGATED_RE = re.compile(r"context was destroyed|because of a navigation", re.IGNORECASE)
+_SCRAPE_ATTEMPTS = 3
+
+
 def scrape_form(page) -> PageObservation:
-    return _build_observation(page.evaluate(_SCRAPE_JS))
+    for attempt in range(_SCRAPE_ATTEMPTS):
+        try:
+            return _build_observation(page.evaluate(_SCRAPE_JS))
+        except Exception as exc:  # noqa: BLE001 — переход отличаем по тексту ошибки
+            if attempt == _SCRAPE_ATTEMPTS - 1 or not _NAVIGATED_RE.search(str(exc)):
+                raise
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:  # noqa: BLE001 — не дождались; скажет следующая попытка
+                pass
 
 
 # How long an ATS needs to finish re-rendering around a file input after upload.
