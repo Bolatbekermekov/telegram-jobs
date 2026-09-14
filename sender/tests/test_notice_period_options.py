@@ -134,3 +134,22 @@ def test_a_model_pick_of_the_placeholder_is_not_an_answer():
 
     assert plan.actions[0].choice_index is None
     assert plan.unmapped_required() == ["Preferred shift"]
+
+
+INDEED_1228 = ["Immediately", "Within 1 week", "Within 2 weeks", "Within 1 month",
+               "Within 2 months", "In 3 months or more"]
+
+
+def test_one_to_two_weeks_reads_as_two_weeks_everywhere():
+    """Решение владельца 2026-09-14: срок выхода «всегда 1 week or 2 week» — в
+    анкете «1-2 weeks». Считается верхней границей, 14 дней, во всех видах вопроса."""
+    from datetime import date
+
+    from app.domain.availability import availability_iso, notice_period_in
+
+    assert notice_option_index(INDEED_1228, "1-2 weeks") == 2          # Within 2 weeks
+    assert notice_option_index(LEAD_1216, "1-2 weeks") == 2            # Less than 30 Days
+    assert notice_option_index(LEVER_1264, "1-2 weeks") == 4           # 15 days or less
+    assert availability_iso("1-2 weeks", today=date(2026, 9, 14)) == "2026-09-28"
+    assert notice_period_in("Notice period (in weeks)", "1-2 weeks") == "2"
+    assert notice_period_in("notice period in days", "1-2 weeks") == "14"
