@@ -896,9 +896,30 @@ def _requires_signup_or_login(page) -> bool:
     except Exception:  # noqa: BLE001
         pass
     try:
-        return page.locator("input[type=password]").count() > 0
+        if page.locator("input[type=password]").count() > 0:
+            return True
     except Exception:  # noqa: BLE001
-        return False
+        pass
+    return any(_AUTH_URL_RE.search(h) for h in _apply_link_hrefs(page))
+
+
+# Ссылки отклика отбираются по тексту, как `apply_buttons` в скрапере: вход в
+# шапке есть почти на любом сайте и об отклике ничего не говорит. Живьём
+# 2026-09-14 (Alignerr, лид #1194): обе «Apply now» — ссылки на
+# `app.alignerr.com/signin?job=…` и `/signup`, а сама страница остаётся на
+# вакансии без пароля — и заметка выходила «форма не распознана».
+_APPLY_LINK_HREFS_JS = r"""() => [...document.querySelectorAll('a[href]')]
+  .filter(a => /apply|bewerb|отклик|заявк/i.test(a.textContent || ''))
+  .map(a => a.href).slice(0, 12)"""
+
+
+def _apply_link_hrefs(page) -> list:
+    """Адреса ссылок «Apply» на странице, или []."""
+    try:
+        hrefs = page.evaluate(_APPLY_LINK_HREFS_JS)
+    except Exception:  # noqa: BLE001 — страница ушла, или у фейка нет такого ответа
+        return []
+    return [h for h in hrefs if isinstance(h, str)] if isinstance(hrefs, list) else []
 
 
 def _title_and_text(page) -> tuple[str, str]:
