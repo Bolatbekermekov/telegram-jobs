@@ -10,6 +10,7 @@ import re
 
 from app.application.answerer_cv import answerer_for_cv
 from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
+from app.domain.hh_resume import hh_resume_title
 
 _VACANCY_RE = re.compile(r"hh\.(?:ru|kz)/vacancy/(\d+)")
 
@@ -54,9 +55,17 @@ SEL_USER_MENU = ("[data-qa='mainmenu_applicantProfilePage'], "
 # Both confirm buttons are clicked when present.
 SEL_COUNTRY_CONFIRM = ("[data-qa='countries-profile-visibility-popup-confirm'], "
                        "[data-qa='relocation-warning-confirm']")
-SEL_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
+# Второе имя — из окна отклика, когда резюме в аккаунте несколько (живьём
+# 2026-09-14): поле письма там раскрывает кнопка «Add a CV»/«Сопроводительное».
+SEL_LETTER_TOGGLE = ("[data-qa='vacancy-response-letter-toggle'], "
+                     "[data-qa='add-cover-letter']")
 SEL_LETTER_INPUT = "[data-qa='vacancy-response-popup-form-letter-input']"
 SEL_SUBMIT = "[data-qa='vacancy-response-submit-popup']"
+# Окно отклика при нескольких резюме (живьём 2026-09-14, вакансия 137163618):
+# карточка выбранного резюме `[role=button]`, по клику — список резюме.
+SEL_RESUME_TITLE = "[data-qa='resume-title']"
+SEL_RESUME_OPTION = "[role='option'][data-qa^='magritte-select-option-']"
+SEL_HIDDEN_RESUME_WARNING = "[data-qa='hidden-resume-warning']"
 # Default wait for that Submit button; the channel passes HH_SUBMIT_TIMEOUT_SECONDS.
 SUBMIT_TIMEOUT_MS = 100_000
 # Employer screening questions: free-text <textarea name="task_<id>_text"> and
@@ -552,9 +561,63 @@ def _maybe_attach_cv(page, content, attach_cv_in_chat, debug_dir, letter=None) -
             print(f"⚠️  hh: отклик отправлен, CV в чат не приложен: {exc}")
 
 
+def _flat_text(locator) -> str:
+    return " ".join((locator.inner_text(timeout=3000) or "").split())
+
+
+def _choose_resume(page, title: str) -> bool:
+    """Выбрать в окне отклика онлайн-резюме роли. True — стоит то, что просили.
+
+    Пока резюме было одно, hh отправлял отклик сразу, и выбирать было нечего.
+    С резюме под роли (2026-09-14) перед отправкой открывается окно с карточкой
+    выбранного резюме — по умолчанию там «Golang-разработчик», и AI-отклик ушёл
+    бы с ним. Список открывается кликом по карточке, варианты подписаны
+    «<название> <зарплата>».
+
+    Резюме с таким названием нет — отклик уходит с предложенным hh, как было до
+    резюме под роли: хуже, но не повод терять отклик. Скрытое от работодателей
+    резюме — повод: с ним hh отклик не примет.
+    """
+    card = page.locator(SEL_RESUME_TITLE)
+    if not title or card.count() == 0:
+        return False
+    if _flat_text(card.first) == title:
+        return True
+    toggle = "el => (el.closest('[role=button]') || el).click()"
+    card.first.evaluate(toggle)
+    options = page.locator(SEL_RESUME_OPTION)
+    try:
+        options.first.wait_for(state="visible", timeout=5000)
+    except Exception:  # noqa: BLE001 — список не открылся: остаёмся с предложенным
+        print(f"⚠️  hh: список резюме в окне отклика не открылся — отклик уйдёт "
+              f"с «{_flat_text(card.first)}»")
+        return False
+    for i in range(options.count()):
+        option = options.nth(i)
+        text = _flat_text(option)
+        if text != title and not text.startswith(title + " "):
+            continue
+        option.evaluate("el => el.click()")
+        page.wait_for_timeout(600)
+        if _flat_text(page.locator(SEL_RESUME_TITLE).first) != title:
+            raise ChannelError(f"hh: резюме «{title}» не выбралось в окне отклика — "
+                               "проверь вручную")
+        warning = page.locator(SEL_HIDDEN_RESUME_WARNING)
+        if warning.count() and warning.first.evaluate(
+                "el => el.getBoundingClientRect().height > 1"):
+            raise ChannelError(f"hh: резюме «{title}» скрыто от работодателей — поменяй "
+                               "видимость на «Видно всем работодателям»")
+        return True
+    card.first.evaluate(toggle)          # закрыть список, не закрывая окно
+    print(f"⚠️  hh: резюме «{title}» в аккаунте нет — отклик уйдёт "
+          f"с «{_flat_text(card.first)}»")
+    return False
+
+
 def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
                    attach_cv_in_chat: bool = False, debug_dir=None,
-                   submit_timeout_ms: int = SUBMIT_TIMEOUT_MS) -> None:
+                   submit_timeout_ms: int = SUBMIT_TIMEOUT_MS,
+                   resume_title: str = "") -> None:
     url = to_session_domain(url)
     resp = page.goto(url, wait_until="domcontentloaded")
     _check_not_blocked(page)
@@ -597,6 +660,9 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
     if page.locator(SEL_COUNTRY_CONFIRM).count() > 0:
         page.locator(SEL_COUNTRY_CONFIRM).first.click()
         page.wait_for_timeout(2500)
+    # Онлайн-резюме той роли, под которую письмо (`hh_resume_title`) — до письма:
+    # поле письма живёт в том же окне.
+    _choose_resume(page, resume_title)
     # The cover-letter field may need expanding first — also optional.
     if page.locator(SEL_LETTER_TOGGLE).count() > 0:
         page.locator(SEL_LETTER_TOGGLE).first.click()
@@ -664,7 +730,7 @@ class HeadHunterChannel:
 
     def __init__(self, storage_state_path: str, headless: bool = False, answerer=None,
                  attach_cv_in_chat: bool = False,
-                 submit_timeout_ms: int = SUBMIT_TIMEOUT_MS):
+                 submit_timeout_ms: int = SUBMIT_TIMEOUT_MS, resume_titles=None):
         # answerer(questions, vacancy_context) -> {question_id: {"text"|"choice"}}.
         # None => vacancies with mandatory questions are skipped, not answered.
         # attach_cv_in_chat => after responding, also attach the CV PDF in the chat.
@@ -673,6 +739,8 @@ class HeadHunterChannel:
         self._answerer = answerer
         self._attach_cv_in_chat = attach_cv_in_chat
         self._submit_timeout_ms = submit_timeout_ms
+        # {роль: название онлайн-резюме}; пусто — резюме выбирает сам hh.
+        self._resume_titles = resume_titles or {}
         self._pw = None
         self._browser = None
         self._page = None
@@ -712,4 +780,6 @@ class HeadHunterChannel:
             raise ChannelError("HeadHunterChannel.start() not called")
         apply_via_page(self._page, vacancy_url(target), content, self._answerer,
                        self._attach_cv_in_chat, self._debug_dir,
-                       self._submit_timeout_ms)
+                       self._submit_timeout_ms,
+                       resume_title=hh_resume_title(content.attachment_path,
+                                                    self._resume_titles))

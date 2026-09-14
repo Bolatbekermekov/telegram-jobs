@@ -96,7 +96,8 @@ def build_channel(platform: str, config):
             config.HH_STATE_PATH, config.BROWSER_HEADLESS,
             wrap_answerer(_hh_answerer(config), log),
             getattr(config, "HH_ATTACH_CV_IN_CHAT", False),
-            getattr(config, "HH_SUBMIT_TIMEOUT_SECONDS", 100) * 1000), log)
+            getattr(config, "HH_SUBMIT_TIMEOUT_SECONDS", 100) * 1000,
+            resume_titles=getattr(config, "HH_RESUME_TITLES", {})), log)
     if platform == "linkedin":
         log = AnswerLog()
         return _with_answer_log(LinkedInChannel(

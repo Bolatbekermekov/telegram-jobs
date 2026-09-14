@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from app.domain.contacts import parse_contacts
 from app.llm_provider import resolve
 from app.domain.cv_files import find_any_cv
+from app.domain.hh_resume import parse_role_titles
 
 # Load the shared .env at the project root (telegram-jobs/.env).
 # __file__ = telegram-jobs/sender/app/config.py -> parents[2] = telegram-jobs
@@ -436,6 +437,16 @@ HH_CDP_PORT = int(os.environ.get("HH_CDP_PORT", "9223"))  # 9222 is wellfound's
 HH_CDP_URL = os.environ.get("HH_CDP_URL", f"http://127.0.0.1:{HH_CDP_PORT}")
 HH_CHROME_PROFILE = os.environ.get(
     "HH_CHROME_PROFILE", str(_ROOT / "sender" / ".hh_chrome"))
+# Онлайн-резюме hh под роли: `роль=название` через «;». Заведены 2026-09-14 с
+# разрешения владельца; до этого все отклики уходили с «Golang-разработчик».
+# Резюме узнаётся по названию. Роль без записи или резюме, которого в аккаунте
+# нет, — отклик уходит с резюме, которое предложит сам hh.
+HH_RESUME_TITLES = parse_role_titles(os.environ.get(
+    "HH_RESUME_TITLES",
+    "ai=AI-инженер (LLM, Python);backend-go=Golang-разработчик;"
+    "backend-python=Python-разработчик;backend-node=Разработчик Node.js;"
+    "frontend=Frontend-разработчик;fullstack=Fullstack-разработчик;"
+    "mobile=React Native-разработчик;qa=Тестировщик-автоматизатор"))
 
 # --- Чем hh фильтрует выдачу ------------------------------------------------
 #
