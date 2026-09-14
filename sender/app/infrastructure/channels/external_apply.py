@@ -324,6 +324,13 @@ _SCRAPE_JS = r"""() => {
       range_min: e.type === 'range' ? (e.getAttribute('min') || '') : '',
       range_max: e.type === 'range' ? (e.getAttribute('max') || '') : '',
       range_step: e.type === 'range' ? (e.getAttribute('step') || '') : '',
+      placeholder: e.placeholder || '',
+      lang: e.getAttribute('lang') || '',
+      // Календарь LinkedIn: вход с data-testid date-picker-input и кнопкой
+      // «Embedded calendar» рядом (лид #1216).
+      date_picker: /date-?picker/i.test(e.getAttribute('data-testid') || '')
+        || !!(e.parentElement && e.parentElement.querySelector(
+             '[aria-haspopup="dialog"][aria-label*="calendar" i]')),
       ref: String(i),
     });
   });
@@ -375,7 +382,9 @@ def observation_to_raw(obs: PageObservation) -> dict:
                     "required": f.required, "options": f.options, "value": f.value,
                     "combobox": f.combobox, "ref": f.ref, "question": f.question,
                     "accept": f.accept, "range_min": f.range_min,
-                    "range_max": f.range_max, "range_step": f.range_step}
+                    "range_max": f.range_max, "range_step": f.range_step,
+                    "placeholder": f.placeholder, "lang": f.lang,
+                    "date_picker": f.date_picker}
                    for f in obs.fields],
         "file_inputs": obs.file_inputs, "iframes": obs.iframes,
         "mailto": obs.mailto_links, "apply_buttons": obs.apply_buttons,
@@ -396,7 +405,10 @@ def _build_observation(raw: dict) -> PageObservation:
                        accept=f.get("accept", "") or "",
                        range_min=f.get("range_min", "") or "",
                        range_max=f.get("range_max", "") or "",
-                       range_step=f.get("range_step", "") or "") for f in raw.get("fields", [])]
+                       range_step=f.get("range_step", "") or "",
+                       placeholder=f.get("placeholder", "") or "",
+                       lang=f.get("lang", "") or "",
+                       date_picker=bool(f.get("date_picker"))) for f in raw.get("fields", [])]
     return PageObservation(
         url=raw.get("url", ""), fields=fields, file_inputs=raw.get("file_inputs", 0),
         iframes=raw.get("iframes", []), mailto_links=raw.get("mailto", []),

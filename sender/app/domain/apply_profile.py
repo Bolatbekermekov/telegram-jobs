@@ -113,6 +113,10 @@ class ApplyProfile:
     # Своя цифра здесь главнее оценки. Отдельно от `desired_salary`: это разные
     # вопросы, и ожидания в той же форме не ниже текущей.
     current_salary: str = ""
+    # Дата рождения, YYYY-MM-DD. Пусто = поле «Date of birth» остаётся пустым и
+    # удерживает отправку: дату не угадывают. Возраст считается от неё
+    # (`birth_date.age_on`), отдельной цифры в анкете нет.
+    date_of_birth: str = ""
     # Keys are lowercase question substrings -> ready answers ("" => let the AI answer).
     custom_answers: dict[str, str] = field(default_factory=dict)
 

@@ -51,6 +51,13 @@ class FieldObs:
     range_min: str = ""
     range_max: str = ""
     range_step: str = ""
+    # Подсказка формата, как её объявила страница: placeholder («DD/MM/YYYY»),
+    # язык поля и календарь рядом. Живьём 2026-09-14 (лид #1216, LinkedIn Easy
+    # Apply): «Date Of Birth *» — вход календаря с lang="en-US" без placeholder,
+    # и порядок дня и месяца виден только по языку.
+    placeholder: str = ""
+    lang: str = ""
+    date_picker: bool = False
 
 
 @dataclass

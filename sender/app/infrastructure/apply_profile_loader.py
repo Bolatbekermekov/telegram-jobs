@@ -1,5 +1,6 @@
 """Load ApplyProfile from a YAML file (sender/apply_profile.yml)."""
 from dataclasses import fields
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -31,6 +32,9 @@ def load_apply_profile(path: str, contacts: Contacts | None = None) -> ApplyProf
     for name in _STR_FIELDS:
         if name in known and known[name] is None:
             known[name] = ""
+    # YAML читает незакавыченное 2005-01-30 как дату, а не как строку.
+    if isinstance(known.get("date_of_birth"), date):
+        known["date_of_birth"] = known["date_of_birth"].isoformat()
     raw_ca = known.get("custom_answers") or {}
     known["custom_answers"] = {
         str(k).lower(): ("" if v is None else str(v)) for k, v in raw_ca.items()

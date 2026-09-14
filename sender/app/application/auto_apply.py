@@ -6,9 +6,13 @@ No Playwright, no network — fully testable.
 """
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
 from app.domain.apply_profile import ApplyProfile, work_authorized_in
-from app.domain.availability import availability_iso, notice_period_in
+from app.domain.availability import availability_iso, notice_option_index, notice_period_in
+from app.domain.birth_date import (
+    age_on, asks_age, asks_date_of_birth, birth_date_text, minimum_age_asked,
+)
 from app.domain.page_observation import FieldObs, PageObservation
 
 EEO_ANSWER = "Prefer not to say"
@@ -215,7 +219,12 @@ def _satisfied(a: FillAction) -> bool:
     # the profile — the account email need not be the profile one, and a code like
     # "Kazakhstan (+7)" is not a phone number. Treating those as unfilled is what
     # made every Easy Apply job unreachable.
-    current = a.field.value.strip()
+    return already_answered(a.field)
+
+
+def already_answered(f: FieldObs) -> bool:
+    """Поле уже держит ответ страницы: не пустое и не «Select an option»."""
+    current = (f.value or "").strip()
     return bool(current) and not _PLACEHOLDER_OPTION_RE.match(current)
 
 
@@ -411,6 +420,29 @@ def _yes_no(f: FieldObs, yes: bool, source: str = "profile") -> FillAction:
     return FillAction(field=f, value="Yes" if yes else "No", source=source)
 
 
+def _age_answer(f: FieldObs, age: int | None) -> FillAction | None:
+    """Ответ на вопрос о возрасте из даты рождения, или None — если ответа нет.
+
+    «Are you at least 18 years of age?» — это «да/нет» по порогу, диапазон
+    «18-24» выбирается тот, в который попадает возраст, а голый вопрос получает
+    число. Прежде на всё это отвечала строка «22» из custom_answers — в том числе
+    в группу из «Yes»/«No».
+    """
+    if age is None:
+        return None
+    floor = minimum_age_asked(getattr(f, "question", "") or f.label)
+    if floor is not None:
+        return _yes_no(f, age >= floor)
+    if f.options:
+        for i, option in enumerate(f.options):
+            span = _option_years_span(option)
+            if span and span[0] <= age <= span[1]:
+                return FillAction(field=f, choice_index=i, value=f.options[i],
+                                  source="profile")
+        return None
+    return FillAction(field=f, value=str(age), source="profile")
+
+
 def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
               cover_letter_path: str = "") -> FillAction:
     low = f"{f.label} {f.name}".strip().lower()
@@ -531,6 +563,26 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
                                   source="custom")
             return FillAction(field=f, needs_ai=True, source="ai")
 
+    # Дата рождения и возраст — факты анкеты, а не вопросы к модели: даты она не
+    # знает, а угаданная ушла бы работодателю как факт. Живьём 2026-09-14 (лид
+    # #1216, LinkedIn Easy Apply) обязательное «Date Of Birth *» стояло пустым и
+    # держало весь отклик. Формат — тот, что ждёт поле (`birth_date_text`); без
+    # даты в анкете поле честно остаётся пустым.
+    #
+    # Только короткая подпись: абзац «full name, date of birth and why…» — вопрос
+    # для модели, одной датой он не отвечается.
+    if caption_len <= _MAX_LABEL_CHARS and asks_date_of_birth(low):
+        text = "" if f.options else birth_date_text(
+            profile.date_of_birth, field_type=f.type, placeholder=f.placeholder,
+            lang=f.lang, picker=f.date_picker)
+        if text:
+            return FillAction(field=f, value=text, source="profile")
+        return FillAction(field=f, source="unmapped")
+    if caption_len <= _MAX_LABEL_CHARS and asks_age(low):
+        answer = _age_answer(f, age_on(profile.date_of_birth, date.today()))
+        if answer is not None:
+            return answer
+
     # «Сколько лет опыта» — вопрос с готовым ответом, а не повод звать модель.
     # Замер 2026-08-03: до этого правила он возвращал `unmapped` во всех
     # формулировках, и обязательное поле утаскивало всю заявку в `manual`, уже
@@ -598,6 +650,19 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # "…и укажи email кандидата" would otherwise hand over the address without the
     # model ever being asked. Real captions are short, so prose skips these rules
     # and falls through to the free-text branch below.
+    # Срок выхода СПИСКОМ — вариант выбирается по дням, а не по буквам. Живьём
+    # 2026-09-14 (лид #1216, LinkedIn Easy Apply): «What is your current notice
+    # period?*» c «Immediate Joiner / Less than 30 Days / 30 Days / …»; строка
+    # «1 month» буквально ни с чем не совпала, ответ модели в список не встал, и
+    # отклик остановился на обязательном поле. Раньше правил про единицы ниже:
+    # число «30» в выпадающий список не вписать.
+    if (caption_len <= _MAX_LABEL_CHARS and f.options
+            and (_NOTICE_RE.search(low) or _AVAILABILITY_DATE_RE.search(low))):
+        idx = notice_option_index(f.options, profile.notice_period)
+        if idx is not None:
+            return FillAction(field=f, choice_index=idx, value=f.options[idx],
+                              source="profile")
+
     # Срок отработки, спрошенный В ЕДИНИЦАХ. Профиль хранит одну строку («1
     # month»), а вопрос приходит в трёх видах — «(in weeks)», «in days», просто
     # «notice period?» — и первые два поля числовые. Строка уезжала во все три
@@ -977,6 +1042,14 @@ def answer_ai_fields(plan: ApplyPlan, answerer, vacancy_context: str) -> None:
                 continue        # в поле не влезает — пусть его назовёт человек
             a.value = fitted
         else:
-            a.choice_index = int(val)
-            if a.field.options and 0 <= a.choice_index < len(a.field.options):
-                a.value = a.field.options[a.choice_index]
+            idx, options = int(val), a.field.options
+            # Модель без ответа получает первый вариант (`fill_plan` зажимает
+            # индекс), а первым часто стоит «Select an option». Выбрать эту
+            # заглушку нельзя, и заполнение падало с «не смог заполнить» (лид
+            # #1216, 2026-09-14). Пусть поле назовут по имени.
+            if options and 0 <= idx < len(options) \
+                    and _PLACEHOLDER_OPTION_RE.match(options[idx].strip()):
+                continue
+            a.choice_index = idx
+            if options and 0 <= idx < len(options):
+                a.value = options[idx]

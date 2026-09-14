@@ -91,19 +91,91 @@ def notice_period_in(question: str, notice_period: str) -> str:
     unit = _asked_unit(question)
     if not unit:
         return ""
+    days = _notice_days(notice_period)
+    if days is None:
+        return ""
+    return str(max(0, round(days / _DAYS_PER[unit])))
+
+
+def _notice_days(notice_period: str) -> int | None:
+    """Срок отработки в днях (месяц — 30 дней), или None, если он не разобран."""
     text = (notice_period or "").strip()
     if not text:
-        return ""
+        return None
     if _NOW_RE.search(text):
-        return "0"
+        return 0
     m = _SPAN_RE.search(text)
     if not m:
-        return ""
+        return None
     n, got = int(m.group(1)), m.group(2).lower()
     if got.startswith(("day", "дн")):
-        days = n
-    elif got.startswith(("week", "недел")):
-        days = n * 7
-    else:
-        days = n * 30
-    return str(max(0, round(days / _DAYS_PER[unit])))
+        return n
+    if got.startswith(("week", "недел")):
+        return n * 7
+    return n * 30
+
+
+# Варианты списка «срок выхода»: «Immediate Joiner», «Less than 30 Days»,
+# «16-30 days», «1 month», «2+ months», «More than 1 month».
+_OPTION_UNIT = r"(day|week|month|дн|недел|месяц)"
+_OPTION_RANGE_RE = re.compile(r"(\d+)\s*(?:[-–—]|to|до)\s*(\d+)\s*" + _OPTION_UNIT,
+                              re.IGNORECASE)
+_OPTION_ONE_RE = re.compile(r"(\d+)\s*(\+)?\s*" + _OPTION_UNIT, re.IGNORECASE)
+# «no more than» и «не более» содержат «more than» и «более» — поэтому «не
+# больше N» проверяется раньше «больше N».
+_OPTION_UP_TO_RE = re.compile(r"within|up to|no more than|не более|\bдо\b", re.IGNORECASE)
+_OPTION_BELOW_RE = re.compile(r"less than|under|below|fewer than|менее|меньше", re.IGNORECASE)
+_OPTION_ABOVE_RE = re.compile(r"more than|over|above|longer than|beyond|более|больше|свыше",
+                              re.IGNORECASE)
+
+
+def _unit_days(unit: str) -> int:
+    u = unit.lower()
+    if u.startswith(("week", "недел")):
+        return 7
+    if u.startswith(("month", "месяц")):
+        return 30
+    return 1
+
+
+def _option_days(option: str) -> tuple[int, float] | None:
+    """(от, до) в днях, которые покрывает вариант, или None — если чисел в нём нет."""
+    text = option or ""
+    if _NOW_RE.search(text):
+        return (0, 0)
+    m = _OPTION_RANGE_RE.search(text)
+    if m:
+        k = _unit_days(m.group(3))
+        return (int(m.group(1)) * k, int(m.group(2)) * k)
+    m = _OPTION_ONE_RE.search(text)
+    if not m:
+        return None
+    n = int(m.group(1)) * _unit_days(m.group(3))
+    if _OPTION_UP_TO_RE.search(text):
+        return (0, n)
+    if _OPTION_BELOW_RE.search(text):
+        return (0, n - 1)
+    if m.group(2):
+        return (n, float("inf"))
+    if _OPTION_ABOVE_RE.search(text):
+        return (n + 1, float("inf"))
+    return (n, n)
+
+
+def notice_option_index(options: list[str], notice_period: str) -> int | None:
+    """Номер варианта «срок выхода», в который попадает срок из анкеты, или None.
+
+    Живьём 2026-09-14 (лид #1216, LinkedIn Easy Apply, шаг 6/8): «What is your
+    current notice period?*» — «Immediate Joiner / Less than 30 Days / 30 Days /
+    45 Days / 60 Days». Строка «1 month» буквально ни с чем не совпала, вопрос
+    ушёл модели, её ответ в список не встал, и отклик остановился. Сравнение по
+    дням этого не допускает: месяц — это вариант «30 Days».
+    """
+    days = _notice_days(notice_period)
+    if days is None:
+        return None
+    for i, option in enumerate(options):
+        span = _option_days(option)
+        if span and span[0] <= days <= span[1]:
+            return i
+    return None
