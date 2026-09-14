@@ -8,6 +8,7 @@ import re
 import time
 from urllib.parse import unquote, urlsplit
 
+from app.application.answerer_cv import answerer_for_cv
 from app.application.apply_guard import (
     host_or_vendor_allowed, leaked_secrets, vendor_of,
 )
@@ -1364,7 +1365,7 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
         cover_letter = render_cover_letter_pdf(content.body)
     plan = build_plan(obs, profile, cv_path, cover_letter_path=cover_letter)
     _load_combobox_options(page, plan)
-    answer_ai_fields(plan, answerer, vacancy_context or content.body)
+    answer_ai_fields(plan, answerer_for_cv(answerer, cv_path), vacancy_context or content.body)
     missing = plan.unmapped_required()
     if missing:
         raise ManualApplyRequired(

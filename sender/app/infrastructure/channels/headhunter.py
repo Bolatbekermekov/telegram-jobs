@@ -8,6 +8,7 @@ DOM interaction is isolated in apply_via_page() because selectors drift.
 """
 import re
 
+from app.application.answerer_cv import answerer_for_cv
 from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
 
 _VACANCY_RE = re.compile(r"hh\.(?:ru|kz)/vacancy/(\d+)")
@@ -606,7 +607,9 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
             raise ChannelError(
                 f"вакансия с обязательными вопросами работодателя, нужен ручной отклик: {url}")
         questions = collect_questions(page)
-        _fill_questions(page, questions, answerer(questions, vacancy_context),
+        # Анкета — по резюме той роли, что уходит в чат (answerer_cv).
+        role_answerer = answerer_for_cv(answerer, content.attachment_path)
+        _fill_questions(page, questions, role_answerer(questions, vacancy_context),
                         debug_dir)
     # Ask "did the response already go through?" BEFORE touching the letter form.
     # hh's quick apply submits on the apply click itself and only then offers an

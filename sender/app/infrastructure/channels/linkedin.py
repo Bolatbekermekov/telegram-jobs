@@ -1228,6 +1228,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
     from app.infrastructure.channels.external_apply import (
         _wants_cover_letter_file, fill_fields, scrape_until_ready,
     )
+    from app.application.answerer_cv import answerer_for_cv
     from app.application.auto_apply import (
         ApplyPlan, answer_ai_fields, build_plan, renumber_notice_answers,
     )
@@ -1273,7 +1274,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
                 from app.infrastructure.cover_letter_pdf import render_cover_letter_pdf
                 cover_letter = render_cover_letter_pdf(content.body)
             plan = build_plan(obs, profile, cv_path, cover_letter_path=cover_letter)
-            answer_ai_fields(plan, answerer, content.body)
+            answer_ai_fields(plan, answerer_for_cv(answerer, cv_path), content.body)
             missing = plan.unmapped_required()
             if missing:
                 raise ManualApplyRequired(

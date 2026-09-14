@@ -13,7 +13,7 @@ from app.infrastructure.channels.threads import ThreadsChannel
 from app.infrastructure.channels.wellfound import WellfoundChannel
 
 
-def _hh_answerer(config):
+def _hh_answerer(config, cv_path=None):
     """Callable that answers hh employer questions with the AI, or None if no
     LLM key is configured (then such vacancies are skipped, not answered)."""
     api_key = getattr(config, "LLM_API_KEY", "")
@@ -28,7 +28,7 @@ def _hh_answerer(config):
         ai = OpenAIMessageGenerator(api_key, config.LLM_MODEL,
                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
                                     base_url=getattr(config, "LLM_BASE_URL", None))
-        cv = load_cv_text(config.CV_PATH)
+        cv = load_cv_text(cv_path or config.CV_PATH)
         profile = load_text_file(config.PROFILE_PATH)
         # Анкета из apply_profile.yml — к профилю: вопрос-абзац формы спрашивает
         # ссылку на LinkedIn, срок выхода и разрешение на работу, а в резюме и
@@ -44,6 +44,8 @@ def _hh_answerer(config):
         # в «Заметку» попадёт уже исправленное — то, что реально ушло.
         return canonicalize_answers(answers, getattr(config, "CONTACTS", None))
 
+    # Резюме роли вместо запасного CV_PATH — см. answerer_cv.answerer_for_cv.
+    answer.for_cv = lambda path: _hh_answerer(config, path)
     return answer
 
 

@@ -64,6 +64,11 @@ def wrap_answerer(answerer, log: AnswerLog):
             pass
         return answers
 
+    # Привязка к резюме роли переживает обёртку: иначе журнал молча возвращал бы
+    # ответы по запасному резюме (см. answerer_cv.answerer_for_cv).
+    bind = getattr(answerer, "for_cv", None)
+    if bind is not None:
+        answering.for_cv = lambda path: wrap_answerer(bind(path), log)
     return answering
 
 
