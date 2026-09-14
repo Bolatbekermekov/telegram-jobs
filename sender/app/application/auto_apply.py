@@ -50,6 +50,10 @@ _SALARY_Q_RE = re.compile(r"salary|compensation|ctc\b|expected pay|\brate\b", re
 _CURRENT_SALARY_RE = re.compile(r"\bcurrent\b|\bcctc\b|текущ", re.I)
 _POSTAL_RE = re.compile(r"postal|\bzip\b|zip\s?code|post\s?code|почтов\w*\s+индекс|\bиндекс\b",
                         re.I)
+# Не «email address» и не «web address» — только адрес проживания.
+_STREET_RE = re.compile(
+    r"street|address\s*line|(?:home|mailing|residential)\s+address|улица|адрес\s+проживания",
+    re.I)
 
 # label/name regex -> resolver(profile) -> value ("" means "no fact, skip rule").
 _LABEL_RULES = [
@@ -727,7 +731,9 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # code»: правило места читает подпись вместе с именем и вписало «Astana,
     # Kazakhstan» в «Zip code» (Indeed Apply, #1236, 2026-09-14). Индекса в анкете
     # нет, а выдуманный уйдёт работодателю как адрес.
-    if _POSTAL_RE.search(low):
+    # И не улица: «Street address» с name="location-address" получил «Astana,
+    # Kazakhstan» тем же путём (#1236, прогон 10). Улицы в анкете тоже нет.
+    if _POSTAL_RE.search(low) or _STREET_RE.search(low):
         return FillAction(field=f, source="unmapped")
 
     if caption_len <= _MAX_LABEL_CHARS:

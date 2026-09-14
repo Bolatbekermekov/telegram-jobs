@@ -31,3 +31,16 @@ def test_postal_code_captions_in_both_languages_stay_empty():
 def test_the_city_next_to_it_is_still_the_city():
     a = _map(label="City", name="location-locality")
     assert a.value == "Astana"
+
+
+def test_a_street_address_named_location_is_not_filled_with_the_city():
+    """Индекс починили, а в тот же прогон (#1236, прогон 10) «Street address» с
+    `name="location-address"` получил «Astana, Kazakhstan». Улицы в анкете нет."""
+    a = _map(label="Street address", name="location-address")
+    assert (a.value, a.source) == ("", "unmapped")
+
+
+def test_an_email_address_is_still_the_email():
+    a = map_field(FieldObs(tag="input", type="email", label="Email address", name="email"),
+                  ApplyProfile(full_name="B Y", email="a@b.com"), "/cv.pdf")
+    assert a.value == "a@b.com"
