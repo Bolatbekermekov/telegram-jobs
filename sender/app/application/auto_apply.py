@@ -497,7 +497,11 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
     # заполненной формы. Отличает их наличие вариантов: скрапер собирает группу
     # только начиная с двух элементов.
     if f.type == "checkbox" and not f.options:
-        if re.search(r"agree|consent|privacy|terms|policy|gdpr|authori", low):
+        # Вопрос целиком, а не подпись: скрапер режет её до 80 знаков. Живьём
+        # 2026-09-14 (лид #1218, Action1) «Privacy Notice» и «consent» стояли за
+        # обрезом — галочка согласия оставалась пустой, форма не пускала дальше.
+        whole = f"{getattr(f, 'question', '') or ''} {low}".lower()
+        if re.search(r"agree|consent|privacy|terms|policy|gdpr|authori", whole):
             return FillAction(field=f, value="true", source="profile")
         return FillAction(field=f, value="", source="unmapped")
 

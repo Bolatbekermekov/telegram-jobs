@@ -134,6 +134,36 @@ def test_the_job_alert_toggle_is_still_left_alone(page):
     assert alert.value == ""
 
 
+# --- согласие, у которого слова стоят дальше обреза подписи ------------------
+# Живьём 2026-09-14 (лид #1218, Action1 — анкета Workable внутри Easy Apply):
+# подпись галочки — абзац, скрапер режет её до 80 знаков ровно перед «content»,
+# и правило согласия видело «…accepted the con». Галочка оставалась пустой, форма
+# отвечала «This field is required», обход жал Review до предела шагов. Разметка
+# с живой страницы; «Ι» в «Ι confirm» — греческая буква, как там.
+ACTION1_MARKUP = """
+<div class="modal">
+  <p>Personal data consent*</p>
+  <fieldset aria-describedby="error-message-r1j">
+    <div role="checkbox" tabindex="0" aria-checked="false"><div><div>
+      <input id="r1k" tabindex="-1" type="checkbox"><label for="r1k"></label></div>
+      <p>By applying for this job, Ι confirm I have read, understood and accepted the
+      content of the &lt;a href="https://apply.workable.com/action1/gdpr_policy"&gt;Privacy
+      Notice&lt;/a&gt; and consent to the processing of my data as part of this
+      application.</p>
+    </div></div>
+  </fieldset>
+  <p>This field is required</p>
+</div>
+"""
+
+
+def test_consent_words_past_the_caption_limit_still_tick_the_box(page):
+    page.set_content(ACTION1_MARKUP)
+    plan = build_plan(ea.scrape_form(page), PROFILE, "cv.pdf")
+    consent = next(a for a in plan.actions if a.field.type == "checkbox")
+    assert consent.value == "true"
+
+
 # --- a "No" answer must not tick the box -------------------------------------
 
 class _Loc:
