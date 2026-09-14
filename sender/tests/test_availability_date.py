@@ -101,3 +101,20 @@ def test_graduation_date_is_not_guessed():
     a = _map(FieldObs(tag="input", type="date",
                       label="When is your graduation date?", required=True))
     assert a.source != "profile"
+
+
+def test_last_working_date_is_the_end_of_the_notice_period():
+    # Живьём 2026-09-14 (Indeed Apply, #1228): «What is your last working date? *»
+    # — последний день на нынешней работе, то есть конец срока отработки.
+    a = _map(FieldObs(tag="input", type="date", label="What is your last working date? *",
+                      required=True))
+    assert a.source == "profile"
+    assert a.value.count("-") == 2 and a.value[:2] == "20"
+
+
+def test_a_text_date_question_is_written_in_its_pattern():
+    # Indeed Apply (#1228): текстовое поле, формат «MM/dd/yyyy» из данных страницы.
+    a = _map(FieldObs(tag="input", type="text", label="What is your last working date? *",
+                      required=True, placeholder="MM/dd/yyyy"))
+    assert a.source == "profile"
+    assert len(a.value) == 10 and a.value[2] == "/" and a.value[5] == "/"

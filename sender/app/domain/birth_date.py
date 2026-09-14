@@ -6,16 +6,15 @@
 в анкете не было, и отклик ушёл в ручной. Владелец назвал дату, в
 `apply_profile.yml` она лежит как YYYY-MM-DD.
 
-Формат выбирает поле: placeholder называет порядок и разделитель («DD/MM/YYYY»,
-«ДД.ММ.ГГГГ»), `input[type=date]` принимает только ISO, календарь LinkedIn на
-en-US ждёт месяц первым. Без подсказки — ISO: «30/01» и «01/30» в разных странах
-читают по-разному, а 2005-01-30 везде одинаково.
+Формат выбирает поле — как именно, см. `date_format.date_for_field`.
 
 Возраст считается от даты, а не хранится: прежнее `age: "22"` в анкете было
 записано 2026-07-29 и разошлось с правдой.
 """
 import re
 from datetime import date
+
+from app.domain.date_format import date_for_field, parse_iso
 
 _DOB_RE = re.compile(
     r"date\s+of\s+birth|birth\s*date|birthday|\bd\.?o\.?b\b|"
@@ -28,11 +27,6 @@ _MIN_AGE_RE = re.compile(
     r"(?:at\s+least|over|older\s+than|above|age\s+of|не\s+младше|старше)\s+(\d{2})\b"
     r"|\b(\d{2})\s*(?:\+|(?:years?\s+)?(?:of\s+age\s+)?or\s+(?:older|over|above)"
     r"|лет\s+и\s+старше)", re.IGNORECASE)
-# Части даты в подсказке поля. Отдельными «словами»: буква d из «Select date»
-# частью даты не считается.
-_PART_RE = re.compile(r"(?<![a-zа-яё])([dд]{1,2}|[mм]{1,2}|[yг]{2,4})(?![a-zа-яё])",
-                      re.IGNORECASE)
-_PART_KIND = {"d": "d", "д": "d", "m": "m", "м": "m", "y": "y", "г": "y"}
 
 
 def asks_date_of_birth(text: str) -> bool:
@@ -50,47 +44,16 @@ def minimum_age_asked(text: str) -> int | None:
     return int(m.group(1) or m.group(2)) if m else None
 
 
-def _parse(iso: str) -> date | None:
-    try:
-        return date.fromisoformat((iso or "").strip())
-    except ValueError:
-        return None
-
-
 def age_on(iso: str, today: date) -> int | None:
     """Полных лет на `today`, или None, если даты рождения нет."""
-    born = _parse(iso)
+    born = parse_iso(iso)
     if born is None:
         return None
     return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
 
 
-def _by_placeholder(born: date, placeholder: str) -> str:
-    parts = list(_PART_RE.finditer(placeholder or ""))
-    kinds = [_PART_KIND[m.group(1)[0].lower()] for m in parts]
-    if len(parts) != 3 or sorted(kinds) != ["d", "m", "y"]:
-        return ""
-    sep = placeholder[parts[0].end():parts[1].start()]
-    out = []
-    for m, kind in zip(parts, kinds):
-        if kind == "y":
-            out.append(str(born.year) if len(m.group(1)) >= 4 else f"{born.year % 100:02d}")
-        else:
-            out.append(f"{born.day if kind == 'd' else born.month:02d}")
-    return sep.join(out)
-
-
 def birth_date_text(iso: str, field_type: str = "", placeholder: str = "",
                     lang: str = "", picker: bool = False) -> str:
     """Дата рождения в формате поля, или "" — если даты в анкете нет."""
-    born = _parse(iso)
-    if born is None:
-        return ""
-    if field_type == "date":
-        return born.isoformat()
-    shaped = _by_placeholder(born, placeholder)
-    if shaped:
-        return shaped
-    if picker and (lang or "").lower() == "en-us":
-        return f"{born.month:02d}/{born.day:02d}/{born.year}"
-    return born.isoformat()
+    return date_for_field(iso, field_type=field_type, placeholder=placeholder,
+                          lang=lang, picker=picker)

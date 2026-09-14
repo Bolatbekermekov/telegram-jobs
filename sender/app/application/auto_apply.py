@@ -13,6 +13,7 @@ from app.domain.availability import availability_iso, notice_option_index, notic
 from app.domain.birth_date import (
     age_on, asks_age, asks_date_of_birth, birth_date_text, minimum_age_asked,
 )
+from app.domain.date_format import date_for_field, looks_like_date_pattern
 from app.domain.page_observation import FieldObs, PageObservation
 
 EEO_ANSWER = "Prefer not to say"
@@ -33,6 +34,9 @@ _AVAILABILITY_DATE_RE = re.compile(
     r"availab|available start|start date|starting date|joining|can you start|"
     # «When is the earliest you would want to start at …?» (Ashby, 2026-09-13).
     r"earliest\b.{0,40}\bstart|want to start|"
+    # «What is your last working date?» (Indeed Apply, #1228, 2026-09-14) —
+    # последний день на нынешней работе, то есть конец срока отработки.
+    r"last working (?:date|day)|last day (?:at|of|in) (?:your )?(?:current|present)|"
     r"notice period|дата выхода|когда.*готов", re.IGNORECASE)
 
 # Вопрос про срок отработки — без требования даты. Отдельно от
@@ -664,6 +668,18 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
             if iso:
                 return FillAction(field=f, value=iso, source="profile")
         return FillAction(field=f, source="unmapped")
+    # Та же дата, но текстовым полем с форматом: Indeed Apply держит «What is your
+    # last working date?» как `input type=text`, а `MM/dd/yyyy` лежит в данных
+    # страницы (#1228, 2026-09-14); календарь LinkedIn — вход с lang. Модель такую
+    # дату не знает и честно оставляла поле пустым.
+    if (caption_len <= _MAX_LABEL_CHARS and not f.options
+            and (looks_like_date_pattern(f.placeholder) or f.date_picker)
+            and _AVAILABILITY_DATE_RE.search(low)):
+        iso = availability_iso(profile.notice_period)
+        if iso:
+            return FillAction(field=f, value=date_for_field(
+                iso, placeholder=f.placeholder, lang=f.lang, picker=f.date_picker),
+                source="profile")
 
     # _LABEL_RULES match anywhere in the label, which is right for a real caption
     # ("Email", "Your phone number") but wrong for prose: a question ending in
