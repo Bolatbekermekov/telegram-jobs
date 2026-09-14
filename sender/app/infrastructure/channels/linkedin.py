@@ -1053,6 +1053,25 @@ _FIELD_ERROR_JS = r"""
     });
     if (bad.length >= 3) break;
   }
+  // Группа (галочка, радиокнопки): `aria-describedby` у fieldset ведёт на id,
+  // которого нет, а «This field is required» — абзац сразу после неё. Живьём
+  // 2026-09-14 (лид #1218, Action1): отказ не читался, и обход жал Review до
+  // предела шагов. Подпись группы — абзац перед ней («Personal data consent*»).
+  for (const box of document.querySelectorAll('fieldset[aria-describedby]')) {
+    if (bad.length >= 3) break;
+    let txt = '';
+    for (const id of (box.getAttribute('aria-describedby') || '').split(/\s+/)) {
+      const info = id && document.getElementById(id);
+      if (info) txt += ' ' + (info.textContent || '');
+    }
+    if (!txt.trim() && box.nextElementSibling) txt = box.nextElementSibling.textContent || '';
+    if (!/this field is required|обязательное поле|это поле обязательно|please make a selection|выберите вариант/i.test(txt)) continue;
+    const cap = box.previousElementSibling;
+    bad.push({
+      label: ((cap && cap.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 70),
+      info: txt.replace(/\s+/g, ' ').trim().slice(0, 90),
+    });
+  }
   return bad;
 }
 """
