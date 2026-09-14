@@ -5,4 +5,4 @@
 - Core invariant: the same CvVariant must supply both the text used to generate the letter and the PDF path attached/uploaded for that lead.
 - Local ignored artifacts live in sender/cv/<role>/cv.tex and role-named PDF files. sender/build_cvs.sh builds all eight and rejects multi-page output.
 - PDF and TeX files contain PII and are intentionally ignored; only sender/cv/.gitkeep and the build script are versioned.
-- Direct messaging support differs by channel: Telegram/email attach files; LinkedIn can upload or message-attach depending on flow; HeadHunter normally uses its online resume and optionally sends the PDF in chat; Threads intentionally drops attachments.
+- Direct messaging support differs by channel: Telegram/email attach files; LinkedIn can upload or message-attach depending on flow; HeadHunter responds with the online resume of the letter's role (HH_RESUME_TITLES maps role -> hh resume title, picked in the response popup; since 2026-09-14 the account has one resume per role) and optionally sends the PDF in chat; Indeed Apply (smartapply) uploads the role PDF on its resume screen; Threads intentionally drops attachments.
