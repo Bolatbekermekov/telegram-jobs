@@ -207,6 +207,43 @@ def test_a_resume_that_does_not_take_stops_the_application(site, ai_cv):
     assert not any("/profile-work-experience" in u for u in visited)
 
 
+def test_the_resume_step_is_read_after_its_cards_arrive(site, ai_cv):
+    """Живьём 2026-09-14 (#1228, #1230): заголовок «Add a resume» приходит раньше
+    карточек и поля загрузки — Indeed дорисовывает их запросом. Бот смотрел сразу
+    и объявлял «на шаге резюме нет загрузки файла»."""
+    page, screens, visited = site
+    late = RESUME.replace('<fieldset', '<template id="late"><fieldset').replace(
+        '</fieldset>', '</fieldset></template>') + """
+<script>
+  setTimeout(() => {
+    const t = document.getElementById('late');
+    t.replaceWith(t.content.cloneNode(true));
+  }, 1500);
+</script>"""
+    screens[RESUME_PATH] = late
+
+    _apply(page, ai_cv)
+
+    assert _query(visited, "/create")["resume"] == ["Bolatbek_Yermekov_AI_Engineer.pdf"]
+
+
+def test_the_apply_button_gets_a_real_click(site, ai_cv):
+    """Живьём 2026-09-14 (#1236, ae.indeed.com): «Apply with Indeed» не открыл форму
+    от нативного el.click() — «кнопка нажата, а форма не открылась»."""
+    page, screens, visited = site
+    screens["/viewjob"] = """<h1>AI Engineer</h1>
+<button id="indeedApplyButton" type="button">Apply with Indeed</button>
+<script>
+  document.getElementById('indeedApplyButton').addEventListener('click', e => {
+    if (e.isTrusted) location.href = '@@contact-info-module';
+  });
+</script>"""
+
+    _apply(page, ai_cv)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+
+
 def test_a_visible_captcha_goes_to_the_human(site, ai_cv):
     page, screens, visited = site
     screens[CONTACT_PATH] = CONTACT + (

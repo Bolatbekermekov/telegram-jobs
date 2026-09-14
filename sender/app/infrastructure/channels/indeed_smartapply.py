@@ -57,6 +57,8 @@ _MAX_SCREENS = 14
 _STEP_WAIT_MS = 20000
 # Файл резюме уходит на сервер и разбирается там, прежде чем карточка сменится.
 _RESUME_WAIT_MS = 45000
+# Сколько ждать, пока экран резюме дорисует карточки и поле загрузки.
+_RESUME_SCREEN_WAIT_MS = 15000
 _SUBMIT_WAIT_MS = 30000
 _POLL_MS = 250
 
@@ -200,7 +202,13 @@ def _open_the_form(page, job_url: str) -> None:
         raise ManualApplyRequired(
             f"Indeed Apply: на странице вакансии нет кнопки отклика — вакансия могла "
             f"закрыться, проверь вручную: {job_url}")
-    _click(button.first)
+    # Настоящий клик, а не el.click(): «Apply with Indeed» на ae.indeed.com не
+    # открыл форму от нативного клика (живьём 2026-09-14, #1236). Нативный —
+    # только если настоящему мешает слой поверх кнопки.
+    try:
+        button.first.click(timeout=8000)
+    except Exception:  # noqa: BLE001 — клик мышью перехвачен: жмём нативно
+        _click(button.first)
     if not _wait_until(page, lambda: on_smartapply(page.url), _STEP_WAIT_MS):
         _check_walls(page, job_url)
         raise ManualApplyRequired(
@@ -231,6 +239,11 @@ def _choose_resume(page, cv_path: str, job_url: str) -> None:
     Bolatbek_Yermekov_Fullstack.pdf — на AI-вакансию ушёл бы он.
     """
     name = PurePath(cv_path).name
+    # Заголовок «Add a resume» приходит раньше карточек и поля загрузки: Indeed
+    # дорисовывает их запросом. Живьём 2026-09-14 (#1228, #1230, #1239) бот
+    # смотрел сразу и объявлял, что загрузки файла нет.
+    _wait_until(page, lambda: bool(_selected_resume(page))
+                or page.locator(SEL_RESUME_FILE).count() > 0, _RESUME_SCREEN_WAIT_MS)
     if _selected_resume(page) == name:
         return
     field = page.locator(SEL_RESUME_FILE)
