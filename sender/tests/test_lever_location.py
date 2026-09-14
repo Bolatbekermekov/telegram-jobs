@@ -88,3 +88,35 @@ def test_a_place_lever_does_not_know_is_named_not_typed(page):
     page.set_content(LEVER_LOCATION)
     with pytest.raises(ManualApplyRequired, match="Current location"):
         ea.fill_fields(page, _plan("Nowhere, Atlantis"))
+
+
+def test_a_location_the_form_forgot_is_picked_again_before_submit(page):
+    """Живьём 2026-09-14 (#1264, прогон 7): место было выбрано, а к отправке
+    скрытое `selectedLocation` снова пустое при тексте «Astana, KAZ» — форма
+    перерисовалась, пока Lever разбирал резюме. Перед отправкой — выбрать снова."""
+    from app.infrastructure.channels import external_apply as ea
+
+    page.set_content(LEVER_LOCATION)
+    plan = _plan("Astana, Kazakhstan")
+    ea.fill_fields(page, plan)
+    page.evaluate("() => { document.getElementById('selected-location').value = '{\"name\":\"\"}'; }")
+
+    ea._reassert_lever_location(page, plan)
+
+    assert page.input_value("#selected-location") == '{"name":"Astana, KAZ"}'
+
+
+def test_the_lever_location_is_reasserted_before_the_submit_click(monkeypatch):
+    from app.domain.page_observation import PageObservation
+    from app.infrastructure.channels import external_apply as ea
+    from tests.test_external_apply import FakePage
+
+    page = FakePage(PageObservation(url="https://jobs.lever.co/x/apply"), present={ea.SEL_SUBMIT})
+    monkeypatch.setattr(ea, "fill_fields", lambda page, plan, **kw: None)
+    monkeypatch.setattr(ea, "_reassert_choices", lambda page, plan: None)
+    monkeypatch.setattr(ea, "_reassert_lever_location",
+                        lambda page, plan: page.clicks.append("lever-location"))
+
+    ea.fill_and_submit(page, plan=None, dry_run=False)
+
+    assert page.clicks == ["lever-location", ea.SEL_SUBMIT]

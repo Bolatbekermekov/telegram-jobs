@@ -917,11 +917,31 @@ def _reassert_choices(page, plan) -> None:
             pass
 
 
+def _reassert_lever_location(page, plan) -> None:
+    """Перед отправкой ещё раз выбрать место Lever, если форма его забыла.
+
+    Живьём 2026-09-14 (лид #1264, прогон 7): место было выбрано из подсказок, а к
+    отправке скрытое `selectedLocation` снова пустое при тексте «Astana, KAZ» —
+    форма перерисовалась, пока Lever разбирал загруженное резюме, и отказала с
+    «Please select a location from the dropdown menu».
+    """
+    for a in getattr(plan, "actions", None) or []:
+        if not (a.value and a.field.name == "location" and a.field.ref):
+            continue
+        loc = page.locator(f'[data-af="{a.field.ref}"]')
+        if loc.count() == 0 or not _is_lever_location(loc):
+            continue
+        if page.evaluate(_LEVER_PICKED_JS):
+            continue
+        _fill_lever_location(page, loc, a.value)
+
+
 def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
     fill_fields(page, plan, profile=profile)
     if dry_run:
         return
     _reassert_choices(page, plan)
+    _reassert_lever_location(page, plan)
     submit = page.locator(SEL_SUBMIT)
     if submit.count() == 0:
         raise ManualApplyRequired("внешняя форма: не нашёл кнопку отправки, нужен ручной отклик")
