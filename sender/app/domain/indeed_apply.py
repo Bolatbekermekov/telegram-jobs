@@ -23,8 +23,11 @@ _JK = re.compile(r"[?&]jk=([0-9a-f]{8,32})\b", re.I)
 
 _BOARD = "indeed.com"
 
-# Форма Indeed Apply: ATS за ней нет, заполнять нечего.
+# Вход в Indeed Apply. С 2026-09-14 форму проходит сам бот
+# (`channels/indeed_smartapply.py`); стеной это остаётся, только если форма так
+# и не открылась.
 _INDEED_APPLY = re.compile(r"indeed\.com/applystart", re.I)
+_SMARTAPPLY = "smartapply.indeed.com"
 # Вход. Отдельно от антибота: чинится другой командой.
 _LOGIN = re.compile(r"secure\.indeed\.com|indeed\.com/account/login", re.I)
 # Антибот. Логином не лечится — лечится живым браузером и паузой.
@@ -54,11 +57,25 @@ def left_indeed(url) -> bool:
     площадкой не является. Страновых доменов у Indeed десятки (`de.`, `nl.`),
     и все они — всё ещё Indeed.
     """
-    u = str(url or "").strip().lower()
-    if not u:
+    host = _host(url)
+    if not host:
         return False
-    host = u.split("//")[-1].split("/")[0].split("?")[0].split(":")[0]
     return not (host == _BOARD or host.endswith("." + _BOARD))
+
+
+def _host(url) -> str:
+    u = str(url or "").strip().lower()
+    return u.split("//")[-1].split("/")[0].split("?")[0].split(":")[0] if u else ""
+
+
+def on_smartapply(url) -> bool:
+    """Открыта ли форма Indeed Apply. Хост целиком: `smartapply.indeed.com.evil` — не она."""
+    return _host(url) == _SMARTAPPLY
+
+
+def is_applystart(url) -> bool:
+    """Промежуточный `/applystart`, который сам уводит в форму Indeed Apply."""
+    return bool(_INDEED_APPLY.search(str(url or "")))
 
 
 def wall_reason(landing_url, job_url: str) -> str | None:
@@ -72,9 +89,8 @@ def wall_reason(landing_url, job_url: str) -> str | None:
     if left_indeed(url):
         return None
     if _INDEED_APPLY.search(url):
-        return ("Indeed Apply: форма отклика живёт на самом Indeed, ATS "
-                "работодателя за ней нет — заполнять нечего, откликнись "
-                f"вручную: {job_url}")
+        return ("Indeed Apply не открылся: остановились на applystart, форма "
+                f"smartapply так и не пришла — откликнись вручную: {job_url}")
     if _CHALLENGE.search(url):
         return ("Indeed показал антибот-проверку вместо перехода — пройди её в "
                 f"открытом Chrome и повтори прогон: {job_url}")

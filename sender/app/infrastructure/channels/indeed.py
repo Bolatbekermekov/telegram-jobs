@@ -12,6 +12,10 @@
 потом отдать страницу в `external_apply`. Адрес работодателя в разметке не
 лежит — он раскрывается переходом, поэтому переход обязателен.
 
+Indeed Apply — отдельная дорога. Если на странице вакансии кнопка «Apply now» /
+«Apply with Indeed», форма живёт на самом Indeed, и её проходит
+`indeed_smartapply` (решение владельца 2026-09-14), а к работодателю не уходим.
+
 Отличие от обоих: работаем в СВОЕЙ вкладке. Wellfound берёт тёплую вкладку
 человека, но там отклик заполняется на самой площадке; здесь он уводит на чужие
 сайты, и делать это во вкладке, где человек работает, нельзя.
@@ -19,12 +23,19 @@
 from app.domain.channel import (
     ChannelError, ChannelUnavailable, ManualApplyRequired, OutreachContent,
 )
-from app.domain.indeed_apply import apply_path, job_key, wall_reason
+from app.domain.indeed_apply import (
+    apply_path, is_applystart, job_key, left_indeed, on_smartapply, wall_reason,
+)
+from app.infrastructure.channels.indeed_smartapply import (
+    has_indeed_apply, indeed_apply_via_page,
+)
 
 # Редирект расшифровывается в JS, и к возврату из evaluate() события навигации
 # ещё нет. Та же пауза и по той же причине, что у RemoteOK.
 _REDIRECT_SETTLE_MS = 6000
 _DESCRIPTION_CAP = 6000
+# `/applystart` сам уводит в форму Indeed Apply, но не мгновенно.
+_APPLYSTART_WAIT_SECONDS = 10
 
 
 class IndeedChannel:
@@ -32,10 +43,13 @@ class IndeedChannel:
     body_limit = None
     needs_subject = False
 
-    def __init__(self, cdp_url: str, external_apply_deps=None, dry_run: bool = False):
+    def __init__(self, cdp_url: str, external_apply_deps=None, dry_run: bool = False,
+                 indeed_apply=None):
         self._cdp_url = cdp_url
         self._ext = external_apply_deps or {"enabled": False, "fn": None}
         self._dry_run = dry_run
+        # Отклик на самом Indeed (smartapply). Подменяется в тестах канала.
+        self._indeed_apply = indeed_apply or indeed_apply_via_page
         self._pw = None
         self._browser = None
         self._page = None
@@ -90,23 +104,44 @@ class IndeedChannel:
         except Exception:  # noqa: BLE001 — контекст для ИИ это бонус, не повод падать
             desc = ""
 
-        # Переход ОТНОСИТЕЛЬНОЙ ссылкой изнутри страницы, а не page.goto:
-        # Referer со страницы вакансии — единственное, что отличает нас от
-        # прямого захода, который Indeed отбивает.
-        page.evaluate("() => { window.location.href = '%s'; }" % apply_path(jk))
-        page.wait_for_timeout(_REDIRECT_SETTLE_MS)
-
-        blocked = wall_reason(page.url, job_url)
-        if blocked:
-            raise ManualApplyRequired(blocked)
-
-        self._ext["fn"](
-            page, job_url, content,
+        apply = dict(
             profile=self._ext.get("profile"),
             # Резюме той роли, под которую написано письмо, а не из конфига.
             cv_path=content.attachment_path or self._ext.get("cv_path", ""),
             answerer=self._ext.get("answerer"),
-            dry_run=self._ext.get("dry_run", self._dry_run),
+            dry_run=self._ext.get("dry_run", self._dry_run))
+
+        # Indeed Apply: отклик живёт на самом Indeed, и с 2026-09-14 его проходит
+        # бот (решение владельца, см. indeed_smartapply). Кнопка видна прямо на
+        # странице вакансии — редирект к работодателю тут не нужен.
+        if on_smartapply(page.url) or has_indeed_apply(page):
+            self._indeed_apply(page, job_url, content, vacancy_context=desc, **apply)
+            return
+
+        # Ссылка из таблицы — `/rc/clk` — бывает сразу редиректом к работодателю.
+        # Живьём 2026-09-14 (лид #1228) она увела на Greenhouse, а относительный
+        # переход ниже, сделанный уже оттуда, открыл `/rc/clk` Greenhouse —
+        # «Страница не найдена».
+        if not left_indeed(page.url):
+            # Переход ОТНОСИТЕЛЬНОЙ ссылкой изнутри страницы, а не page.goto:
+            # Referer со страницы вакансии — единственное, что отличает нас от
+            # прямого захода, который Indeed отбивает.
+            page.evaluate("() => { window.location.href = '%s'; }" % apply_path(jk))
+            page.wait_for_timeout(_REDIRECT_SETTLE_MS)
+            for _ in range(_APPLYSTART_WAIT_SECONDS):
+                if not is_applystart(page.url):
+                    break
+                page.wait_for_timeout(1000)
+            if on_smartapply(page.url):
+                self._indeed_apply(page, job_url, content, vacancy_context=desc, **apply)
+                return
+
+            blocked = wall_reason(page.url, job_url)
+            if blocked:
+                raise ManualApplyRequired(blocked)
+
+        self._ext["fn"](
+            page, job_url, content, **apply,
             email_channel=self._ext.get("email_channel"),
             subject_maker=self._ext.get("subject_maker"),
             vacancy_context=desc)

@@ -16,10 +16,17 @@
 ней нет; `secure.indeed.com` и `/challenge` — вход и антибот.
 """
 from app.domain.indeed_apply import (
-    apply_path, job_key, left_indeed, wall_reason,
+    apply_path, job_key, left_indeed, on_smartapply, wall_reason,
 )
 
 JOB = "https://www.indeed.com/viewjob?jk=591fcde7d2cf0699"
+
+
+def test_smartapply_is_indeeds_own_form_host():
+    assert on_smartapply("https://smartapply.indeed.com/beta/indeedapply/form/review-module")
+    assert not on_smartapply("https://smartapply.indeed.com.evil.example/beta/indeedapply")
+    assert not on_smartapply("https://www.indeed.com/viewjob?jk=84f280b9c5186dbd")
+    assert not on_smartapply("")
 
 
 # --- id вакансии ----------------------------------------------------------
