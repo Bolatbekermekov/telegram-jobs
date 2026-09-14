@@ -28,6 +28,7 @@
 покажет проверку, отклик уходит человеку.
 """
 import re
+import time
 from pathlib import PurePath
 from urllib.parse import urlparse
 
@@ -37,7 +38,9 @@ from app.application.auto_apply import (
 )
 from app.domain.channel import ManualApplyRequired
 from app.domain.indeed_apply import on_smartapply
-from app.infrastructure.channels.external_apply import fill_fields, scrape_form
+from app.infrastructure.channels.external_apply import (
+    _dump_form_debug, _slug, fill_fields, scrape_form,
+)
 
 SEL_APPLY_BUTTON = '[data-testid="viewjob-indeed-apply"], #indeedApplyButton'
 SEL_RESUME_FILE = ('[data-testid="resume-selection-file-resume-radio-card-file-input"], '
@@ -61,6 +64,7 @@ _RESUME_WAIT_MS = 45000
 _RESUME_SCREEN_WAIT_MS = 15000
 _SUBMIT_WAIT_MS = 30000
 _POLL_MS = 250
+_APPLY_CLICK_ATTEMPTS = 3
 
 _CLICK_BY_TEXT_JS = """(pattern) => {
   const rx = new RegExp(pattern, 'i');
@@ -114,8 +118,18 @@ def indeed_apply_via_page(page, job_url: str, content, profile=None, cv_path: st
 
     Инвариант тот же, что у Easy Apply и внешних форм: экран, чьи обязательные
     поля не заполняются, останавливает отклик `ManualApplyRequired`, а не
-    пропускается. Ссылка для человека — всегда `job_url` из таблицы.
+    пропускается. Ссылка для человека — всегда `job_url` из таблицы. При отказе
+    экран сохраняется в APPLY_DEBUG_DIR (`indeed_<экран>_<время>`): без этого
+    отказы прогона 7 пришлось воспроизводить руками.
     """
+    try:
+        _walk(page, job_url, content, profile, cv_path, answerer, dry_run, vacancy_context)
+    except ManualApplyRequired:
+        _dump_form_debug(page, f"indeed_{_slug(_screen(page.url) or 'page')}_{int(time.time())}")
+        raise
+
+
+def _walk(page, job_url, content, profile, cv_path, answerer, dry_run, vacancy_context):
     if not on_smartapply(page.url):
         _open_the_form(page, job_url)
     context = vacancy_context or content.body
@@ -203,13 +217,26 @@ def _open_the_form(page, job_url: str) -> None:
             f"Indeed Apply: на странице вакансии нет кнопки отклика — вакансия могла "
             f"закрыться, проверь вручную: {job_url}")
     # Настоящий клик, а не el.click(): «Apply with Indeed» на ae.indeed.com не
-    # открыл форму от нативного клика (живьём 2026-09-14, #1236). Нативный —
-    # только если настоящему мешает слой поверх кнопки.
+    # открыл форму от нативного клика (живьём 2026-09-14, #1236). И не сразу после
+    # domcontentloaded: там же настоящий клик до подключения скриптов страницы
+    # тоже ничего не открыл (прогон 7). Поэтому ждём загрузку и жмём ещё раз,
+    # если форма не пошла. Нативный клик — только если мышь перехвачена слоем.
     try:
-        button.first.click(timeout=8000)
-    except Exception:  # noqa: BLE001 — клик мышью перехвачен: жмём нативно
-        _click(button.first)
-    if not _wait_until(page, lambda: on_smartapply(page.url), _STEP_WAIT_MS):
+        page.wait_for_load_state("load", timeout=15000)
+    except Exception:  # noqa: BLE001 — не дождались: жмём по тому, что есть
+        pass
+    opened = False
+    for attempt in range(_APPLY_CLICK_ATTEMPTS):
+        try:
+            button.first.click(timeout=8000)
+        except Exception:  # noqa: BLE001 — клик мышью перехвачен: жмём нативно
+            _click(button.first)
+        last = attempt == _APPLY_CLICK_ATTEMPTS - 1
+        wait = _STEP_WAIT_MS if last else _STEP_WAIT_MS // 3
+        if _wait_until(page, lambda: on_smartapply(page.url), wait):
+            opened = True
+            break
+    if not opened:
         _check_walls(page, job_url)
         raise ManualApplyRequired(
             f"Indeed Apply: кнопка нажата, а форма не открылась (остались на "
@@ -295,8 +322,13 @@ def _fill_screen(page, screen: str, profile, cv_path: str, answerer, context: st
 
 def _advance(page, screen: str, job_url: str) -> None:
     before = page.url
-    # None — чтение оборвал сам переход, то есть кнопка нажата.
-    if _evaluate(page, _CLICK_BY_TEXT_JS, _CONTINUE_RE, default=None) is False:
+    # Кнопку ждём, а не ищем один раз: пока Indeed разбирает загруженный файл или
+    # дорисовывает экран, «Continue» выключена или ещё не пришла (живьём
+    # 2026-09-14, прогон 7: #1228, #1230, #1239 — «нет кнопки Continue»).
+    # None от evaluate — чтение оборвал сам переход, то есть кнопка нажата.
+    if not _wait_until(page, lambda: _evaluate(
+            page, _CLICK_BY_TEXT_JS, _CONTINUE_RE, default=None) is not False,
+            _STEP_WAIT_MS):
         raise ManualApplyRequired(
             f"Indeed Apply, экран «{screen}»: нет кнопки «Continue» — дожми "
             f"вручную: {job_url}")

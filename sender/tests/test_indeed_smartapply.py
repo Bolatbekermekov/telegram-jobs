@@ -117,6 +117,7 @@ def site(browser, monkeypatch):
     """Страница с «сайтом Indeed» за route: (page, экраны, посещённые адреса)."""
     monkeypatch.setattr(ia, "_STEP_WAIT_MS", 3000)
     monkeypatch.setattr(ia, "_RESUME_WAIT_MS", 3000)
+    monkeypatch.setattr(ia, "_dump_form_debug", lambda page, tag, locator=None: None)
     context = browser.new_context()
     page = context.new_page()
     screens = dict(SCREENS)
@@ -221,6 +222,23 @@ def test_the_resume_step_is_read_after_its_cards_arrive(site, ai_cv):
   }, 1500);
 </script>"""
     screens[RESUME_PATH] = late
+
+    _apply(page, ai_cv)
+
+    assert _query(visited, "/create")["resume"] == ["Bolatbek_Yermekov_AI_Engineer.pdf"]
+
+
+def test_continue_is_awaited_while_the_upload_is_processed(site, ai_cv):
+    """Живьём 2026-09-14 (#1228, прогон 7): резюме встало, а «Continue» ещё
+    выключен, пока Indeed разбирает файл, — бот писал «нет кнопки Continue»."""
+    page, screens, visited = site
+    screens[RESUME_PATH] = RESUME.replace(
+        '<button data-testid="continue-button" type="button"',
+        '<button data-testid="continue-button" type="button" disabled').replace(
+        "setTimeout(() => { document.getElementById('rn').textContent = n; }, 300)",
+        "setTimeout(() => { document.getElementById('rn').textContent = n; }, 300); "
+        "setTimeout(() => { document.querySelector('[data-testid=continue-button]')"
+        ".disabled = false; }, 2000)")
 
     _apply(page, ai_cv)
 
