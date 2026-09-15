@@ -134,6 +134,52 @@ def test_a_single_answer_before_the_reset_is_not_announced_as_a_return():
     assert len(notices) == 1
 
 
+class _Hanging(_Scorer):
+    """Запасная, которая не отвечает: как glm-5.3-flash на NVIDIA 2026-09-15."""
+
+    def __init__(self, name, answers=()):
+        super().__init__(name)
+        self.answers = set(answers)
+
+    def score(self, profile, title, description, location=""):
+        self.calls.append(title)
+        if title in self.answers:
+            return 70, self.name
+        raise TimeoutError("Request timed out.")
+
+
+def test_a_spare_that_keeps_timing_out_stops_the_scoring():
+    """Живьём 2026-09-15 после 10:40 glm-5.3-flash на NVIDIA перестал отвечать:
+    простейший запрос не уложился в 100 с, а в прогоне каждая вакансия ждала по
+    90 с на каждую из трёх попыток клиента, и поиск молча стоял почти час. Пока у
+    основной нет квоты, запасная, не ответившая трижды подряд, — это конец оценки
+    на прогон, а не очередная пропущенная вакансия."""
+    gemini, nvidia = _Scorer("gemini", exhausted=True), _Hanging("nvidia")
+    scorer = _fallback(gemini, nvidia)
+    for title in ("A", "B"):
+        with pytest.raises(TimeoutError):          # пока это одна вакансия
+            scorer.score("P", title, "d")
+
+    with pytest.raises(LLMQuotaExhausted) as err:
+        scorer.score("P", "C", "d")
+    reason = str(err.value)
+    assert "дневная квота gemini исчерпана" in reason     # почему не основная
+    assert SPARE in reason and "не отвечает" in reason   # и почему не запасная
+
+
+def test_a_spare_timeout_between_answers_only_skips_that_vacancy():
+    gemini = _Scorer("gemini", exhausted=True)
+    nvidia = _Hanging("nvidia", answers={"A", "C", "E"})
+    scorer = _fallback(gemini, nvidia)
+    results = []
+    for title in "ABCDE":
+        try:
+            results.append(scorer.score("P", title, "d"))
+        except TimeoutError:
+            results.append("пропуск")
+    assert results == [(70, "nvidia"), "пропуск", (70, "nvidia"), "пропуск", (70, "nvidia")]
+
+
 def test_when_the_spare_is_spent_too_the_search_stops():
     gemini = _Scorer("gemini", exhausted=True)
     nvidia = _Scorer("nvidia", exhausted=True)

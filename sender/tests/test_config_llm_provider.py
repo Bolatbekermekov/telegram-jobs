@@ -31,11 +31,14 @@ def test_default_provider_is_openai(reloaded):
 
 
 def test_nvidia_provider_switches_key_model_and_url(reloaded):
-    cfg = reloaded(SENDER_LLM_PROVIDER="nvidia", NVIDIA_API_KEY="nvapi-test")
+    # Модели заданы явно: иначе тест читает их из .env владельца и падает всякий
+    # раз, когда там меняют модель NVIDIA (так и было 2026-09-15).
+    cfg = reloaded(SENDER_LLM_PROVIDER="nvidia", NVIDIA_API_KEY="nvapi-test",
+                   NVIDIA_MODEL="write-model", NVIDIA_MODEL_CHEAP="bulk-model")
     assert cfg.LLM_BASE_URL == "https://integrate.api.nvidia.com/v1"
     assert cfg.LLM_API_KEY == "nvapi-test"
-    assert cfg.LLM_MODEL == "z-ai/glm-5.3-flash"
-    assert cfg.LLM_MODEL_CHEAP == "z-ai/glm-5.3-flash"
+    assert cfg.LLM_MODEL == "write-model"
+    assert cfg.LLM_MODEL_CHEAP == "bulk-model"
 
 
 def test_nvidia_selected_without_key_fails_on_import(reloaded):
