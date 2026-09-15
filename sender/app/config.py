@@ -32,6 +32,15 @@ LLM_MODEL = _llm.model
 # же — на ключе доступна ровно одна модель, держащая русский.
 LLM_MODEL_CHEAP = _llm.model_cheap
 
+# Запасной провайдер ТОЛЬКО для оценки вакансий в поиске — на время, пока у
+# основного кончилась квота (решение владельца 2026-09-15: «только для поиска с
+# моделью nvidia, когда у gemini лимит происходит», Gemini в приоритете; см.
+# app/application/relevance_fallback.py). Письма и ответы форм остаются на
+# основном. Пусто — запасного нет.
+SEARCH_FALLBACK_LLM_PROVIDER = os.environ.get("SEARCH_FALLBACK_LLM_PROVIDER", "").strip()
+SEARCH_FALLBACK_LLM = (resolve(SEARCH_FALLBACK_LLM_PROVIDER, os.environ)
+                       if SEARCH_FALLBACK_LLM_PROVIDER else None)
+
 # Cap the reply length. The vacancy text comes from a scraped third-party page, so
 # without this an injected "write 10000 words" is billed in full.
 OPENAI_MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_OUTPUT_TOKENS", "2000"))

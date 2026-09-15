@@ -249,10 +249,24 @@ def _relevance_args() -> dict:
         return {}
     from app.infrastructure.cv_loader import load_text_file
     from app.infrastructure.openai_relevance import OpenAIRelevanceScorer
+    scorer = OpenAIRelevanceScorer(config.LLM_API_KEY, config.LLM_MODEL_CHEAP,
+                                   max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                                   base_url=config.LLM_BASE_URL)
+    spare = config.SEARCH_FALLBACK_LLM
+    if spare is not None:
+        # Запасная модель есть только здесь, в оценке поиска: письма и ответы форм
+        # её не видят. Объект новый на каждый прогон, поэтому каждый поиск
+        # начинает с основной (см. relevance_fallback).
+        from app.application.relevance_fallback import FallbackScorer
+        scorer = FallbackScorer(
+            scorer,
+            OpenAIRelevanceScorer(spare.api_key, spare.model_cheap,
+                                  max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
+                                  base_url=spare.base_url),
+            fallback_name=f"{config.SEARCH_FALLBACK_LLM_PROVIDER} {spare.model_cheap}",
+            on_notice=lambda text: print(f"   {text}"))
     return dict(
-        scorer=OpenAIRelevanceScorer(config.LLM_API_KEY, config.LLM_MODEL_CHEAP,
-                                     max_output_tokens=config.OPENAI_MAX_OUTPUT_TOKENS,
-                                     base_url=config.LLM_BASE_URL),
+        scorer=scorer,
         profile=load_text_file(config.SEARCH_PROFILE_PATH),
         threshold=config.MATCH_THRESHOLD,
         max_jobs=config.MATCH_MAX_JOBS,
