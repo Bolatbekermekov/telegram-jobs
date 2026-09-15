@@ -115,17 +115,32 @@ _CHALLENGE = re.compile(
     r"just a moment|security check|verify you are human|unusual traffic|access denied",
     re.IGNORECASE)
 
+# Страница входа вместо выдачи: сессия Indeed вышла. Живьём 2026-09-15 посреди
+# поиска пропали куки SHOE и SOCK, и каждый сайт (US, AE, GB) уводил на
+# secure.indeed.com/auth с заголовком «Sign In | Indeed Accounts».
+_SIGN_IN_URL = re.compile(r"^https?://secure\.indeed\.com/auth\b", re.IGNORECASE)
+_SIGN_IN_TITLE = re.compile(r"\bsign in \| indeed accounts\b", re.IGNORECASE)
 
-def page_state(title: str, body_text: str, card_count: int) -> str:
-    """«ready» | «challenge» | «empty» по тому, что реально на странице.
+
+def page_state(title: str, body_text: str, card_count: int, url: str = "") -> str:
+    """«ready» | «login» | «challenge» | «empty» по тому, что реально на странице.
 
     Карточки главнее заголовка: если выдача отрисовалась, нам всё равно, что
-    Indeed написал в title.
+    Indeed написал в title. «login» — страница входа: её чинит не ожидание, а
+    вход в окне Chrome, поэтому это отдельное состояние, а не проверка.
     """
     if card_count > 0:
         return "ready"
+    if _SIGN_IN_URL.search(url or "") or _SIGN_IN_TITLE.search(title or ""):
+        return "login"
     blob = f"{title or ''} {body_text or ''}"
     return "challenge" if _CHALLENGE.search(blob) else "empty"
+
+
+def _sign_in_message(instead_of: str, detail: str) -> str:
+    """Что сказать, когда вместо выдачи или вакансии Indeed просит войти."""
+    return (f"Indeed разлогинил сессию: вместо {instead_of} страница входа. Войди в "
+            f"окне Chrome Indeed (make login_indeed) и повтори. {detail}")
 
 
 def build_jobs_url(keyword: str, location: str, page: int = 1,
@@ -310,6 +325,10 @@ class IndeedSearcher:
                                          state="attached")
         except Exception:  # noqa: BLE001 — либо пусто, либо страница не открылась
             state, detail = self._page_state()
+            if state == "login":
+                # Одна страница входа говорит за весь обход: сессия общая, и
+                # следующие слова и сайты упрутся в тот же вход.
+                raise IndeedChallenge(_sign_in_message("выдачи", detail))
             if state == "challenge":
                 # Наружу, а не в «пусто»: run_search назовёт это ошибкой, и
                 # человек увидит причину вместо молчаливого нуля.
@@ -341,7 +360,7 @@ class IndeedSearcher:
             return ("empty", f"страницу не опросить: {type(exc).__name__}")
         detail = (f"URL: {str(url)[:90]} | title: {str(title)[:60]} | "
                   f"карточек в DOM: {cards} | текста: {len(body or '')} симв.")
-        return (page_state(title, body, cards or 0), detail)
+        return (page_state(title, body, cards or 0, url=str(url)), detail)
 
     def job_cards_for_test(self):
         return self._job_cards()
@@ -423,6 +442,8 @@ class IndeedSearcher:
                                          timeout=12000, state="attached")
         except Exception:  # noqa: BLE001 — описание не обязано открыться
             state, detail = self._page_state()
+            if state == "login":
+                raise IndeedChallenge(_sign_in_message("вакансии", detail))
             if state == "challenge":
                 raise IndeedChallenge(
                     f"Indeed показывает проверку вместо вакансии. {detail}")

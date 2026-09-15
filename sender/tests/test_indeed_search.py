@@ -320,6 +320,74 @@ def test_the_searcher_raises_on_a_challenge_instead_of_reporting_nothing():
         s.search(["ai engineer"], "", 5)
 
 
+SIGN_IN_URL = ("https://secure.indeed.com/auth?co=US&hl=en_US&continue="
+               "http%3A%2F%2Fwww.indeed.com%2Fjobs%3Fq%3Dgenerative")
+
+
+class _SignInPage:
+    """Страница входа вместо выдачи или вакансии — как живьём 2026-09-15."""
+    url = SIGN_IN_URL
+
+    def __init__(self):
+        self.visits = []
+
+    def goto(self, url, **kw):
+        self.visits.append(url)
+
+    def title(self):
+        return "Sign In | Indeed Accounts"
+
+    def wait_for_selector(self, selector, timeout=None, state=None):
+        raise TimeoutError("no cards")
+
+    def evaluate(self, script):
+        return 0
+
+    def locator(self, selector):
+        class _Loc:
+            @property
+            def first(self_inner):
+                return self_inner
+
+            def inner_text(self_inner, timeout=None):
+                return ""
+
+            def count(self_inner):
+                return 0
+        return _Loc()
+
+
+def test_a_sign_in_page_is_not_an_empty_day():
+    """Живьём 2026-09-15 посреди поиска AI Engineer Indeed разлогинил сессию
+    (пропали куки SHOE и SOCK), и каждый запрос выдачи уводил на
+    secure.indeed.com/auth — «Sign In | Indeed Accounts». Поиск печатал «карточек
+    не нашлось» на каждое слово и каждый сайт, будто вакансий просто нет."""
+    from app.infrastructure.search.indeed_search import page_state
+    assert page_state("Sign In | Indeed Accounts", "", 0, url=SIGN_IN_URL) == "login"
+    assert page_state("Sign In | Indeed Accounts", "", 0) == "login"
+    assert page_state("golang developer jobs", "", 0,
+                      url="https://www.indeed.com/jobs?q=golang") == "empty"
+
+
+def test_the_searcher_stops_at_the_sign_in_page_and_asks_to_log_in():
+    page = _SignInPage()
+    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226", sleep=lambda x: None)
+    s._page = page
+    with pytest.raises(RuntimeError, match="Войди") as err:
+        s.search(["ai engineer", "llm engineer"], "", 5)
+    assert "login_indeed" in str(err.value)
+    assert len(page.visits) == 1        # остальные слова и сайты не перебирает
+
+
+def test_a_vacancy_behind_the_sign_in_page_is_not_scored():
+    """Текст страницы входа скорер оценил бы низко, а память отказников
+    запомнила бы вакансию навсегда — так же, как с проверкой."""
+    s = IndeedSearcher(cdp_url="http://127.0.0.1:9226", sleep=lambda x: None)
+    s._page = _SignInPage()
+    with pytest.raises(RuntimeError, match="login_indeed"):
+        s.describe("https://www.indeed.com/viewjob?jk=1")
+
+
 # --- своя выборка ключевых слов -------------------------------------------
 
 def test_indeed_searches_its_own_keywords_not_the_global_list():
