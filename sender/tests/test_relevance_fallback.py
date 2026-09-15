@@ -110,6 +110,30 @@ def test_a_still_spent_gemini_waits_another_interval_silently():
     assert len(notices) == 1             # неудачная проверка раз в 15 минут не шумит
 
 
+def test_a_single_answer_before_the_reset_is_not_announced_as_a_return():
+    """Живьём 2026-09-15, 10:40 — больше чем за час до сброса квоты: проверка
+    Gemini прошла, в логе встало «↩️ Основная модель снова отвечает», а следующий
+    же запрос снова получил отказ по дневной квоте, и следом «↪️». Одиночный ответ
+    ещё не возврат: о возврате говорим, когда основная ответила дважды подряд, а
+    сорвавшийся возврат молчит, как неудачная проверка."""
+    gemini, nvidia = _Scorer("gemini", exhausted=True), _Scorer("nvidia")
+    clock, notices = _Clock(), []
+    scorer = _fallback(gemini, nvidia, clock=clock, notices=notices)
+    scorer.score("P", "A", "d")                              # ушли на запасную
+
+    gemini.exhausted = False
+    clock.now = 900
+    assert scorer.score("P", "B", "d") == (70, "gemini")     # одиночный ответ
+    gemini.exhausted = True
+    clock.now = 901
+    assert scorer.score("P", "C", "d") == (70, "nvidia")     # и снова отказ
+    clock.now = 1000
+    assert scorer.score("P", "D", "d") == (70, "nvidia")     # ждём новый интервал
+
+    assert gemini.calls == ["A", "B", "C"]
+    assert len(notices) == 1
+
+
 def test_when_the_spare_is_spent_too_the_search_stops():
     gemini = _Scorer("gemini", exhausted=True)
     nvidia = _Scorer("nvidia", exhausted=True)

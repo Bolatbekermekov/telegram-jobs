@@ -24,8 +24,13 @@ class FallbackScorer:
 
     Приоритет основной держат два правила: новый объект на каждый прогон (см.
     `_relevance_args`), и раз в `retry_primary_after` секунд после переключения
-    основная пробуется снова. Неудачная проверка молчит — строка раз в 15 минут
-    ничего не сообщает; слышны только уход на запасную и возврат.
+    основная пробуется снова.
+
+    Слышны только уход на запасную и подтверждённый возврат — когда основная
+    ответила дважды подряд. Неудачная проверка и сорвавшийся возврат молчат:
+    живьём 2026-09-15 в 10:40, больше чем за час до сброса, Gemini ответил на одну
+    проверку и отказал на следующем же запросе, и в логе встала пара «↩️ снова
+    отвечает» / «↪️ исчерпана», первая строка которой была неправдой.
     """
 
     def __init__(self, primary, fallback, fallback_name: str, on_notice=None,
@@ -39,6 +44,8 @@ class FallbackScorer:
         self._clock = clock
         # Когда основная в последний раз ответила «квота кончилась»; None — отвечает.
         self._primary_out_at = None
+        # Проверка прошла, но возврат ещё не подтверждён вторым ответом подряд.
+        self._returning = False
 
     def score(self, profile, title, description, location=""):
         if self._primary_out_at is None or \
@@ -46,14 +53,18 @@ class FallbackScorer:
             try:
                 result = self._primary.score(profile, title, description, location)
             except LLMQuotaExhausted as exc:
-                if self._primary_out_at is None:
+                if self._primary_out_at is None and not self._returning:
                     minutes = int(self._retry_after // 60)
                     self._notice(f"↪️ {exc} — оцениваю через {self._fallback_name}; "
                                  f"основную модель проверю снова через {minutes} мин.")
                 self._primary_out_at = self._clock()
+                self._returning = False
             else:
                 if self._primary_out_at is not None:
                     self._primary_out_at = None
+                    self._returning = True
+                elif self._returning:
+                    self._returning = False
                     self._notice("↩️ Основная модель снова отвечает — оцениваю через неё.")
                 return result
         return self._fallback.score(profile, title, description, location)
