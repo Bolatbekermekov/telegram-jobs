@@ -53,7 +53,7 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                on_error=None, scorer=None, profile="", threshold=0, max_jobs=0,
                scored_out=None, on_platform_done=None, scan_limit=None,
                on_scan_limit=None, on_duplicate_postings=None,
-               on_dead_dropped=None) -> int:
+               on_dead_dropped=None, on_quota_exhausted=None) -> int:
     """`scored_out` — память о вакансиях, которые скорер уже отверг.
 
     Без неё отказник не сохранялся никуда (`known_urls()` читает только
@@ -61,15 +61,25 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
     снова платил за скоринг. А так как порядок выдачи детерминированный, одни и
     те же отказники занимали весь бюджет max_jobs, и вакансии за ними не
     начинались никогда.
+
+    `on_quota_exhausted(platform, exc, rest)` — у модели кончилась квота, которую
+    внутри прогона не переждать. Единственное исключение из правила «одна
+    площадка не останавливает остальные»: все площадки оценивает одна модель, и
+    следующие упрутся в тот же отказ, сперва потратив минуты на сбор выдачи —
+    LinkedIn при этом под логином. Отобранное на текущей площадке записывается,
+    `rest` называет площадки, которые не открывали. Без слушателя остановка
+    уходит в `on_error`: молча обрезанный поиск читается как «везде пусто».
     """
+    platforms = list(platforms)
     added = 0
-    for platform in platforms:
+    for i, platform in enumerate(platforms):
         searcher = searchers[platform]
         # Замер идёт вокруг ВСЕЙ работы по площадке, включая скоринг: он и есть
         # самая долгая её часть (страница описания плюс вызов модели на каждую
         # вакансию), и без него цифра не отвечала бы на вопрос «где застряли».
         started = time.monotonic()
         gained = None
+        exhausted = []
         try:
             searcher.start()
             found, repeats = _unique(searcher.search(keywords, location, limit))
@@ -94,7 +104,8 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                     # score_and_filter отдаёт кандидата, память хранит ссылку.
                     on_reject=(None if scored_out is None
                                else lambda c: scored_out.add(c.url)),
-                    scan_limit=scan_limit, on_scan_limit=on_scan_limit)
+                    scan_limit=scan_limit, on_scan_limit=on_scan_limit,
+                    on_quota_exhausted=lambda exc, scanned, kept: exhausted.append(exc))
             gained = candidates_repo.add_new(found)
             added += gained
         except Exception as exc:  # noqa: BLE001 — isolate per-platform failures
@@ -112,6 +123,15 @@ def run_search(platforms, searchers, candidates_repo, keywords, location, limit,
                     on_platform_done(platform, time.monotonic() - started, gained)
                 except Exception:  # noqa: BLE001 — отчёт не должен ронять поиск
                     pass
+        if exhausted:
+            try:
+                if on_quota_exhausted is not None:
+                    on_quota_exhausted(platform, exhausted[0], platforms[i + 1:])
+                elif on_error is not None:
+                    on_error(platform, exhausted[0])
+            except Exception:  # noqa: BLE001 — отчёт не должен ронять поиск
+                pass
+            break
     if scored_out is not None:
         # После всех платформ: упасть на записи файла кэша значит потерять уже
         # найденных кандидатов, а они дороже памяти об отказниках.

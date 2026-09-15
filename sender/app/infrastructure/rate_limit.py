@@ -14,6 +14,11 @@ flash-lite ~15, NVIDIA ~2. Пока лиды идут через паузу MIN/
 Ретраим ТОЛЬКО 429 — остальные ошибки отдаём наверх сразу,
 чтобы прогон сам решил, отказ это или нет (см. generate_body).
 
+Не каждый 429 минутный. Кончившиеся сутки или баланс ключа за минуту не
+вернутся, а «retry in» Gemini пишет и тогда (2026-09-15, см.
+app/domain/llm_quota.py) — такой отказ уходит наверх сразу, как
+`LLMQuotaExhausted`.
+
 Живёт только в sender: у бота на Vercel вся функция ограничена 10 секундами,
 ждать там негде — он честно теряет оценку и пишет лид без неё.
 """
@@ -22,6 +27,8 @@ import time
 from typing import Callable, TypeVar
 
 from openai import RateLimitError
+
+from app.domain.llm_quota import LLMQuotaExhausted, exhausted_quota_note
 
 T = TypeVar("T")
 
@@ -51,6 +58,18 @@ def _asked_delay(exc: Exception) -> float | None:
         return None
 
 
+def _raise_if_exhausted(exc: RateLimitError) -> None:
+    """Отказ по квоте, которую не переждать, уходит наверх сразу и под своим именем.
+
+    Живьём 2026-09-15 кончилась дневная квота Gemini, а отказ всё равно звал
+    «Please retry in 24.96s»: поиск ждал по три раза на каждой вакансии и
+    простоял так ночь, ничего не оценив.
+    """
+    note = exhausted_quota_note(str(exc))
+    if note is not None:
+        raise LLMQuotaExhausted(note) from exc
+
+
 def with_rate_limit_retry(call: Callable[[], T],
                           sleep: Callable[[float], None] | None = None) -> T:
     """Выполнить `call`, пережидая 429. Последний 429 пробрасывается наверх.
@@ -64,7 +83,12 @@ def with_rate_limit_retry(call: Callable[[], T],
         try:
             return call()
         except RateLimitError as exc:
+            _raise_if_exhausted(exc)
             asked = _asked_delay(exc)
             wait = fallback if asked is None else asked + _BUFFER_SECONDS
             sleep(min(wait, _MAX_WAIT_SECONDS))
-    return call()
+    try:
+        return call()
+    except RateLimitError as exc:
+        _raise_if_exhausted(exc)
+        raise

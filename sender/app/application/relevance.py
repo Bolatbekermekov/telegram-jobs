@@ -3,6 +3,8 @@ import json
 import re
 from typing import Protocol
 
+from app.domain.llm_quota import LLMQuotaExhausted
+
 # Правила отбора стоят ЗДЕСЬ, хотя половина из них уже написана в профиле, и это
 # не дублирование от небрежности. Профиль едет ПОЛЬЗОВАТЕЛЬСКИМ сообщением и
 # проигрывает системному: прежний промпт говорил «Будь строгим: не та роль или
@@ -111,7 +113,8 @@ def parse_score_response(raw: str) -> tuple[int, str]:
 
 
 def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
-                     on_reject=None, scan_limit=None, on_scan_limit=None):
+                     on_reject=None, scan_limit=None, on_scan_limit=None,
+                     on_quota_exhausted=None):
     """Скорить, пока не наберётся `max_jobs` ПРОШЕДШИХ порог вакансий.
 
     `max_jobs` считает попавших в лист, а не потраченные попытки. Раньше бюджет
@@ -141,6 +144,13 @@ def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
 
     Вакансию, описание которой не прочиталось, в `on_reject` не отдаём: это сбой
     сети, а не вердикт о вакансии, и списывать её навсегда из-за таймаута нельзя.
+
+    `on_quota_exhausted(exc, scanned, kept)` — у модели кончилась квота, которую
+    не переждать (сутки, баланс). Это не сбой одной вакансии: все следующие
+    упрутся в тот же отказ. Живьём 2026-09-15 такой отказ проглатывался как
+    «одна плохая вакансия», и LinkedIn перебирал 169 штук всю ночь. Оценка
+    останавливается, отобранное возвращается; без слушателя исключение уходит
+    наверх, а не тонет в цикле.
     """
     kept = []
     scanned = 0
@@ -158,6 +168,12 @@ def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
             # объявления, и у remocate она заполнена всегда, тогда как в описании
             # страны может не быть вовсе.
             score, reason = scorer.score(profile, c.title, description, c.location)
+        except LLMQuotaExhausted as exc:
+            if on_quota_exhausted is None:
+                raise
+            # Вакансия, на которой кончилась квота, не оценена — не считаем её.
+            on_quota_exhausted(exc, scanned - 1, len(kept))
+            return kept
         except Exception:  # noqa: BLE001 — one bad job never kills the run
             continue
         if score >= threshold:

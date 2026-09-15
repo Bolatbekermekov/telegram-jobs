@@ -286,6 +286,19 @@ def _say_dead_dropped(platform: str, dropped: int) -> None:
     print(f"   🪦 {platform}: {dropped} вакансий уже сняты — в лист не пишу.")
 
 
+def _say_quota_exhausted(platform: str, exc, rest, notify=None) -> None:
+    """Оценка остановлена: у модели кончилась квота, которую не переждать.
+
+    Воркеру это нужно и в Telegram: он ищет без человека у ноута, и обрезанный
+    поиск без объяснения там читается как «на остальных площадках пусто».
+    """
+    from app.application.notify import quota_stop_message
+    note = quota_stop_message(platform, exc, rest)
+    print(note)
+    if notify is not None:
+        notify(note)
+
+
 def _warn_if_apply_profile_blank() -> None:
     """Say once, up front, that external application forms have nothing to fill.
 
@@ -934,6 +947,8 @@ def _make_run_one(searchers, candidates, paused=frozenset(), notify=None):
             on_platform_done=lambda p, secs, n: timings.append((p, secs, n)),
             on_duplicate_postings=_say_reposts,
             on_dead_dropped=_say_dead_dropped,
+            on_quota_exhausted=lambda p, exc, rest: _say_quota_exhausted(
+                p, exc, rest, notify),
             **_relevance_args(),
         )
         _notify_done(plats, added, timings, paused=held)
@@ -1067,6 +1082,7 @@ def run_search_once(platforms):
         on_platform_done=_platform_done,
         on_duplicate_postings=_say_reposts,
         on_dead_dropped=_say_dead_dropped,
+        on_quota_exhausted=_say_quota_exhausted,
         **_relevance_args(),
     )
     print(f"Готово. Новых кандидатов записано: {added}.")
