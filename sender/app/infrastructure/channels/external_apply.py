@@ -96,8 +96,19 @@ _SCRAPE_JS = r"""() => {
     const shell = e.closest('[role=radio],[role=checkbox]');
     return !!shell && shell.getClientRects().length > 0;
   };
+  // Приманка для ботов: текстовый вход, которого не видно (opacity 0) и в который
+  // не попасть с клавиатуры (tabindex -1). Живьём 2026-09-15 у Teamtailor
+  // (Advisense, лиды #1273 и #1274): `input type=email name=full_email required`
+  // с подписью «Email address without domain». Заполненная приманка — это спам в
+  // глазах формы, а скрапер звал её обязательным полем, и отклик уходил в ручные.
+  // Галочки, радио и файлы сюда не входят: их прозрачными рисуют под своими
+  // переключателями, и они настоящие.
+  const honeypot = e => /^(text|email|tel|url|number|search|textarea)$/.test(e.type)
+    && e.getAttribute('tabindex') === '-1'
+    && parseFloat(getComputedStyle(e).opacity) === 0;
   const usable = e => e.type === 'file' ? !e.disabled
-    : ((e.getAttribute('aria-hidden') !== 'true' || insideAriaChoice(e)) && isVisible(e));
+    : ((e.getAttribute('aria-hidden') !== 'true' || insideAriaChoice(e)) && isVisible(e)
+       && !honeypot(e));
   // Предел длины ответа. `maxlength` ставят не все: LinkedIn держит его только
   // в подсказке поля — «Использовано: 37 из 20 символов», — и превышение там же
   // отзывается «Недопустимым значением». Не прочитав предел, модель отвечает

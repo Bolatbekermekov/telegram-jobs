@@ -68,6 +68,40 @@ def test_an_aria_hidden_file_input_is_still_a_field(page):
     assert [f.name for f in obs.fields] == ["resume"]
 
 
+# --- приманка для ботов у Teamtailor -----------------------------------------
+# Живьём 2026-09-15, лиды #1273 и #1274 (Transcendent Group и Advisense, форма
+# Teamtailor на career.advisense.com): рядом с настоящим «Email» лежит
+# `<input type=email name=full_email required tabindex=-1 autocomplete=off>` с
+# подписью «Email address without domain» и opacity 0. Человек его не видит и не
+# попадёт в него с клавиатуры — это приманка: заявку, где оно заполнено, форма
+# считает спамом. Скрапер принимал его за обязательное поле, и оба отклика ушли в
+# ручные с «не смог заполнить обязательное поле».
+TEAMTAILOR_HONEYPOT = """
+<label for="candidate_email">Email</label>
+<input type="email" id="candidate_email" name="candidate[email]" required>
+<div class="flex items-center justify-between leading-tight text-md">
+  <label for="full_email">Email address without domain</label>
+  <input type="email" name="full_email" id="full_email" required tabindex="-1"
+         autocomplete="off" style="opacity:0; position:absolute; width:500px; height:48px">
+</div>
+"""
+
+
+def test_a_honeypot_field_is_not_a_field(page):
+    obs = scrape(page, TEAMTAILOR_HONEYPOT)
+    assert [f.name for f in obs.fields] == ["candidate[email]"]
+
+
+def test_a_see_through_consent_switch_is_still_a_field(page):
+    """Прозрачность сама по себе не приманка: переключатели согласия у той же
+    Teamtailor рисуют настоящий checkbox с opacity 0 под своей картинкой, и в него
+    можно попасть с клавиатуры."""
+    obs = scrape(page, '<label class="label-switch"><input type="checkbox" '
+                       'name="consent" required style="opacity:0; position:absolute">'
+                       ' I agree to the privacy policy</label>')
+    assert [f.name for f in obs.fields] == ["consent"]
+
+
 # --- группа чекбоксов --------------------------------------------------------
 # Lever задаёт вопрос с несколькими ответами набором чекбоксов под одним `name`.
 # Замер на вакансии CoinsPaid: «React 16 or earlier», «React 17+», «React 18+»,
