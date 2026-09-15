@@ -740,6 +740,13 @@ def run() -> None:
             print("Генерирую сообщение...")
             body, note, gen_err = generate_for(generator, lead, channel, variant.text)
             if gen_err is not None:
+                from app.domain.llm_quota import LLMQuotaExhausted
+                if isinstance(gen_err, LLMQuotaExhausted):
+                    # Кончились сутки или баланс: ждать трёх отказов подряд
+                    # незачем, каждый следующий лид упрётся в то же самое.
+                    print(f"🛑 #{lead.lead_id}: {gen_err} — останавливаю прогон. "
+                          "Лиды остаются 'new'; запусти снова, когда квота обновится.")
+                    break
                 # Generation hit OpenAI/network — don't crash the run (row 82).
                 # Leave the lead `new` and move on; bail after 3 in a row, since
                 # that means OpenAI is down and every remaining lead would fail too.
@@ -844,6 +851,15 @@ def run() -> None:
                                 note=result.error)
                 print(f"🤝 Запрос на контакт БЕЗ письма [{platform}] — жду подтверждения "
                       f"(лид #{lead.lead_id} в 'invited').")
+            elif result.quota_exhausted:
+                # Квоту модели съели ответы на вопросы формы, а с самим лидом всё
+                # в порядке: заметка пишется, статус остаётся `new`, как у лимита
+                # площадки. Но прогон стоп — следующему лиду модели не хватит ни
+                # на письмо, ни на ответы.
+                repo.mark_status(lead, STATUS_NEW, note=result.error)
+                print(f"🛑 #{lead.lead_id}: {result.error} — лид остаётся 'new', "
+                      "останавливаю прогон. Запусти снова, когда квота обновится.")
+                break
             elif result.manual:
                 # Couldn't auto-apply (gate/unknown form); leave for a manual apply.
                 _record_manual(repo, lead, body, result.error)
