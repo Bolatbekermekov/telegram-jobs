@@ -34,8 +34,8 @@ def test_nvidia_provider_switches_key_model_and_url(reloaded):
     cfg = reloaded(SENDER_LLM_PROVIDER="nvidia", NVIDIA_API_KEY="nvapi-test")
     assert cfg.LLM_BASE_URL == "https://integrate.api.nvidia.com/v1"
     assert cfg.LLM_API_KEY == "nvapi-test"
-    assert cfg.LLM_MODEL == "minimaxai/minimax-m3"
-    assert cfg.LLM_MODEL_CHEAP == "minimaxai/minimax-m3"
+    assert cfg.LLM_MODEL == "z-ai/glm-5.3-flash"
+    assert cfg.LLM_MODEL_CHEAP == "z-ai/glm-5.3-flash"
 
 
 def test_nvidia_selected_without_key_fails_on_import(reloaded):

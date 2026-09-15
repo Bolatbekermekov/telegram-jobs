@@ -33,13 +33,14 @@ def test_openai_models_default_to_the_current_tiers():
     assert s.model_cheap == "gpt-5.4-nano"
 
 
-def test_nvidia_points_at_nim_and_minimax():
+def test_nvidia_points_at_nim_and_glm():
     s = resolve("nvidia", {"NVIDIA_API_KEY": "nvapi-test"})
     assert s.api_key == "nvapi-test"
     assert s.base_url == "https://integrate.api.nvidia.com/v1"
-    # Единственная доступная на ключе модель, которая держит русский ответ.
-    assert s.model == "minimaxai/minimax-m3"
-    assert s.model_cheap == "minimaxai/minimax-m3"
+    # minimax-m3 снята 2026-09-09 (410 Gone). Из живых моделей ключа промпт
+    # оценки держит glm-5.3-flash: баллы верные, причина по-русски (замер 15.09).
+    assert s.model == "z-ai/glm-5.3-flash"
+    assert s.model_cheap == "z-ai/glm-5.3-flash"
 
 
 def test_nvidia_base_url_and_models_are_overridable():

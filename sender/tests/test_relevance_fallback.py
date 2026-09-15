@@ -19,7 +19,7 @@ from app.application.relevance_fallback import FallbackScorer
 from app.domain.llm_quota import LLMQuotaExhausted
 from app.llm_provider import LLMSettings
 
-SPARE = "nvidia minimaxai/minimax-m3"
+SPARE = "nvidia z-ai/glm-5.3-flash"
 
 
 class _Scorer:
@@ -176,5 +176,5 @@ def test_the_search_scorer_gets_the_spare_only_when_configured(monkeypatch, tmp_
     monkeypatch.setattr(cli.config, "SEARCH_FALLBACK_LLM_PROVIDER", "nvidia")
     monkeypatch.setattr(cli.config, "SEARCH_FALLBACK_LLM", LLMSettings(
         "nvapi-test", "https://integrate.api.nvidia.com/v1",
-        "minimaxai/minimax-m3", "minimaxai/minimax-m3"))
+        "z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"))
     assert isinstance(cli._relevance_args()["scorer"], FallbackScorer)
