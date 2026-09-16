@@ -71,7 +71,11 @@ SUBMIT_TIMEOUT_MS = 100_000
 # Employer screening questions: free-text <textarea name="task_<id>_text"> and
 # single-choice radio groups <input type=radio name="task_<id>">. Mandatory, so
 # without an AI answerer we skip; with one we answer and submit (see below).
-SEL_QUESTIONS = "textarea[name^='task_'], input[type=radio][name^='task_']"
+# Галочки сюда же: у СОГАЗа (лид #1330, 2026-09-16) обязательными были именно они
+# — «какие документы воинского учёта есть» и «форма занятости», — а бот их не
+# видел вовсе, поэтому hh отклик не принял.
+SEL_QUESTIONS = ("textarea[name^='task_'], input[type=radio][name^='task_'], "
+                 "input[type=checkbox][name^='task_']")
 SEL_DESCRIPTION = "[data-qa='vacancy-description']"
 _LOGIN_MARKERS = ("/account/login", "/login", "captcha")
 
@@ -144,7 +148,8 @@ def collect_questions(page) -> list:
       };
       const out = [], seen = new Set();
       document.querySelectorAll(
-        "textarea[name^='task_'], input[type=radio][name^='task_']").forEach(el => {
+        "textarea[name^='task_'], input[type=radio][name^='task_'],"
+        + " input[type=checkbox][name^='task_']").forEach(el => {
         let id, type, options = [];
         if (el.tagName === 'TEXTAREA') { id = el.name.replace(/_text$/, ''); type = 'text'; }
         else {
@@ -614,6 +619,34 @@ def _choose_resume(page, title: str) -> bool:
     return False
 
 
+def _unanswered(questions, answers_by_id) -> list:
+    """Подписи вопросов, на которые модель ответа не дала.
+
+    Решение принимается ДО заполнения, и вот почему: `fill_plan` на пустом ответе
+    подставляет ПЕРВЫЙ вариант, а в анкете hh это ложь о владельце. Живьём
+    2026-09-16 (лид #1330, СОГАЗ): первым вариантом вопроса «какие документы
+    воинского учёта у вас есть» стоял «Есть военный билет». Молчать о таком
+    вопросе нельзя — его должен увидеть человек.
+    """
+    out = []
+    for q in questions:
+        qid = q.get("id")
+        answer = answers_by_id.get(str(qid)) or answers_by_id.get(qid) or {}
+        if not isinstance(answer, dict):
+            answer = {}
+        if q.get("type") == "text":
+            answered = bool(str(answer.get("text", "")).strip())
+        else:
+            try:
+                int(answer.get("choice"))
+                answered = True
+            except (TypeError, ValueError):
+                answered = False
+        if not answered:
+            out.append(str(q.get("prompt") or qid)[:80])
+    return out
+
+
 def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
                    attach_cv_in_chat: bool = False, debug_dir=None,
                    submit_timeout_ms: int = SUBMIT_TIMEOUT_MS,
@@ -690,8 +723,17 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
         questions = collect_questions(page)
         # Анкета — по резюме той роли, что уходит в чат (answerer_cv).
         role_answerer = answerer_for_cv(answerer, content.attachment_path)
-        _fill_questions(page, questions, role_answerer(questions, vacancy_context),
-                        debug_dir)
+        answers = role_answerer(questions, vacancy_context) or {}
+        missing = _unanswered(questions, answers)
+        if missing:
+            # Без этой проверки `fill_plan` подставил бы первый вариант — то есть
+            # ответил бы за владельца (лид #1330, 2026-09-16: первым стоял «Есть
+            # военный билет»). Пусть вопрос увидит человек.
+            raise ChannelError(
+                "hh: на вопросы работодателя нет ответа — "
+                + "; ".join(missing[:3])
+                + f" — нужен ручной отклик: {url}")
+        _fill_questions(page, questions, answers, debug_dir)
     # Ask "did the response already go through?" BEFORE touching the letter form.
     # hh's quick apply submits on the apply click itself and only then offers an
     # optional cover-letter popup, whose submit control is NOT

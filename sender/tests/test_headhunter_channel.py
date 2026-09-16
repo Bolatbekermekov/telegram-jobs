@@ -750,6 +750,31 @@ def test_question_answer_goes_into_the_visible_field(monkeypatch):
     assert ("fill", "textarea[name='task_9_text']", "ответ") not in page.actions
 
 
+def test_an_unanswered_question_goes_to_the_human_not_to_the_first_option(monkeypatch):
+    """Живьём 2026-09-16 (лид #1330, СОГАЗ): анкета спрашивала, какие документы
+    воинского учёта есть у кандидата. Первый вариант там — «Есть военный билет»,
+    и подставить его вместо ответа значит соврать о владельце. Модель ответа не
+    дала — лид обязан уйти человеку, с названием вопроса в заметке, а не с глухим
+    «форма не принята»."""
+    import app.infrastructure.channels.headhunter as hh
+
+    questions = [{"id": "task_1", "type": "choice",
+                  "prompt": "Укажите, какие документы воинского учёта у вас есть.",
+                  "options": ["Есть военный билет", "Невоеннообязанный/-ая"]}]
+    monkeypatch.setattr(hh, "collect_questions", lambda page: questions)
+    monkeypatch.setattr(hh, "_verify_submitted", lambda page, debug_dir=None: None)
+    page = _FakePage({SEL_APPLY: 1, SEL_QUESTIONS: 1, SEL_LETTER_INPUT: 1, SEL_SUBMIT: 1,
+                      "label:has(input[name='task_1'])": 2})
+
+    with pytest.raises(ChannelError, match="воинского учёта"):
+        apply_via_page(page, "https://hh.ru/vacancy/1", OutreachContent(body="letter"),
+                       lambda qs, vacancy: {})
+
+    ticked = [a for a in page.actions
+              if a[0] in ("click", "check", "jsclick") and "task_1" in str(a[1])]
+    assert not ticked, "вариант нельзя отмечать за владельца"
+
+
 def test_question_answer_falls_back_when_nothing_is_visible(monkeypatch):
     """Видимых нет — причина другая, и её надо увидеть, а не замаскировать."""
     import app.infrastructure.channels.headhunter as hh
