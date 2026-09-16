@@ -53,10 +53,14 @@ class FakePage:
         self.present = set(present) | {f'[data-af="{f.ref}"]' for f in obs.fields}
         self.clicks = []
         self.filled = {}
+        self.evaluated = []
         self.submit_sticks = submit_sticks
         self.submit_intercepted = submit_intercepted
 
     def evaluate(self, js):        # scrape_form calls page.evaluate(_SCRAPE_JS)
+        # Выполненный JS запоминается: им гасится баннер cookie, и проверить это
+        # больше нечем — своего DOM у поддельной страницы нет.
+        self.evaluated.append(js)
         return ea.observation_to_raw(self._obs)
 
     def locator(self, sel):
@@ -76,6 +80,27 @@ def _stub_attach_file(monkeypatch):
         locator.first.set_input_files(path)
         return True
     monkeypatch.setattr(ea, "_attach_file", fake)
+
+
+def test_a_cookie_banner_is_neutralised_before_the_submit_click(monkeypatch):
+    """Живьём 2026-09-16, прогон 15: на форме Recruitee (Mercedes-Benz.io) поверх
+    кнопки отправки висел баннер cookie «Agree to necessary / Agree to all» —
+    заявка не ушла, и отчёт честно сказал «исход неизвестен». Тот же баннер стоял
+    поверх согласия у Teamtailor (#1273 и #1274), где отправку тоже не приняли.
+
+    Баннер именно ГАСИТСЯ, а не принимается: соглашаться на cookie за владельца
+    нельзя, а перехватывать клики баннер перестаёт — тот же приём, что у hh.
+    """
+    monkeypatch.setattr(ea, "fill_fields", lambda page, plan, **kw: None)
+    monkeypatch.setattr(ea, "_reassert_choices", lambda page, plan: None)
+    monkeypatch.setattr(ea, "_reassert_lever_location", lambda page, plan: None)
+    page = FakePage(PageObservation(url="https://mbio.recruitee.com/o/ai/c/new"),
+                    present={ea.SEL_SUBMIT})
+
+    ea.fill_and_submit(page, plan=None, dry_run=False)
+
+    assert any("cookie" in js.lower() for js in page.evaluated), \
+        "баннер cookie не погашен — клик по отправке может уйти в него"
 
 
 def _obs_form():

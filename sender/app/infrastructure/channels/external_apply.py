@@ -979,10 +979,45 @@ def _reassert_lever_location(page, plan) -> None:
         _fill_lever_location(page, loc, a.value)
 
 
+# Баннер cookie перехватывает клики. Живьём 2026-09-16: у Recruitee
+# (Mercedes-Benz.io) он стоял поверх кнопки отправки — заявка не ушла, исход
+# остался неизвестным; у Teamtailor (#1273, #1274) — поверх галочки согласия.
+# Баннер ГАСИТСЯ, а не принимается: соглашаться на cookie за владельца нельзя, а
+# перехватывать клики он перестаёт. Тот же приём уже работает на hh.
+#
+# Гасим только всплывающие слои (fixed/sticky/absolute) с пометкой «cookie»:
+# по слову «consent» ходить нельзя — им помечена и настоящая галочка согласия в
+# форме, а её как раз надо ставить.
+_COOKIE_BANNER_JS = r"""() => {
+  const sel = '[id*="cookie" i], [class*="cookie" i], [data-testid*="cookie" i],'
+            + ' [aria-label*="cookie" i], #onetrust-banner-sdk, #CybotCookiebotDialog';
+  let hidden = 0;
+  for (const el of document.querySelectorAll(sel)) {
+    const cs = getComputedStyle(el);
+    if (!['fixed', 'sticky', 'absolute'].includes(cs.position)) continue;
+    if (!el.getClientRects().length) continue;
+    el.style.setProperty('display', 'none', 'important');
+    el.style.setProperty('pointer-events', 'none', 'important');
+    hidden++;
+  }
+  return hidden;
+}"""
+
+
+def _neutralize_cookie_banner(page) -> None:
+    """Погасить баннер cookie, чтобы он не съел клик. Не принять — именно погасить."""
+    try:
+        page.evaluate(_COOKIE_BANNER_JS)
+    except Exception:  # noqa: BLE001 — баннера нет или страница ушла: это норма
+        pass
+
+
 def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
     fill_fields(page, plan, profile=profile)
     if dry_run:
         return
+    # Раньше всех кликов: баннер cookie стоит поверх кнопки отправки и съедает их.
+    _neutralize_cookie_banner(page)
     _reassert_choices(page, plan)
     _reassert_lever_location(page, plan)
     submit = page.locator(SEL_SUBMIT)
