@@ -52,6 +52,34 @@ GREENHOUSE_SELECT = """
 """
 
 
+# --- телефон рядом со списком кодов стран -------------------------------------
+# Живьём 2026-09-16, прогон 15 (лид #1301, Workable valsoft-corp): отклик уехал в
+# ручные с «ответ ИИ содержит личные данные ['phone'] (поле
+# «*Phone+7United States+1United Kingdom+44Canada+1Germany+49…»)». Подпись поля —
+# это весь список кодов стран: <label> оборачивает и телефонный вход, и <select>
+# с сотнями <option>, а подпись берётся как textContent целиком. Из-за мусорной
+# подписи правило не узнало в поле телефон, вопрос уехал модели, та написала
+# номер владельца — и страж личных данных остановил уже заполненную форму.
+WORKABLE_PHONE = """
+<label for="phone">Phone*
+  <select name="country">
+    <option>+7 United States</option>
+    <option>+1 United Kingdom</option>
+    <option>+44 Canada</option>
+  </select>
+  <input id="phone" name="phone" type="tel">
+</label>
+"""
+
+
+def test_a_country_code_list_does_not_become_the_phone_label(page):
+    obs = scrape(page, WORKABLE_PHONE)
+
+    phone = [f for f in obs.fields if f.name == "phone"][0]
+    assert "United States" not in phone.label
+    assert phone.label.startswith("Phone")
+
+
 def test_the_hidden_twin_of_a_combobox_is_not_a_field(page):
     obs = scrape(page, GREENHOUSE_SELECT)
     assert [f.label for f in obs.fields] == ["Country*"]

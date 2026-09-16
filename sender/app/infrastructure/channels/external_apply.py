@@ -56,10 +56,22 @@ _SCRAPE_JS = r"""() => {
   // Та же подпись, но целиком — для модели (`question`). Подпись для правил
   // остаётся короткой: по её длине они отличают подпись от абзаца.
   const whole = read => { normLimit = 600; try { return read(); } finally { normLimit = 80; } };
+  // Текст подписи БЕЗ вложенных в неё контролов. Живьём 2026-09-16 (лид #1301,
+  // Workable valsoft-corp): <label for=phone> оборачивает и телефонный вход, и
+  // <select> с сотнями кодов стран, поэтому textContent давал подпись
+  // «Phone*+7United States+1United Kingdom+44Canada…». По такой подписи правило
+  // не узнавало в поле телефон, вопрос уезжал модели, та честно писала номер
+  // владельца — и страж личных данных снимал уже заполненную форму в ручные.
+  const labelText = l => {
+    const c = l.cloneNode(true);
+    c.querySelectorAll('select,option,input,textarea,button').forEach(n => n.remove());
+    return norm(c.textContent);
+  };
   const labelFor = el => {
     if (el.getAttribute('aria-label')) return norm(el.getAttribute('aria-label'));
-    if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]'); if (l) return norm(l.textContent); }
-    const l2 = el.closest('label'); if (l2) return norm(l2.textContent);
+    if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]');
+                 if (l) { const t = labelText(l); if (t) return t; } }
+    const l2 = el.closest('label'); if (l2) { const t = labelText(l2); if (t) return t; }
     if (el.placeholder) return norm(el.placeholder);
     return norm(el.name);
   };
