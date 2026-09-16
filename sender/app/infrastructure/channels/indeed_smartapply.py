@@ -257,10 +257,44 @@ def _open_the_form(page, job_url: str) -> None:
             opened = True
             break
     if not opened:
+        opened = _open_by_link(page)
+    if not opened:
         _check_walls(page, job_url)
         raise ManualApplyRequired(
             f"Indeed Apply: кнопка нажата, а форма не открылась (остались на "
             f"{page.url[:80]}) — откликнись вручную: {job_url}")
+
+
+# Прямой вход в форму, который Indeed держит на самой странице вакансии.
+SEL_APPLY_LINK = ('a[href*="applybyapplyablejobid"], '
+                  'a[href*="smartapply.indeed.com/beta/indeedapply"]')
+
+
+def _open_by_link(page) -> bool:
+    """Запасной ход, когда кнопка отклика заело: перейти по ссылке рядом с ней.
+
+    Живьём 2026-09-16 (ae.indeed.com, «AI Automation Specialist», прогон 17):
+    «Apply now» не открыл форму ни настоящим кликом, ни нативным, все три попытки
+    подряд, и лид ушёл в ручные — при том что страница несла прямую ссылку
+    `smartapply.indeed.com/beta/indeedapply/applybyapplyablejobid?…`.
+
+    Правилу «идти только кнопками» это не противоречит: к первому экрану
+    сбрасывает прямой заход на адрес ЭКРАНА формы, а здесь — её законный вход.
+    """
+    try:
+        link = page.locator(SEL_APPLY_LINK)
+        if link.count() == 0:
+            return False
+        href = link.first.get_attribute("href") or ""
+    except Exception:  # noqa: BLE001 — страницу перерисовало: ссылки больше нет
+        return False
+    if not href:
+        return False
+    try:
+        page.goto(href, wait_until="domcontentloaded", timeout=_STEP_WAIT_MS)
+    except Exception:  # noqa: BLE001 — не открылось: ответит проверка ниже
+        pass
+    return _wait_until(page, lambda: on_smartapply(page.url), _STEP_WAIT_MS)
 
 
 def _check_walls(page, job_url: str) -> None:

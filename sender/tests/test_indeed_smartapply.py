@@ -341,6 +341,27 @@ def test_the_apply_button_gets_a_real_click(site, ai_cv):
     assert urlparse(visited[-1]).path.endswith("/post-apply")
 
 
+def test_a_dead_apply_button_falls_back_to_the_link_on_the_page(site, ai_cv):
+    """Живьём 2026-09-16 (ae.indeed.com, «AI Automation Specialist», прогон 17):
+    кнопка «Apply now» не открыла форму ни настоящим кликом, ни нативным — лид ушёл
+    в ручные с «кнопка нажата, а форма не открылась». При этом страница сама несёт
+    прямую ссылку на форму: `smartapply.indeed.com/beta/indeedapply/
+    applybyapplyablejobid?indeedApplyableJobId=…`. Дверь заело, а ключ лежит рядом.
+
+    Это НЕ противоречит правилу «идти только кнопками»: сбрасывает к первому экрану
+    прямой заход на адрес ЭКРАНА формы, а здесь — её законный вход."""
+    page, screens, visited = site
+    screens["/beta/indeedapply/applybyapplyablejobid"] = (
+        "<script>location.href = '@@contact-info-module'</script>")
+    screens["/viewjob"] = """<h1>AI Engineer</h1>
+<button id="indeedApplyButton" type="button">Apply now</button>
+<a href="https://smartapply.indeed.com/beta/indeedapply/applybyapplyablejobid?indeedApplyableJobId=41e1cd8a">Apply now</a>"""
+
+    _apply(page, ai_cv)
+
+    assert urlparse(visited[-1]).path.endswith("/post-apply")
+
+
 def test_a_visible_captcha_goes_to_the_human(site, ai_cv):
     page, screens, visited = site
     screens[CONTACT_PATH] = CONTACT + (
