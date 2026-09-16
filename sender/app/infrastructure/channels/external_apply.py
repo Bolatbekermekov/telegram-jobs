@@ -1804,6 +1804,26 @@ def _captcha_blocking(page) -> bool:
     return False
 
 
+# Класс-вариант tailwind: `[&>.field-with-errors]:w-auto` содержит подстроку
+# «error», но ошибкой не является — это правило оформления для вложенного блока.
+# Живьём 2026-09-16 (Teamtailor, career.advisense.com, лиды #1273 и #1274) этим
+# классом обёрнута строка согласия, и `[class*=error i]` ловил её, а текст блока
+# начинается со статической метки «Required.», которую Teamtailor рисует у
+# каждого обязательного поля. Заметка сказала «форма не приняла: Required.» —
+# причина, которой не было, да ещё и вместо сохранения страницы.
+_TAILWIND_VARIANT = re.compile(r"\[[^\]]*\]")
+
+
+def _looks_like_error_class(value: str) -> bool:
+    """Есть ли в значении class НАСТОЯЩИЙ токен про ошибку.
+
+    Хэшированные имена (`_errorBanner_1e3gg_32`) — тоже настоящие: ради них
+    селектор и стоит на подстроке. А варианты в квадратных скобках вырезаются.
+    """
+    plain = _TAILWIND_VARIANT.sub(" ", value or "")
+    return any("error" in token.lower() for token in plain.split())
+
+
 def _visible_error(page) -> str:
     """Text of a validation message on the page, or "" — the honest failure case.
 
@@ -1842,6 +1862,19 @@ def _visible_error(page) -> str:
         except Exception:  # noqa: BLE001
             shown = True
         if not shown:
+            continue
+        # Чем элемент попал в выборку. `role=alert` и `aria-invalid` говорят сами
+        # за себя, а класс — нет: подстрока «error» бывает и в варианте tailwind.
+        # Пропущенные не считаются просмотренными, как и скрытые: иначе предел в
+        # пять элементов выберут они, а настоящая ошибка останется непрочитанной.
+        try:
+            role = (el.get_attribute("role") or "").strip().lower()
+            invalid = (el.get_attribute("aria-invalid") or "").strip().lower()
+            cls = el.get_attribute("class") or ""
+        except Exception:  # noqa: BLE001 — не смогли спросить: судим как раньше
+            role, invalid, cls = "", "", ""
+        if role != "alert" and invalid != "true" and cls \
+                and not _looks_like_error_class(cls):
             continue
         seen += 1
         try:

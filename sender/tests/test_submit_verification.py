@@ -45,6 +45,10 @@ class _Loc:
             return by_idx
         return self.page.texts.get(self.sel, "")
 
+    def get_attribute(self, name, timeout=None):
+        # Атрибуты задаются номером элемента выборки: `attrs={(ERR_SEL, 0): {...}}`.
+        return self.page.attrs.get((self.sel, self.idx), {}).get(name)
+
     def click(self, timeout=None, force=False):
         self.page.clicks.append(self.sel)
 
@@ -57,12 +61,13 @@ class _Loc:
 
 class _Page:
     def __init__(self, text="", url="https://ats.example/apply", fields=(), counts=None,
-                 hidden=None):
+                 hidden=None, attrs=None):
         self.body, self.url, self._fields = text, url, list(fields)
         # Every scraped field is addressable, like a real page.
         self.counts = {f'[data-af="{f.ref}"]': 1 for f in self._fields}
         self.counts.update(counts or {})
         self.hidden = hidden or {}
+        self.attrs = attrs or {}
         self.texts, self.clicks, self.filled, self.typed = {}, [], {}, {}
 
     def wait_for_timeout(self, ms):
@@ -202,6 +207,52 @@ def test_a_visible_validation_error_is_reported_verbatim():
 
     with pytest.raises(ManualApplyRequired, match="Please enter a valid answer"):
         ea._verify_submitted(page, "https://ats.example/apply")
+
+
+# Класс-вариант tailwind: подстрока «error» в нём есть, а ошибки нет. Живьём
+# 2026-09-16 на форме Teamtailor (career.advisense.com) строка согласия обёрнута
+# `[&>.field-with-errors]:w-auto`, и её текст начинается со статической метки
+# `<span class="sr-only">Required.</span>` — такую Teamtailor рисует у КАЖДОГО
+# обязательного поля.
+TAILWIND_VARIANT_CLASS = "flex flex-grow gap-x-4 [&>.field-with-errors]:w-auto"
+
+
+def test_a_tailwind_class_named_error_is_not_a_rejection(monkeypatch):
+    """Лиды #1273 и #1274 ушли в ручные с «форма не приняла: Required.» — при том
+    что ни role=alert, ни настоящего класса ошибки на странице не было, а сервер
+    заявку не отклонял (ни одного `field_with_errors` в разметке). Выдуманная
+    причина хуже честного «не знаю»: она уводит человека искать пустое поле,
+    которого нет, и не сохраняет страницу для разбора."""
+    monkeypatch.setattr(ea, "_dump_form_debug", lambda *a, **kw: None)
+    url = "https://career.advisense.com/jobs/8352801-forward-deployed-ai-engineer"
+    page = _Page(text="Application form", url=url,
+                 fields=[FieldObs(tag="input", label="Email", ref="0")],
+                 counts={ERR_SEL: 1},
+                 attrs={(ERR_SEL, 0): {"class": TAILWIND_VARIANT_CLASS}})
+    page.texts[(ERR_SEL, 0)] = "Required. By submitting this application, I agree"
+
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, url)
+
+    said = str(err.value)
+    assert "форма не приняла" not in said
+    assert "ВОЗМОЖНО, ЗАЯВКА УЖЕ УШЛА" in said
+
+
+def test_a_hashed_error_class_is_still_a_rejection(monkeypatch):
+    """Фильтр не должен задеть настоящие ошибки: у современных ATS имена классов
+    хэшированные (`_errorBanner_1e3gg_32`), ради них селектор и стоит на подстроке."""
+    monkeypatch.setattr(ea, "_dump_form_debug", lambda *a, **kw: None)
+    page = _Page(text="Application form", url="https://ats.example/apply",
+                 fields=[FieldObs(tag="input", label="Email", ref="0")],
+                 counts={ERR_SEL: 1},
+                 attrs={(ERR_SEL, 0): {"class": "_errorBanner_1e3gg_32"}})
+    page.texts[(ERR_SEL, 0)] = "Email is required"
+
+    with pytest.raises(ManualApplyRequired) as err:
+        ea._verify_submitted(page, "https://ats.example/apply")
+
+    assert "форма не приняла" in str(err.value)
 
 
 def test_the_word_apply_alone_is_not_a_confirmation():
