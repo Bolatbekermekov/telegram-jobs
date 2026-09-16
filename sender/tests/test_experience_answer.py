@@ -36,6 +36,22 @@ def test_the_russian_phrasing_works():
     assert map_field(_field("Опыт работы (лет)"), PROFILE, "/cv.pdf").value == "3"
 
 
+def test_the_french_phrasing_works():
+    """Живьём 2026-09-16 (лид #1315, LinkedIn Easy Apply, шаг 3): «Depuis combien
+    d’années utilisez-vous Microsoft Azure ?» и тот же вопрос про AWS остались
+    пустыми — правило знало только английский и русский, — и заявка ушла в ручные.
+    Вакансии в Европе идут на местном языке, а ответ от языка не зависит."""
+    got = map_field(_field("Depuis combien d’années utilisez-vous Microsoft Azure ?"),
+                    PROFILE, "/cv.pdf")
+    assert got.value == "3"
+    assert got.source == "profile"
+
+
+def test_the_german_phrasing_works():
+    assert map_field(_field("Wie viele Jahre Erfahrung haben Sie mit Python?"),
+                     PROFILE, "/cv.pdf").value == "3"
+
+
 def test_a_numeric_box_gets_digits_only():
     """<input type=number> отказывается принимать «3 года» — Playwright просто
     не сможет туда напечатать, и обязательное поле утащит заявку в manual."""

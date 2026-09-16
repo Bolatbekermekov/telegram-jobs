@@ -81,6 +81,61 @@ def test_the_location_is_chosen_from_levers_suggestions(page):
     assert page.input_value("#location-input") == "Astana, KAZ"
 
 
+LEVER_SLOW_LOCATION = """<body><form><ul><li data-qa="structured-contact-location-question"><label>
+  <div>Current location <span>✱</span></div>
+  <div>
+    <input data-qa="location-input" id="location-input" type="text" maxlength="100"
+           name="location" required data-af="0">
+    <input id="selected-location" type="hidden" name="selectedLocation" value='{"name":""}'>
+    <div id="drop" style="display: none;"><div id="results"></div></div>
+  </div>
+</label></li></ul></form>
+<script>
+(() => {
+  const input = document.getElementById('location-input');
+  const hidden = document.getElementById('selected-location');
+  const drop = document.getElementById('drop');
+  const results = document.getElementById('results');
+  const show = names => {
+    results.innerHTML = '';
+    names.forEach((name, i) => {
+      const item = document.createElement('div');
+      item.id = 'location-' + i;
+      item.className = 'dropdown-location';
+      item.textContent = name;
+      item.addEventListener('click', () => {
+        if (!name.includes(',')) return;      // заглушка выбором не становится
+        input.value = name;
+        hidden.value = JSON.stringify({name});
+        drop.style.display = 'none';
+      });
+      results.appendChild(item);
+    });
+    drop.style.display = 'flex';
+  };
+  input.addEventListener('input', () => {
+    hidden.value = '{"name":""}';
+    if (!/^astana$/i.test(input.value.trim())) { drop.style.display = 'none'; return; }
+    setTimeout(() => show(['No location found. Try entering a different location Loading']), 200);
+    setTimeout(() => show(['Astana, Panjshir, AFG', 'Astana, KAZ']), 900);
+  });
+})();
+</script></body>"""
+
+
+def test_suggestions_that_are_still_loading_are_not_an_answer(page):
+    """Живьём 2026-09-16 (лид #1316, XTB на Lever): в подписи отказа стояло и «No
+    location found. Try entering a different location», и «Loading» — список
+    прочитали, пока он ещё грузился, и заявка ушла в ручные. Ждать надо не
+    появления списка, а настоящих подсказок."""
+    from app.infrastructure.channels import external_apply as ea
+
+    page.set_content(LEVER_SLOW_LOCATION)
+    ea.fill_fields(page, _plan("Astana, Kazakhstan"))
+
+    assert page.input_value("#selected-location") == '{"name":"Astana, KAZ"}'
+
+
 def test_a_place_lever_does_not_know_is_named_not_typed(page):
     from app.domain.channel import ManualApplyRequired
     from app.infrastructure.channels import external_apply as ea

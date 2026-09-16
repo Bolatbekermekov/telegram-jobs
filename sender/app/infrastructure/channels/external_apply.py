@@ -633,6 +633,36 @@ def _is_lever_location(loc) -> bool:
         return False
 
 
+# Пока Lever ищет место, в списке стоит заглушка: «No location found. Try entering
+# a different location» и «Loading». Живьём 2026-09-16 (лид #1316, XTB на Lever)
+# её и прочитали — отказ пришёл с этими словами прямо в подписи поля, а заявка
+# ушла в ручные, хотя двумя днями раньше Lever ту же Астану находил.
+_LEVER_PLACEHOLDER_RE = re.compile(r"no location found|loading|searching", re.I)
+_LEVER_SUGGEST_WAIT_MS = 6000
+
+
+def _lever_suggestions(page, items) -> list[tuple[int, str]]:
+    """Настоящие подсказки как (номер, текст) — или пусто, если их так и не было.
+
+    Ждём не появления списка, а его содержимого: список показывается сразу, с
+    заглушкой внутри, и первый же прочитанный текст был не подсказкой.
+    """
+    waited = 0
+    while True:
+        try:
+            texts = [items.nth(i).inner_text().strip() for i in range(items.count())]
+        except Exception:  # noqa: BLE001 — список перерисовывается: прочитаем снова
+            texts = []
+        real = [(i, t) for i, t in enumerate(texts)
+                if t and not _LEVER_PLACEHOLDER_RE.search(t)]
+        if real:
+            return real
+        if waited >= _LEVER_SUGGEST_WAIT_MS:
+            return []
+        page.wait_for_timeout(300)
+        waited += 300
+
+
 def _fill_lever_location(page, loc, value: str) -> bool:
     """Набрать город и выбрать подсказку Lever со страной анкеты. True — выбрано."""
     parts = [p.strip() for p in (value or "").split(",") if p.strip()]
@@ -648,11 +678,13 @@ def _fill_lever_location(page, loc, value: str) -> bool:
         items.first.wait_for(state="visible", timeout=8000)
     except Exception:  # noqa: BLE001 — подсказок нет: такого места Lever не знает
         return False
-    texts = [items.nth(i).inner_text().strip().lower() for i in range(items.count())]
+    real = _lever_suggestions(page, items)
+    if not real:
+        return False
     # Страна в подсказке — трёхбуквенным кодом («Astana, KAZ»); у Казахстана он
     # совпадает с началом названия, как и у большинства стран.
-    pick = next((i for i, t in enumerate(texts) if country and (
-        country in t or t.endswith(", " + country[:3]))), 0)
+    pick = next((i for i, t in real if country and (
+        country in t.lower() or t.lower().endswith(", " + country[:3]))), real[0][0])
     items.nth(pick).click(timeout=5000)
     page.wait_for_timeout(300)
     return bool(page.evaluate(_LEVER_PICKED_JS))
