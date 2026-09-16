@@ -364,6 +364,49 @@ def test_a_chat_the_employer_turned_off_is_named_as_such():
         attach_cv_via_chat(page, "/cv/me.pdf")
 
 
+# Живьём 2026-09-16, прогон 15: лиды #1350 (Prompt Engineer, IBS) и #1351
+# (LLM Engineer, Сбер. IT) — «⚠️ hh: отклик отправлен, CV в чат не приложен:
+# кнопка чата (open-vacancy-chat) не найдена». В замороженном снимке страницы
+# (#1351) стоит ссылка «Откликнуться» на /applicant/vacancy_response, а отметки
+# `vacancy-response-link-view-topic` НЕТ — то есть это ДО-откликовая разметка.
+# Причина та же, что у _applied_after_reload (замер 2026-09-01): hh не
+# перерисовывает вакансию после отклика, вход в чат появляется только на свежей
+# загрузке. Отклик при этом ушёл — в логе следом стоит «✅ Отправлено».
+
+class _ChatAfterReloadPage(_FakePage):
+    """Вход в чат появляется только после перезагрузки страницы."""
+
+    def __init__(self, counts, chat_after_reload=True):
+        super().__init__(counts)
+        self._chat_appears = chat_after_reload
+
+    def goto(self, url, **kw):
+        super().goto(url, **kw)
+        if self._chat_appears:
+            self._counts[SEL_CHAT_OPEN_BTN] = 1
+
+
+def test_the_chat_entry_is_asked_for_again_after_a_reload():
+    """Не найдя входа в чат, страницу надо перечитать, а не сдаваться сразу."""
+    page = _ChatAfterReloadPage({SEL_CHAT_OPEN_BTN: 0})
+
+    with pytest.raises(ChannelError) as got:
+        attach_cv_via_chat(page, "/cv/me.pdf")
+
+    # Перезагрузка была, и вердикт «кнопки чата нет» не прозвучал: чат нашёлся,
+    # а упёрлись мы уже в следующий шаг (его в фейке нет).
+    assert ("goto", vacancy_url(page.url)) in page.actions
+    assert "кнопка чата" not in str(got.value)
+
+
+def test_a_vacancy_whose_chat_never_appears_still_says_so():
+    """Перезагрузка не должна превращать настоящее отсутствие чата в тишину."""
+    page = _ChatAfterReloadPage({SEL_CHAT_OPEN_BTN: 0}, chat_after_reload=False)
+
+    with pytest.raises(ChannelError, match="кнопка чата"):
+        attach_cv_via_chat(page, "/cv/me.pdf")
+
+
 def test_apply_invokes_chat_attach_when_enabled(monkeypatch):
     import app.infrastructure.channels.headhunter as hh
     called = {}

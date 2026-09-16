@@ -328,6 +328,29 @@ def _chat_turned_off(chat) -> bool:
         return False
 
 
+def _reload_vacancy(page) -> bool:
+    """Перечитать вакансию: вход в чат появляется только на свежей загрузке.
+
+    hh НЕ перерисовывает страницу после отклика — тот же урок, что в
+    `_applied_after_reload` (замер 2026-09-01). Живьём 2026-09-16 (прогон 15,
+    лиды #1350 «Prompt Engineer, IBS» и #1351 «LLM Engineer, Сбер. IT») это
+    читалось как «кнопка чата (open-vacancy-chat) не найдена», хотя отклик
+    уходил: в сохранённом снимке стояла ДО-откликовая разметка — ссылка
+    «Откликнуться» и ни одной отметки об отклике.
+
+    Стоит одну загрузку и только на пути к неудаче. Не получилось — или
+    страница уже не на вакансии, и тогда `vacancy_url` сам бросит, — судим
+    как раньше.
+    """
+    try:
+        page.goto(vacancy_url(page.url), wait_until="domcontentloaded",
+                  timeout=30000)
+        page.wait_for_timeout(2000)
+    except Exception:  # noqa: BLE001 — не смогли перечитать: судим как раньше
+        return False
+    return True
+
+
 def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
                        letter=None) -> None:
     """In the vacancy chat, send the cover `letter` (if given) and the CV PDF,
@@ -341,6 +364,11 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
     _neutralize_cookie_banner(page)
     _neutralize_modal_overlay(page)
     opener = page.locator(SEL_CHAT_OPEN_BTN)
+    if opener.count() == 0 and _reload_vacancy(page):
+        # Страница свежая — баннер и модалка могли вернуться вместе с ней.
+        _neutralize_cookie_banner(page)
+        _neutralize_modal_overlay(page)
+        opener = page.locator(SEL_CHAT_OPEN_BTN)
     if opener.count() == 0:
         _dump_chat_debug(page, debug_dir, "hh_chat_no_open_button")
         raise ChannelError("кнопка чата (open-vacancy-chat) не найдена")
