@@ -312,6 +312,22 @@ def _chat_send(chat) -> None:
         chat.locator(SEL_CHAT_MSG).first.press("Enter")
 
 
+# Чат по вакансии бывает выключен самим работодателем — hh пишет об этом внизу
+# переписки, и поля файла там нет и быть не может. Живьём 2026-09-16 (прогон 15,
+# три лида подряд) это читалось как «поле файла (upload-file-input) не найдено»,
+# то есть как смещение селектора, хотя письмо доставлено и приложить CV просто
+# некуда.
+_CHAT_OFF_RE = re.compile(r"turned off the chat|отключил чат|чат[^.]{0,20}отключ", re.I)
+
+
+def _chat_turned_off(chat) -> bool:
+    """Работодатель выключил чат по этой вакансии?"""
+    try:
+        return bool(_CHAT_OFF_RE.search(chat.inner_text("body") or ""))
+    except Exception:  # noqa: BLE001 — не смогли прочитать: судим как раньше
+        return False
+
+
 def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
                        letter=None) -> None:
     """In the vacancy chat, send the cover `letter` (if given) and the CV PDF,
@@ -384,6 +400,9 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
             revealed_file = chat.locator(SEL_CHAT_FILE_INPUT)
             if revealed_file.count() == 0:
                 _dump_chat_debug(chat, debug_dir, "hh_chat_no_file_input")
+                if _chat_turned_off(chat):
+                    raise ChannelError(
+                        "работодатель отключил чат по этой вакансии — CV приложить некуда")
                 raise ChannelError("поле файла (upload-file-input) в чате не найдено")
             revealed_file.last.set_input_files(attachment_path)
             chat.wait_for_timeout(2500)
@@ -405,6 +424,9 @@ def attach_cv_via_chat(page, attachment_path: str | None = None, debug_dir=None,
     file_input = chat.locator(SEL_CHAT_FILE_INPUT)
     if file_input.count() == 0:
         _dump_chat_debug(chat, debug_dir, "hh_chat_no_file_input")
+        if _chat_turned_off(chat):
+            raise ChannelError(
+                "работодатель отключил чат по этой вакансии — CV приложить некуда")
         raise ChannelError("поле файла (upload-file-input) в чате не найдено")
     file_input.last.set_input_files(attachment_path)
     chat.wait_for_timeout(2500)

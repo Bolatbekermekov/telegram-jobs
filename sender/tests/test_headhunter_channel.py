@@ -351,6 +351,19 @@ def test_attach_cv_via_chat_raises_without_file_input():
         attach_cv_via_chat(page, "/cv/me.pdf")
 
 
+def test_a_chat_the_employer_turned_off_is_named_as_such():
+    """Живьём 2026-09-16, прогон 15 (три лида hh подряд): «⚠️ hh: отклик
+    отправлен, CV в чат не приложен: поле файла (upload-file-input) в чате не
+    найдено». Снимок `.hh_chat_debug` показал другое: письмо доставлено (синий
+    пузырь с галочкой), а внизу чата — «The employer has turned off the chat for
+    this vacancy». Поля файла там нет и быть не может; читать это как смещение
+    селектора неправильно — приложить CV просто некуда."""
+    page = _FakePage({SEL_CHAT_OPEN_BTN: 1},
+                     body_text="The employer has turned off the chat for this vacancy")
+    with pytest.raises(ChannelError, match="отключил чат"):
+        attach_cv_via_chat(page, "/cv/me.pdf")
+
+
 def test_apply_invokes_chat_attach_when_enabled(monkeypatch):
     import app.infrastructure.channels.headhunter as hh
     called = {}
