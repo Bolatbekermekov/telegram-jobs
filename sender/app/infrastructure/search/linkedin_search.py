@@ -306,22 +306,50 @@ class LinkedInSearcher:
         keywords_list = _rotate(list(keywords_list), self._rotate_by)
         locations = _rotate(list(locations), self._rotate_by)
         exhausted: set[tuple[str, str]] = set()
+        # Одна медленная страница не стоит всей площадки. Замер 2026-09-17: два
+        # прогона подряд легли на `Page.goto: Timeout` (Швеция, потом вторая
+        # страница Великобритании) — адреса разные, сессия жива, лента
+        # открывается. Незащищённый переход ронял search() целиком, run_search
+        # считал это падением площадки, и весь собранный улов выбрасывался:
+        # LinkedIn дважды дал ноль. Теперь пара «слово × локация» просто
+        # отмечается исчерпанной, как при пустой выдаче.
+        #
+        # Подряд идущие таймауты — это, скорее всего, лимит частоты, и дальше
+        # ходить значит менять один прогон на бан. Поэтому обход прекращается:
+        # с уловом — отдаём улов, без улова — падаем ГРОМКО, потому что молча
+        # пустая площадка читается как «вакансий нет» (см. on_error в run_search).
+        misses_in_a_row = 0
+        max_misses_in_a_row = 3
+        last_error: Exception | None = None
         for page in range(self._pages):
             for loc in locations:
                 for kw in keywords_list:
                     if (kw, loc) in exhausted:
                         continue        # по этой паре вакансии кончились
-                    self._page.goto(
-                        build_jobs_url(kw, loc, self._experience,
-                                       self._posted_within, self._workplace,
-                                       start=page * PAGE_SIZE),
-                        wait_until="domcontentloaded")
-                    cards = self._job_cards()
+                    try:
+                        self._page.goto(
+                            build_jobs_url(kw, loc, self._experience,
+                                           self._posted_within, self._workplace,
+                                           start=page * PAGE_SIZE),
+                            wait_until="domcontentloaded")
+                        cards = self._job_cards()
+                    except Exception as exc:  # noqa: BLE001 — страница не открылась
+                        last_error = exc
+                        misses_in_a_row += 1
+                        exhausted.add((kw, loc))
+                        if misses_in_a_row >= max_misses_in_a_row:
+                            if found:
+                                return found[:limit]
+                            raise
+                        continue
+                    misses_in_a_row = 0
                     found += parse_job_cards(cards, limit=per_kw)
                     if not cards:
                         exhausted.add((kw, loc))
                     if len(found) >= limit:
                         return found[:limit]
+        if not found and last_error is not None:
+            raise last_error
         if self._people_enabled:
             for kw in keywords_list:
                 self._page.goto(build_people_url(kw), wait_until="domcontentloaded")

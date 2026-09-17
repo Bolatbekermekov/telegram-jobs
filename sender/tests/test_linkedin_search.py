@@ -1,3 +1,5 @@
+import pytest
+
 from app.infrastructure.search.linkedin_search import (
     LinkedInSearcher, build_jobs_url, parse_job_cards, parse_people_cards,
 )
@@ -328,3 +330,56 @@ def test_describe_falls_back_to_the_browser_for_a_profile(monkeypatch):
 
     assert s.describe("https://www.linkedin.com/in/someone/") == "Текст со страницы"
     assert s._page.visited == ["https://www.linkedin.com/in/someone/"]
+
+
+# --- медленная страница не должна стоить всей площадки ------------------------
+# Живьём 2026-09-17, два прогона подряд: «⚠️ linkedin: Page.goto: Timeout 30000ms
+# exceeded» — сперва на шведской выдаче, потом на британской, вторая страница.
+# Адреса разные, значит дело не в конкретной странице; сессия при этом ЖИВА
+# (лента /feed/ открывается). Но переход стоял без защиты: исключение вылетало
+# из search() наружу, run_search считал это падением ВСЕЙ площадки, и весь уже
+# собранный улов выбрасывался — оба раза LinkedIn дал ноль. У Indeed на такой
+# случай давно написано «останавливаюсь и отдаю найденное».
+
+class _FlakyPage(_FakePage):
+    """Страница, которая отваливается по таймауту начиная с N-го перехода."""
+
+    def __init__(self, fail_from=1):
+        super().__init__()
+        self._fail_from = fail_from
+
+    def goto(self, url, wait_until=None, timeout=None):
+        self.urls.append(url)
+        if len(self.urls) >= self._fail_from:
+            raise TimeoutError(f"Page.goto: Timeout 30000ms exceeded ({url})")
+
+
+def test_a_timed_out_page_does_not_throw_away_what_was_found():
+    """Первая страница успела отдать карточки — они обязаны уцелеть."""
+    page = _FlakyPage(fail_from=2)
+    s = _searcher(page, per_keyword=25)
+
+    found = s.search(["a", "b", "c"], "Worldwide", limit=1000)
+
+    assert len(found) == 25
+
+
+def test_a_wholly_unreachable_platform_still_fails_loudly():
+    """Молча пустой LinkedIn читается как «вакансий нет» — худший исход из всех:
+    сам run_search про это предупреждает в комментарии к on_error."""
+    page = _FlakyPage(fail_from=1)
+    s = _searcher(page, per_keyword=25)
+
+    with pytest.raises(Exception, match="Timeout"):
+        s.search(["a"], "Worldwide", limit=100)
+
+
+def test_a_run_of_timeouts_stops_the_walk_instead_of_hammering():
+    """Подряд идущие таймауты — это, скорее всего, лимит частоты. Долбиться
+    дальше значит менять один потерянный прогон на бан."""
+    page = _FlakyPage(fail_from=2)
+    s = _searcher(page, per_keyword=25)
+
+    s.search(["a", "b", "c", "d", "e", "f"], "Worldwide", limit=1000)
+
+    assert len(page.urls) <= 5
