@@ -297,7 +297,7 @@ def combobox_options(page, locator, *, timeout_ms: int = _OPEN_BUDGET_MS) -> lis
 
 
 def fill_combobox(page, locator, value: str, *,
-                  timeout_ms: int = TOTAL_TIMEOUT_MS) -> bool:
+                  timeout_ms: int = TOTAL_TIMEOUT_MS, force: bool = False) -> bool:
     """Выбрать `value` в выпадающем поле. True — только если выбор ПОДТВЕРЖДЁН.
 
     `locator` — контрол, уже найденный вызывающей стороной (скрапер метит их
@@ -309,13 +309,18 @@ def fill_combobox(page, locator, value: str, *,
     анкете хуже честного ручного отклика, а «оставим введённый текст» — это ровно
     тот молчаливый сбой, из-за которого форма отвечала «Please enter a valid
     answer» и никто об этом не узнавал.
+
+    `force` — выбрать заново, даже если в поле уже стоит тот же текст. Нужен
+    там, где текст ничего не доказывает: у автодополнения Ashby выбранное место
+    хранится не в поле, и после разбора резюме форма отвечает «Missing entry for
+    required field: Location» при полном на вид входе (живьём 2026-09-17, #1411).
     """
     if not (value or "").strip():
         return False
     box = locator.first
     ok = False
     try:
-        ok = _choose(page, box, value, time.monotonic() + timeout_ms / 1000)
+        ok = _choose(page, box, value, time.monotonic() + timeout_ms / 1000, force)
     except Exception:  # noqa: BLE001 — чужой виджет не должен ронять заполнение
         ok = False
     finally:
@@ -323,11 +328,12 @@ def fill_combobox(page, locator, value: str, *,
     return ok
 
 
-def _choose(page, box, value: str, deadline: float) -> bool:
+def _choose(page, box, value: str, deadline: float, force: bool = False) -> bool:
     before = _state(box)
     # Уже выбрано то же самое — второй заход после перерисовки формы не должен
-    # открывать меню и выбирать заново.
-    if _rank(_held(before), value) in (0, 1):
+    # открывать меню и выбирать заново. Кроме случая, когда вызывающая сторона
+    # знает, что текст в поле выбором не является (см. `force`).
+    if not force and _rank(_held(before), value) in (0, 1):
         return True
     _open(page, box)
     seen, whole = None, None
