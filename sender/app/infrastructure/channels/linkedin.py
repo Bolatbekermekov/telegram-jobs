@@ -1331,6 +1331,7 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
                         f"(браузер ушёл со страницы вакансии) — дожми вручную: {job_url}")
                 said = _first_alert_text(page) or _first_field_error(page)
         if said:
+            _dump_refused_screen(page, job_id, step + 1)
             raise ManualApplyRequired(
                 f"LinkedIn Easy Apply, шаг {step + 1}: форма не приняла — "
                 f"{said} — дожми вручную: {job_url}")
@@ -1386,6 +1387,36 @@ def _dump_apply_screens(page, job_id: str, seen) -> None:
         except Exception:  # noqa: BLE001 — снимок необязателен, разметка важнее
             pass
     except Exception:  # noqa: BLE001 — диагностика не имеет права ломать прогон
+        pass
+
+
+def _dump_refused_screen(page, job_id: str, step: int) -> None:
+    """Разметка и снимок экрана, который форма отказалась принять. Не роняет отклик.
+
+    Отказ называет ПОЛЕ, а не причину. Замер 2026-09-17, лиды #1416 и #1425:
+    «Will you now or in the future require sponsorship for employment visa»:
+    This field is required» — при том, что правило про спонсорство в коде есть
+    и ответ в анкете тоже (`needs_visa_sponsorship: false`). Почему ответ не
+    встал в поле, видно только по самой странице, а повторить это живьём нельзя:
+    в LinkedIn лимиты частоты и риск случайно отправить заявку. Значит разметка
+    должна прийти сама, из настоящего прогона.
+
+    Имя файла называет вакансию и шаг: без шага дампы одного отклика затирают
+    друг друга, а по одному лишь id не сказать, на каком экране встало.
+    """
+    from pathlib import Path
+
+    from app import config
+    try:
+        d = Path(config.APPLY_DEBUG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        tag = f"easyapply-refused-{job_id or 'no-id'}-step{step}"
+        (d / f"{tag}.html").write_text(page.content(), encoding="utf-8")
+        try:
+            page.screenshot(path=str(d / f"{tag}.png"))
+        except Exception:  # noqa: BLE001 — снимок необязателен, разметка важнее
+            pass
+    except Exception:  # noqa: BLE001 — диагностика не имеет права ломать отклик
         pass
 
 
