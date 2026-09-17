@@ -150,3 +150,15 @@ def test_when_every_option_is_above_the_truth_we_take_the_lowest():
     got = map_field(_field("Years of experience", options=["5-8", "8+"]),
                     PROFILE, "/cv.pdf")
     assert got.value == "5-8"
+
+
+def test_the_spanish_phrasing_works():
+    """Живьём 2026-09-17 (лид #1421, Mática Partners, LinkedIn Easy Apply, шаг 3):
+    «¿Cuántos años de experiencia tienes con LangChain?» и такой же вопрос про
+    генеративный ИИ остались без ответа — правило знало английский, русский,
+    французский и немецкий, но не испанский. Ответ ушёл свободным текстом, и
+    LinkedIn его отверг: «Invalid input, 6/20 символов». Заявка не ушла."""
+    got = map_field(_field("¿Cuántos años de experiencia tienes con LangChain?"),
+                    PROFILE, "/cv.pdf")
+    assert got.value == "3"
+    assert got.source == "profile"

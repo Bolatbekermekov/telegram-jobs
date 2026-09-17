@@ -327,7 +327,12 @@ _EXPERIENCE_RE = re.compile(
     # и заявка ушла в ручные. Апостроф у французов бывает типографский (’) и
     # обычный ('), поэтому оба.
     r"combien\s+d[’']?\s*ann[ée]es|ann[ée]es?\b[^\n]{0,20}\bexp[ée]rience|"
-    r"wie\s+viele\s+jahre|jahre?\b[^\n]{0,20}\berfahrung",
+    r"wie\s+viele\s+jahre|jahre?\b[^\n]{0,20}\berfahrung|"
+    # Живьём 2026-09-17 (лид #1421, Mática Partners): «¿Cuántos años de
+    # experiencia tienes con LangChain?» — ответ ушёл свободным текстом, и
+    # LinkedIn отверг его как «Invalid input». Ударение и «ñ» пишут не всегда,
+    # поэтому оба написания.
+    r"cu[áa]ntos\s+a[ñn]os|a[ñn]os\b[^\n]{0,20}\bexperiencia",
     re.I)
 
 # Число внутри варианта списка: «3-5 years» -> 3, «5+» -> 5.
