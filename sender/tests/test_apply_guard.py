@@ -354,3 +354,57 @@ def test_factorial_hr_is_allowed():
     Email, Personal URL, Cover letter, Curriculum vitae). Вендор HR-системы, а не
     сайт одной компании, поэтому в список, а не разовым исключением."""
     assert host_allowed("https://careers.factorialhr.com/apply/senior-software-engineer-mobile-293370/")
+
+
+def test_careerplug_is_allowed():
+    """Замер 2026-09-17 (лид #1409): платформа, а не сайт одной компании, и форму
+    скрапер читает.
+
+    Платформа доказана тем же, чем `ats.rippling.com` выше: поддомен арендатора
+    лежит В ЗОНЕ вендора (`eitacies-inc.careerplug.com` и служебный
+    `app.careerplug.com` — один и тот же CNAME на
+    a7e4bea27a309a595.awsglobalaccelerator.com, NS зоны careerplug.com — AWS).
+    Кто держит зону, тот и рисует страницу, а арендаторов на ней тысячи
+    (вторым живьём проверен `cplugjobs.careerplug.com`).
+
+    Форма движковая и одинаковая: на двух вакансиях Eitacies (#3498048 и
+    #3593166) один и тот же набор из 14 полей, подписи человеческие («First
+    Name*», «Email*», «Phone*», «ZIP Code», «Recent Employer»), имена — рельсовые
+    `app[applicant_attributes][...]`, то есть их печатает движок, а не
+    работодатель. Ничего похожего на мусор Keka и Rippling здесь нет.
+    """
+    assert host_allowed(
+        "https://eitacies-inc.careerplug.com/jobs/3593166/apps/new")
+    assert host_allowed("https://cplugjobs.careerplug.com/jobs/3073361/apps/new")
+
+
+@pytest.mark.parametrize("url", [
+    # Замер 2026-09-17 (лид #1396). Площадка многоарендная — с
+    # recruiting.paylocity.com раздаются доски Spatial Front, Office Practicum,
+    # PuzzleHR, Solerity, — но форма нечитаема, ровно как у Rippling: из 28 полей
+    # 12 текстовых пришли БЕЗ подписи и БЕЗ имени (среди них имя, фамилия, почта,
+    # телефон), а обязательные «Country/Address/City/County/State/Zip» модель
+    # заполняла бы вслепую. Ждали 15 секунд — подписи не появляются.
+    # Файловых полей четыре, три принимают документы, ни одно не подписано:
+    # `_only_the_real_resume_field` не отсечёт ничего, и резюме уедет во все три.
+    "https://recruiting.paylocity.com/recruiting/jobs/Apply/3973455/Spatial-Front-Inc/Senior-Full-Stack-Software-Engineer",
+    # Замер 2026-09-17: jobs.gusto.com отвечает 403 и страницей «Один момент…» —
+    # это заслон Cloudflare. Обходить его мы не будем, а разрешать хост, форму
+    # которого мы ни разу не видели, — это разрешение вслепую.
+    "https://jobs.gusto.com/postings/chuco-remote-support-engineer-est-86399044-d80b-4d40-b6e1-f0b98f788e96",
+    # Замер 2026-09-17: сайты ОТДЕЛЬНЫХ компаний, а не движки. agilefuel.com —
+    # своя страница на Webflow (форма из 8 полей, подписи приличные, но это
+    # ровно одна компания и своя вёрстка, которая завтра другая); cloudgeometry
+    # .com — на странице вакансии формы отклика нет вовсе, ловятся «Enter your
+    # work email*» рассылки и чат «Ask CloudGeometry AI»; sourceo.io/careers —
+    # ноль полей; workfully.com — витрина агентства, вакансий для кандидата на
+    # ней нет, единственное поле «Email*» это подписка.
+    "https://agilefuel.com/jobs/senior-ai-consultant",
+    "https://cloudgeometry.com/job/ai-lifecycle-manager",
+    "https://sourceo.io/careers/talent-manager",
+    "https://workfully.com/tech",
+])
+def test_the_candidates_that_did_not_pass_stay_out(url):
+    """Проверено живьём 2026-09-17 — и не прошло. Тест держит решение: добавить
+    любой из этих хостов теперь означает сначала объяснить, что изменилось."""
+    assert not host_allowed(url)
