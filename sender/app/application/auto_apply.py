@@ -44,6 +44,18 @@ _AVAILABILITY_DATE_RE = re.compile(
 # названных единицах.
 _NOTICE_RE = re.compile(r"notice period|срок отработки", re.IGNORECASE)
 
+# «Когда сможешь выйти» по-французски. Отдельно от `_AVAILABILITY_DATE_RE`
+# НАМЕРЕННО: тот отвечает вычисленной датой, а здесь отвечать нечем — в анкете
+# стоит СРОК («1-2 weeks»), а не день выхода, и назвать работодателю
+# вычисленный день значило бы сказать за владельца то, чего он не говорил.
+# Срок — честный ответ на свободный текст; поле, которое требует именно дату,
+# это правило оставляет человеку (см. map_field).
+#
+# Живьём 2026-09-17 (лид #1429, Sia, LinkedIn Easy Apply, шаг 5): «Quelle est
+# votre date de disponibilité estimée ?» осталось пустым — обязательное поле,
+# и вся заявка ушла в ручные.
+_AVAILABILITY_FR_RE = re.compile(r"disponibilit[ée]", re.IGNORECASE)
+
 # `ctc\b` без левой границы намеренно: ECTC (expected) и CCTC (current) — это
 # тот же CTC с приставкой, и «\bctc\b» не поймал бы ни одного.
 _SALARY_Q_RE = re.compile(r"salary|compensation|ctc\b|expected pay|\brate\b", re.I)
@@ -465,6 +477,21 @@ def _age_answer(f: FieldObs, age: int | None) -> FillAction | None:
     return FillAction(field=f, value=str(age), source="profile")
 
 
+# Ключ `custom_answers` -> тот же вопрос на языке формы. Ключи в анкете написаны
+# по-английски, а форма европейской вакансии английских слов не содержит вовсе,
+# и сопоставление по словам ключа проходит мимо готового ответа.
+#
+# Живьём 2026-09-17 (лид #1429, Sia, LinkedIn Easy Apply, шаг 5): «Comment
+# avez-vous entendu parler de Sia ?» — обязательное поле осталось пустым, хотя в
+# анкете под ключом «how did you hear about us» стоит «LinkedIn».
+_CUSTOM_KEY_ALIASES = {
+    "how did you hear about us": re.compile(
+        r"comment\s+avez[-\s]?vous\s+entendu\s+parler|"
+        r"o[ùu]\s+avez[-\s]?vous\s+entendu\s+parler|"
+        r"comment\s+avez[-\s]?vous\s+(?:connu|d[ée]couvert)", re.IGNORECASE),
+}
+
+
 def _custom_choice(f: FieldObs, low: str, ans: str) -> FillAction:
     """Готовый ответ владельца на вопрос-список — вариант списка, а не текст.
 
@@ -592,6 +619,11 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
             matched = key_words[0] in label_words
         else:                       # multi-word key: match the phrase in order
             matched = re.search(r"\b" + r"\W+".join(map(re.escape, key_words)) + r"\b", low)
+        # Тот же вопрос на языке формы. Ключ в анкете написан по-английски, а
+        # подпись поля — нет, и сопоставление по словам ключа мимо неё целиком.
+        if not matched:
+            alias = _CUSTOM_KEY_ALIASES.get(key)
+            matched = bool(alias and alias.search(low))
         if matched:
             if ans and f.options:
                 return _custom_choice(f, low, ans)
@@ -729,6 +761,28 @@ def map_field(f: FieldObs, profile: ApplyProfile, cv_path: str,
         converted = _in_asked_units(low, profile.notice_period)
         if converted != profile.notice_period:
             return FillAction(field=f, value=converted, source="profile")
+
+    # Тот же вопрос по-французски — и здесь проходит граница между тем, что мы
+    # знаем, и тем, что пришлось бы выдумать. В анкете стоит СРОК («1-2 weeks»),
+    # а не дата выхода. Срок в свободный текст — честный ответ теми словами,
+    # которые владелец написал сам; вычисленный день выхода — утверждение о нём,
+    # которого он не делал, и в поле-ДАТУ такое подставлять нельзя. Контрол,
+    # который требует именно дату (`type=date` отсеян веткой выше, календарь и
+    # формат в подсказке — здесь), остаётся человеку: лид уходит в ручные.
+    #
+    # Живьём 2026-09-17 (лид #1429, Sia, LinkedIn Easy Apply, шаг 5): «Quelle est
+    # votre date de disponibilité estimée ?» — обязательное поле осталось пустым.
+    if (caption_len <= _MAX_LABEL_CHARS and profile.notice_period
+            and _AVAILABILITY_FR_RE.search(low)):
+        if f.date_picker or looks_like_date_pattern(f.placeholder):
+            return FillAction(field=f, source="unmapped")
+        # Только свободный текст. Список вариантов остаётся общему пути (модели):
+        # варианты пишет работодатель, и по-французски — «Sous 2 semaines», —
+        # а `notice_option_index` считает дни по английским и русским единицам.
+        # Подгонять его под язык, которого мы в списке ещё не видели, значило бы
+        # писать правило под выдуманный замер.
+        if not f.options:
+            return FillAction(field=f, value=profile.notice_period, source="profile")
 
     # Код страны телефона — вариант из списка, а не номер целиком: правило
     # телефона ниже искало бы среди «Spain (+34)» весь «+7 775 720 0604» и не
