@@ -997,7 +997,14 @@ def _only_the_real_resume_field(actions: list[FillAction]) -> None:
     named = [a for a in files
              if _RESUME_LABEL_RE.search(f"{a.field.label} {a.field.name}")]
     if not named:
-        return
+        # Ни одна загрузка не названа резюме — берём ПЕРВУЮ. Замер живьём
+        # 2026-09-17 (careerplug, лид #1409): два поля file, оба подписаны
+        # «Upload File», оба необязательные, а настоящие заголовки «Resume/CV» и
+        # «Cover Letter» лежат на 5–7 уровней выше в DOM, куда скрапер не
+        # дотягивается. Прежде правило сдавалось и пропускало обе — работодатель
+        # получал резюме дважды, второй раз вместо сопроводительного письма.
+        # Первая загрузка на форме по соглашению и есть резюме.
+        named = files[:1]
     for a in files:
         if a not in named:
             a.is_file, a.value, a.source = False, "", "unmapped"
