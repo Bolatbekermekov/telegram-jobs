@@ -726,6 +726,66 @@ def test_a_notice_period_the_form_rejected_is_retried_in_days(monkeypatch):
     assert ("native-click", SEL_APPLY_SUBMIT) in page.actions
 
 
+# --- Экран, который форма отказалась принять, сохраняется --------------------
+#
+# Замер 2026-09-17, два лида: #1416 и #1425 упали с «Will you now or in the
+# future require sponsorship for employment visa»: This field is required» —
+# при верном правиле в коде (auto_apply ловит слово «sponsor») и готовым
+# ответом в анкете (`needs_visa_sponsorship: false`). Почему ответ не встал в
+# форму, без разметки экрана установить нельзя, а повторить живьём тоже нельзя:
+# в LinkedIn лимиты частоты и риск случайно отправить заявку. Значит разметка
+# должна прийти сама, из настоящего прогона.
+
+class _ContentApplyPage(_FakeApplyPage):
+    """`_FakeApplyPage`, умеющий отдать разметку и снимок, как настоящая Page."""
+
+    def content(self):
+        return "<html>экран, который форма не приняла</html>"
+
+    def screenshot(self, path=None):
+        from pathlib import Path
+        Path(path).write_bytes(b"png")
+
+
+def _refusing_page(monkeypatch, said="«…require sponsorship…»: This field is required"):
+    monkeypatch.setattr(_li, "_first_field_error", lambda page: said)
+    monkeypatch.setattr(_li, "_still_on_the_job", lambda page, job_id: True)
+    return _ContentApplyPage({SEL_EASY_APPLY: 1, SEL_APPLY_NEXT: 1},
+                             href="https://www.linkedin.com/jobs/view/4488/apply/")
+
+
+def test_a_step_the_form_refused_saves_the_screen(monkeypatch, tmp_path):
+    from app import config
+
+    monkeypatch.setattr(config, "APPLY_DEBUG_DIR", str(tmp_path))
+    page = _refusing_page(monkeypatch)
+
+    with pytest.raises(ManualApplyRequired, match="форма не приняла"):
+        easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/4488",
+                            OutreachContent(body="hi"))
+
+    saved = sorted(p.name for p in tmp_path.iterdir())
+    assert any(n.endswith(".html") for n in saved), saved
+    assert any(n.endswith(".png") for n in saved), saved
+    # Имя называет вакансию и шаг: иначе дампы затирают друг друга и по ним
+    # не сказать, на каком экране встало.
+    assert all("4488" in n and "step1" in n for n in saved), saved
+
+
+def test_a_broken_dump_never_breaks_the_refusal(monkeypatch, tmp_path):
+    """Диагностика не имеет права ронять отклик — падает молча, как в hh."""
+    from app import config
+
+    monkeypatch.setattr(config, "APPLY_DEBUG_DIR", str(tmp_path))
+    page = _refusing_page(monkeypatch)
+    monkeypatch.setattr(_ContentApplyPage, "content",
+                        lambda self: (_ for _ in ()).throw(RuntimeError("страница закрылась")))
+
+    with pytest.raises(ManualApplyRequired, match="форма не приняла"):
+        easy_apply_via_page(page, "https://www.linkedin.com/jobs/view/4488",
+                            OutreachContent(body="hi"))
+
+
 # --- Автор поста, когда ника нет в адресе -----------------------------------
 # Обе ссылки — из очереди прогона 2026-08-27, обе упали «не удалось определить
 # автора»: вместо ника автора в слаге стоят хештеги.
