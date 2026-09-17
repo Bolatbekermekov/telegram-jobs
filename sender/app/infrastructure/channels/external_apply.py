@@ -1129,6 +1129,16 @@ def scrape_until_ready(page, attempts: int = 6, interval_ms: int = 1500):
 # `eu.winstonchat.smartrecruiters.com` этим НЕ снимается и не может: он живёт на
 # настоящем поддомене вендора, и отличить его от формы по адресу нечем. Это
 # по-прежнему часть работы про shadow DOM, а не про хосты.
+#
+# ЗАМЕР 2026-09-17 — вывод выше УСТАРЕЛ, работу про shadow DOM делать не нужно.
+# Страница формы (`…/oneclick-ui/company/<slug>/publication/<uuid>`) теперь
+# отдаёт HTTP 403 с капчей DataDome (iframe `geo.captcha-delivery.com`), и до
+# отрисовки формы дело не доходит вовсе: ни одного shadow root, ни одного
+# контрола, ни одной кнопки. Проверено и безголовым браузером, и обычным окном —
+# разницы нет, то есть дело не в headless. Обходить защиту от ботов мы не будем,
+# поэтому SmartRecruiters остаётся ручным откликом, и обход shadow DOM его не
+# починит. Браться за обход имеет смысл только когда появится ATS с формой на
+# веб-компонентах, которую мы РЕАЛЬНО можем открыть.
 _REVEAL_SEL = (
     "button:has-text('Easy Apply'), a:has-text('Easy Apply'), "
     "button:has-text('Apply now'), a:has-text('Apply now'), "
