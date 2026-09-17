@@ -61,13 +61,19 @@ GREENHOUSE_SELECT = """
 # подписи правило не узнало в поле телефон, вопрос уехал модели, та написала
 # номер владельца — и страж личных данных остановил уже заполненную форму.
 WORKABLE_PHONE = """
-<label for="phone">Phone*
-  <select name="country">
-    <option>+7 United States</option>
-    <option>+1 United Kingdom</option>
-    <option>+44 Canada</option>
-  </select>
-  <input id="phone" name="phone" type="tel">
+<label>
+  <span>*Phone</span>
+  <div>
+    <div class="iti">
+      <div class="iti__country-container">
+        <ul class="iti__country-list">
+          <li role="option"><span class="iti__country-name">United States</span><span class="iti__dial-code">+1</span></li>
+          <li role="option"><span class="iti__country-name">Afghanistan</span><span class="iti__dial-code">+93</span></li>
+        </ul>
+      </div>
+      <input type="tel" name="phone">
+    </div>
+  </div>
 </label>
 """
 
@@ -76,8 +82,9 @@ def test_a_country_code_list_does_not_become_the_phone_label(page):
     obs = scrape(page, WORKABLE_PHONE)
 
     phone = [f for f in obs.fields if f.name == "phone"][0]
+    assert "Afghanistan" not in phone.label
     assert "United States" not in phone.label
-    assert phone.label.startswith("Phone")
+    assert "Phone" in phone.label
 
 
 def test_the_hidden_twin_of_a_combobox_is_not_a_field(page):
