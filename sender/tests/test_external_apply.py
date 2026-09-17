@@ -48,7 +48,8 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, obs, present=(), submit_sticks=False, submit_intercepted=False):
+    def __init__(self, obs, present=(), submit_sticks=False, submit_intercepted=False,
+                 body=""):
         self._obs = obs
         self.present = set(present) | {f'[data-af="{f.ref}"]' for f in obs.fields}
         self.clicks = []
@@ -56,11 +57,19 @@ class FakePage:
         self.evaluated = []
         self.submit_sticks = submit_sticks
         self.submit_intercepted = submit_intercepted
+        # Видимый текст страницы. Условия работодателя живут именно в нём:
+        # подпись поля скрапер режет, а просьба «отвечайте без ИИ» стоит абзацем
+        # над вопросами (замер 2026-09-17, лид #1411).
+        self.body = body
 
-    def evaluate(self, js):        # scrape_form calls page.evaluate(_SCRAPE_JS)
+    def evaluate(self, js, *args):  # scrape_form calls page.evaluate(_SCRAPE_JS)
         # Выполненный JS запоминается: им гасится баннер cookie, и проверить это
         # больше нечем — своего DOM у поддельной страницы нет.
         self.evaluated.append(js)
+        # Скрапер тоже читает `innerText`, поэтому чтение видимого текста
+        # узнаётся по его собственному пределу длины.
+        if "innerText" in js and "40000" in js:
+            return self.body
         return ea.observation_to_raw(self._obs)
 
     def locator(self, sel):
@@ -650,6 +659,111 @@ def test_a_clean_ai_answer_on_an_allowed_host_still_submits():
 
     ea.external_apply(page, "https://boards.greenhouse.io/acme/jobs/1",
                       OutreachContent(body="hi"), prof, "C:/cv.pdf",
+                      answerer=answerer, dry_run=False)
+
+    assert ea.SEL_SUBMIT in page.clicks
+
+
+# --- гонка с автозаполнением ATS --------------------------------------------
+
+def _obs_ashby_form():
+    return PageObservation(url="https://jobs.ashbyhq.com/makai-labs/1", fields=[
+        FieldObs(tag="input", type="email", label="Email", required=True, ref="0"),
+        FieldObs(tag="input", type="file", label="Resume", required=True, ref="1"),
+    ])
+
+
+def test_the_resume_autofill_is_waited_out_before_the_rest_of_the_form(monkeypatch):
+    """Живьём 2026-09-17 (#1411 и #1431): ATS разбирает загруженное резюме и сам
+    заполняет поля, затирая набранное нами. Поэтому ждать надо сразу ПОСЛЕ
+    загрузки — всё, что написано в форму до конца разбора, пропадёт."""
+    seen = []
+    monkeypatch.setattr(ea, "_wait_for_autofill", lambda page, **kw: seen.append((dict(page.filled), kw)))
+    page = FakePage(_obs_ashby_form(), present=[ea.SEL_SUBMIT])
+
+    ea.external_apply(page, "https://jobs.ashbyhq.com/makai-labs/1",
+                      OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+
+    assert seen, "форма заполнялась прямо во время разбора резюме"
+    assert seen[0][0] == {'[data-af="1"]': ("file", "C:/cv.pdf")}, \
+        "ждать надо после загрузки резюме и до остальных полей"
+    assert seen[0][1].get("grace_ms"), \
+        "разбор начинается не мгновенно — ему нужна отсрочка на начало"
+
+
+def test_the_fields_are_reasserted_after_the_autofill_and_before_the_submit(monkeypatch):
+    """Разбор идёт и пока мы заполняем остальное, поэтому перед отправкой ждём
+    ещё раз и подтверждаем значения — иначе ATS отвечает «Missing entry for
+    required field», называя каждый раз другое поле."""
+    order = []
+    monkeypatch.setattr(ea, "_wait_for_autofill", lambda page, **kw: order.append("ждём"))
+    monkeypatch.setattr(ea, "_reassert_text_values",
+                        lambda page, plan: order.append("подтверждаем"))
+    page = FakePage(_obs_ashby_form(), present=[ea.SEL_SUBMIT])
+
+    ea.external_apply(page, "https://jobs.ashbyhq.com/makai-labs/1",
+                      OutreachContent(body="hi"), PROF, "C:/cv.pdf")
+
+    assert order == ["ждём", "ждём", "подтверждаем"], \
+        "подтверждать поля можно только после того, как разбор резюме закончился"
+    assert ea.SEL_SUBMIT in page.clicks
+
+
+# --- работодатель запретил ИИ-ответы ----------------------------------------
+
+# Снято с формы #1411 (Makai Labs, Ashby) 2026-09-17: `document.body.innerText`.
+# Просьба стоит подписью обязательной галочки, НАД самими вопросами, и в поля
+# скрапера она не попадает — поэтому правило читает видимый текст страницы.
+AI_BAN_PAGE_TEXT = (
+    "AI Engineer\nApplication Form\nName\nEmail\nResume\n"
+    "Important Reminder: To help us better understand your communication style "
+    "and thought process, we ask that you answer the screening questions without "
+    "the use of AI writing tools (e.g., ChatGPT). We\u2019re looking to evaluate "
+    "your natural writing ability, and any use of AI assistance may lead to "
+    "disqualification.\nI acknowledge and understand the above.\n"
+    "AI/LLM Experience - Describe your hands-on experience building or deploying "
+    "AI/LLM-powered systems in production environments.\n"
+)
+
+
+def test_a_form_that_forbids_ai_answers_goes_manual_with_that_reason():
+    """Живьём 2026-09-17 (лид #1411, jobs.ashbyhq.com/makai-labs): работодатель
+    просит отвечать на вопросы анкеты без ИИ и обещает снятие с рассмотрения за
+    ИИ-ответ. Наши ответы пишет модель — значит, туда мы не пишем вовсе."""
+    asked = []
+
+    def answerer(questions, vacancy_context):
+        asked.append(questions)
+        return {q["id"]: {"text": "…"} for q in questions}
+
+    page = FakePage(_obs_form_with_free_text(
+        "AI/LLM Experience - Describe your hands-on experience.",
+        url="https://jobs.ashbyhq.com/makai-labs/1"),
+        present=[ea.SEL_SUBMIT], body=AI_BAN_PAGE_TEXT)
+
+    with pytest.raises(ManualApplyRequired, match="без ИИ") as err:
+        ea.external_apply(page, "https://jobs.ashbyhq.com/makai-labs/1",
+                          OutreachContent(body="hi"), PROF, "C:/cv.pdf",
+                          answerer=answerer, dry_run=False)
+
+    assert "ответь сам" in str(err.value), "причина должна говорить, что делать"
+    assert not asked, "модель не должна была писать ответы для такой формы"
+    assert page.filled == {}, "форма не должна заполняться"
+    assert ea.SEL_SUBMIT not in page.clicks
+
+
+def test_a_vacancy_about_ai_is_still_filled_and_submitted():
+    """Половина потока — вакансии ПРО ИИ; по слову «AI» уводить в ручные нельзя."""
+    page = FakePage(_obs_form_with_free_text("Why this role?"),
+                    present=[ea.SEL_SUBMIT],
+                    body="AI Engineer\nWhich AI/ML tools or frameworks have you "
+                         "worked with? Describe your hands-on experience with LLMs.")
+
+    def answerer(questions, vacancy_context):
+        return {q["id"]: {"text": "Работал с .NET и RAG-конвейерами."} for q in questions}
+
+    ea.external_apply(page, "https://boards.greenhouse.io/acme/jobs/1",
+                      OutreachContent(body="hi"), PROF, "C:/cv.pdf",
                       answerer=answerer, dry_run=False)
 
     assert ea.SEL_SUBMIT in page.clicks

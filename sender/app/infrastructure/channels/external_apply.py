@@ -24,6 +24,7 @@ from app.infrastructure.widgets.combobox import (
     _best, combobox_options as _combobox_options, fill_combobox as _fill_combobox,
 )
 from app.infrastructure.widgets.file_upload import attach_file as _attach_file
+from app.domain.ai_answer_ban import ai_answers_forbidden
 from app.domain.channel import ManualApplyRequired, OutreachContent
 from app.domain.availability import availability_iso
 from app.domain.legal_page import looks_like_legal_page
@@ -737,9 +738,17 @@ def fill_fields(page, plan, where: str = "внешняя форма", profile=No
     # in DOM order sent 21 setFormValue calls, most of them to a form that no
     # longer existed, and the Submit that followed fired no request at all
     # (measured on lead 123, 2026-07-29).
-    ordered = ([a for a in plan.actions if a.is_file]
-               + [a for a in plan.actions if not a.is_file])
+    uploads = [a for a in plan.actions if a.is_file]
+    ordered = uploads + [a for a in plan.actions if not a.is_file]
+    waited_for_autofill = not uploads
     for a in ordered:
+        if not a.is_file and not waited_for_autofill:
+            # Резюме уехало — и ATS взялся разбирать его САМ. Всё, что написать в
+            # форму сейчас, он затрёт своим разбором (см. `_wait_for_autofill`).
+            # Разбор начинается не в ту же миллисекунду, поэтому здесь — с
+            # отсрочкой на его начало.
+            waited_for_autofill = True
+            _wait_for_autofill(page, grace_ms=_AUTOFILL_APPEAR_MS)
         if not a.field.ref:
             continue
         loc = page.locator(f'[data-af="{a.field.ref}"]')
@@ -1011,6 +1020,152 @@ def _reassert_lever_location(page, plan) -> None:
         _fill_lever_location(page, loc, a.value)
 
 
+# ATS сам разбирает загруженное резюме и заполняет поля из него. Пока он этим
+# занят, форма перерисовывается, и всё, что мы в неё написали, пропадает.
+#
+# Живьём 2026-09-17, два лида подряд: #1411 (jobs.ashbyhq.com/makai-labs) —
+# «Your form needs corrections. Missing entry for required field: Email. Missing
+# entry for required field: Location», #1431 (jobs.ashbyhq.com/bjakcareer) — то
+# же самое, но про Phone number и Consent. Поля каждый раз РАЗНЫЕ — это гонка, а
+# не пробел в сопоставлении. В дампе #1411 наши значения в разметке стоят, а над
+# списком ошибок висит слой «Parsing your resume. Autofilling key fields...».
+#
+# Ждём именно ПОКАЗАННЫЙ слой. Текст про parsing лежит в разметке Ashby ВСЕГДА
+# (в дампе он с `data-state="hidden"`), и ожидание «пока на странице есть такие
+# слова» стояло бы до потолка на каждой форме. Из таблицы стилей Ashby видно,
+# чем отличается работа: слой скрыт `opacity:0;visibility:hidden`, и только
+# `[data-state=active]` его показывает. Поэтому видимость считается по ВСЕЙ
+# цепочке предков: `visibility` наследуется, а `opacity` — нет.
+_AUTOFILL_PENDING_JS = r"""() => {
+  const re = /parsing\s+your\s+(?:resume|cv)|autofill(?:ing)?\s+(?:key\s+)?fields?|разбира\w+\s+резюме/i;
+  const shown = el => {
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      if (parseFloat(cs.opacity) === 0) return false;
+      if (n.hasAttribute('hidden') || n.getAttribute('aria-hidden') === 'true') return false;
+    }
+    return el.getClientRects().length > 0;
+  };
+  // Обходим текстовые узлы, а не элементы: `textContent` каждого предка
+  // содержит весь текст страницы, и перебор элементов на длинной вакансии
+  // перечитывал бы её целиком — четыре раза в секунду.
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let present = false;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!re.test(n.nodeValue || '') || !n.parentElement) continue;
+    present = true;
+    if (shown(n.parentElement)) return 'running';
+  }
+  // «Слой есть, но скрыт» — это Ashby до начала (или после конца) разбора;
+  // «слоя нет вовсе» — все остальные ATS, и ждать им нечего.
+  return present ? 'idle' : 'absent';
+}"""
+
+# Сколько ждём разбор резюме. Замер 2026-09-17: у Ashby слой висит единицы
+# секунд; потолок нужен, чтобы зависший разбор не съел прогон — по его истечении
+# идём дальше и подтверждаем поля, как и после обычного автозаполнения.
+_AUTOFILL_WAIT_MS = 20000
+_AUTOFILL_POLL_MS = 400
+# Отсрочка на НАЧАЛО разбора — только там, где слой в разметке есть. Сразу после
+# загрузки резюме он ещё скрыт, а живая таблица стилей Ashby показывает его
+# переходом `transition: all .1s linear`: только что включённый слой ещё сотую
+# долю секунды числится скрытым. Спросить в этот миг «идёт ли разбор» и пойти
+# заполнять — ровно та гонка, из-за которой #1411 и #1431 отказали.
+_AUTOFILL_APPEAR_MS = 2000
+
+
+def _autofill_state(page) -> str:
+    """'running' | 'idle' | 'absent' — что со слоем автозаполнения на странице."""
+    try:
+        state = page.evaluate(_AUTOFILL_PENDING_JS)
+    except Exception:  # noqa: BLE001 — нет DOM/страница ушла: ждать нечего
+        return "absent"
+    return state if state in ("running", "idle", "absent") else "absent"
+
+
+def _autofill_running(page) -> bool:
+    return _autofill_state(page) == "running"
+
+
+def _wait_for_autofill(page, grace_ms: int = 0) -> None:
+    """Дождаться, пока ATS дочитает резюме и перестанет переписывать поля.
+
+    `grace_ms` — сколько ждать САМОГО НАЧАЛА разбора. Нужен сразу после загрузки
+    резюме; перед отправкой он только тратил бы время, потому что слой к тому
+    моменту в разметке уже есть и больше не включится.
+    """
+    waited = 0
+    while _autofill_state(page) == "idle" and waited < grace_ms:
+        _pause(page, _AUTOFILL_POLL_MS)
+        waited += _AUTOFILL_POLL_MS
+    waited = 0
+    while _autofill_running(page):
+        if waited >= _AUTOFILL_WAIT_MS:
+            return
+        _pause(page, _AUTOFILL_POLL_MS)
+        waited += _AUTOFILL_POLL_MS
+
+
+# Поле места. Названий у него столько же, сколько ATS, поэтому узнаём по подписи
+# и по имени, а не по одному из них.
+_LOCATION_FIELD_RE = re.compile(
+    r"\blocation\b|\bcity\b|\btown\b|where are you (?:currently )?(?:based|located)|"
+    r"город|местоположени|где вы", re.IGNORECASE)
+
+
+def _is_location_field(field) -> bool:
+    return bool(_LOCATION_FIELD_RE.search(
+        " ".join([field.name or "", field.label or "", field.question or ""])))
+
+
+def _reassert_text_values(page, plan) -> None:
+    """Перед отправкой ещё раз вписать то, что автозаполнение ATS затёрло.
+
+    Родня `_reassert_choices`: там после подключения React слетают ОТМЕЧЕННЫЕ
+    варианты, здесь после разбора резюме слетают НАБРАННЫЕ значения. Разница в
+    доказательстве: у текстового поля видно, что в нём сейчас, поэтому живое
+    значение не трогаем — лишний `fill` это лишний повод форме перерисоваться.
+
+    Место — исключение: это автодополнение, и совпавший текст ничего не
+    доказывает. В дампе #1411 в поле стоит «Astana, Kazakhstan» при
+    `aria-expanded="false"`, а форма отвечает «Missing entry for required field:
+    Location». Выбор делается заново — тем же приёмом, что у Lever.
+
+    Отказ здесь не повод бросать заявку: её исход скажет проверка после отправки.
+    """
+    for a in getattr(plan, "actions", None) or []:
+        if a.is_file or not a.value or not a.field.ref:
+            continue
+        if a.field.tag == "select" or a.field.type in ("radio", "checkbox", "range"):
+            continue
+        try:
+            loc = page.locator(f'[data-af="{a.field.ref}"]')
+            if loc.count() == 0:
+                loc = _relocate(page, a.field)
+            if loc is None or loc.count() == 0:
+                continue
+            # Место Lever подтверждает `_reassert_lever_location`: там выбранное
+            # лежит в скрытом поле, а в самом входе стоит «Astana, KAZ» — не то,
+            # что в анкете. Обычный `fill` затёр бы выбор набранным текстом.
+            if _is_lever_location(loc):
+                continue
+            if a.field.combobox:
+                if not _is_location_field(a.field):
+                    continue
+                if not _fill_combobox(page, loc, a.value, force=True):
+                    # Подсказку нажать не вышло — возвращаем хотя бы текст,
+                    # который там стоял: пустое поле точно хуже.
+                    loc.first.fill(a.value, timeout=4000)
+                continue
+            want = numeric_only(a.value) if a.field.type == "number" else a.value
+            if (loc.first.input_value(timeout=2000) or "").strip() == want.strip():
+                continue
+            loc.first.fill(want, timeout=8000)
+        except Exception:  # noqa: BLE001 — лучшая попытка; исход скажет проверка отправки
+            continue
+
+
 # Баннер cookie перехватывает клики. Живьём 2026-09-16: у Recruitee
 # (Mercedes-Benz.io) он стоял поверх кнопки отправки — заявка не ушла, исход
 # остался неизвестным; у Teamtailor (#1273, #1274) — поверх галочки согласия.
@@ -1050,7 +1205,12 @@ def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
         return
     # Раньше всех кликов: баннер cookie стоит поверх кнопки отправки и съедает их.
     _neutralize_cookie_banner(page)
+    # Разбор резюме у ATS начинается от загрузки и продолжается, пока мы
+    # заполняем остальное: ждём его ещё раз и подтверждаем поля, которые он мог
+    # затереть. Порядок важен — подтверждать раньше конца разбора бессмысленно.
+    _wait_for_autofill(page)
     _reassert_choices(page, plan)
+    _reassert_text_values(page, plan)
     _reassert_lever_location(page, plan)
     submit = page.locator(SEL_SUBMIT)
     if submit.count() == 0:
@@ -1509,6 +1669,22 @@ def _hop_to_embedded_form(page, obs, route):
         return obs, route
 
 
+# Видимый текст страницы целиком — в нём условия работодателя, которых нет ни в
+# одном поле плана. Предел в 40 000 знаков только от бесконечных страниц: у
+# формы #1411 весь текст — 2 463 знака, и резать её середину, как это делает
+# `_page_text` для баннера об отправке, здесь нельзя: просьба стоит ровно
+# посередине, между описанием вакансии и вопросами.
+_NOTICE_TEXT_JS = "() => (document.body.innerText || '').slice(0, 40000)"
+
+
+def _page_notice_text(page) -> str:
+    try:
+        text = page.evaluate(_NOTICE_TEXT_JS)
+    except Exception:  # noqa: BLE001 — нет DOM/страница ушла: условий не прочесть
+        return ""
+    return text if isinstance(text, str) else ""
+
+
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
                    subject_maker=None, vacancy_context: str = "") -> None:
@@ -1569,6 +1745,22 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
     # ТОЛЬКО когда хост не в списке; на greenhouse и linkedin он бесплатный.
     if not host_or_vendor_allowed(obs.url):
         raise ManualApplyRequired(f"незнакомый сайт, заполни вручную: {obs.url}")
+
+    # Работодатель может прямо запретить отвечать с помощью ИИ. Живьём 2026-09-17
+    # (лид #1411, Makai Labs на Ashby): «we ask that you answer the screening
+    # questions without the use of AI writing tools (e.g., ChatGPT) … any use of
+    # AI assistance may lead to disqualification». Ответы у нас пишет модель, и
+    # подать их туда — нарушить явное условие и подставить владельца под снятие с
+    # рассмотрения. Проверка стоит ДО `answer_ai_fields`: модель даже не
+    # спрашиваем, а лид уходит человеку с этой причиной.
+    #
+    # Текст берётся со страницы, а не из полей плана: просьба стоит подписью
+    # обязательной галочки, скрапер отдаёт оттуда только «I acknowledge and
+    # understand the above» (проверено на снятом дампе #1411).
+    ban = ai_answers_forbidden(_page_notice_text(page))
+    if ban:
+        raise ManualApplyRequired(
+            f"работодатель просит отвечать без ИИ («{ban}») — ответь сам: {obs.url}")
 
     # Сопроводительное письмо файлом. Собирается ИЗ УЖЕ НАПИСАННОГО письма, то
     # есть ничего заново не выдумывается; если tectonic не установлен или сборка
