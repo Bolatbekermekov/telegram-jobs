@@ -214,7 +214,32 @@ _SCRAPE_JS = r"""() => {
   };
   const groupOptions = e => {
     const g = radioGroup(e);
-    const own = g.map(r => labelFor(r));
+    // Имя элемента подписью варианта не считается. Последний запасной шаг
+    // labelFor отдаёт `name`, а он у радиогруппы ОДИН на все варианты — значит
+    // «подписи нашлись» выходило истиной, а варианты получались неотличимы.
+    // Замер живьём 2026-09-17/18 (лиды #1416, #1425; раньше #1315 про Сингапур):
+    // новая форма LinkedIn Easy Apply рисует вариант так — настоящий input,
+    // рядом ПУСТОЙ <label> (нарисованный кружок), а слово в соседнем <p>; у
+    // обёртки role=radio в aria-label лежит сам ВОПРОС, одинаковый у обоих.
+    // Скрапер возвращал ['radio-group-«ru»', 'radio-group-«ru»'], сопоставить
+    // «нет» было не с чем, группа оставалась неотмеченной, и форма отвечала
+    // «This field is required». Теперь такой случай честно считается «подписей
+    // нет», и включается чтение слов из окружающего блока — ниже.
+    // Слово варианта берём из ЕГО СОБСТВЕННОЙ обёртки role=radio, а не из строк
+    // окружающего блока: на форме, которая уже показала ошибку, строкой блока
+    // оказывается «This field is required», и она уезжала в варианты вместо «Yes».
+    const own = g.map(r => {
+      const t = labelFor(r);
+      if (t && t !== norm(r.name)) return t;
+      const cell = r.closest('[role=radio],[role=option]');
+      if (cell) {
+        const c = cell.cloneNode(true);
+        c.querySelectorAll('input,select,textarea,button,label').forEach(n => n.remove());
+        const own_text = norm(c.textContent);
+        if (own_text) return own_text;
+      }
+      return '';
+    });
     if (own.some(Boolean)) return own;
     const lines = groupBlock(e);
     if (lines && lines.length >= g.length + 1) {

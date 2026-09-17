@@ -227,3 +227,41 @@ def test_no_declared_limit_reads_as_zero(page):
     obs = scrape(page, '<input aria-label="Свободное поле">')
     [fld] = [f for f in obs.fields if f.label == "Свободное поле"]
     assert fld.max_len == 0
+
+
+# --- «да/нет» в новой форме LinkedIn Easy Apply -------------------------------
+# Замер живьём 2026-09-17/18 (лиды #1416, #1425, а раньше #1315 про Сингапур):
+# «Will you now or in the future require sponsorship for employment visa
+# status?» — форма отвечала «This field is required», хотя правило про визу в
+# коде есть и ответ в анкете есть.
+#
+# Снимок отказа (easyapply-refused-4468380889-step3.html) показал устройство:
+# настоящий <input type=radio>, рядом ПУСТОЙ <label> (это нарисованный кружок), а
+# слово варианта лежит в соседнем <p>. У обёртки role=radio в aria-label — сам
+# ВОПРОС, одинаковый у обоих вариантов.
+#
+# Скрапер возвращал варианты ['radio-group-«ru»', 'radio-group-«ru»'] — имя
+# группы дважды: последний запасной шаг подписи берёт атрибут name, он непустой,
+# и запасной путь с чтением соседнего текста не включался. Сопоставить «нет» не с
+# чем, группа оставалась неотмеченной, отклик срывался.
+LINKEDIN_YES_NO = """
+<p>Will you now or in the future require sponsorship for employment visa status?*</p>
+<fieldset role="radiogroup">
+  <div role="radio" aria-label="Will you now or in the future require sponsorship for employment visa status?" aria-checked="false">
+    <div><div><input id="r1" type="radio" name="radio-group-x"><label for="r1"></label></div>
+    <div><p>Yes</p></div></div>
+  </div>
+  <div role="radio" aria-label="Will you now or in the future require sponsorship for employment visa status?" aria-checked="false">
+    <div><div><input id="r2" type="radio" name="radio-group-x"><label for="r2"></label></div>
+    <div><p>No</p></div></div>
+  </div>
+</fieldset>
+"""
+
+
+def test_a_yes_no_radio_pair_is_read_by_its_words_not_by_the_group_name(page):
+    obs = scrape(page, LINKEDIN_YES_NO)
+
+    radios = [f for f in obs.fields if f.type == "radio"]
+    assert len(radios) == 1
+    assert radios[0].options == ["Yes", "No"]
