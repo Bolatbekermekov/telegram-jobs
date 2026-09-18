@@ -9,8 +9,11 @@ DOM interaction is isolated in apply_via_page() because selectors drift.
 import re
 
 from app.application.answerer_cv import answerer_for_cv
-from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
+from app.domain.channel import (
+    ChannelError, ManualApplyRequired, OutreachContent, RateLimitedError,
+)
 from app.domain.hh_resume import hh_resume_title
+from app.domain.page_gone import GONE_NOTE
 
 _VACANCY_RE = re.compile(r"hh\.(?:ru|kz)/vacancy/(\d+)")
 
@@ -707,8 +710,14 @@ def apply_via_page(page, url: str, content: OutreachContent, answerer=None,
     # hh answers 403 for a vacancy that is archived or restricted to certain users.
     # Without this the run falls through to the missing Apply button and reports
     # "no apply button", which reads like a broken selector rather than a dead link.
+    #
+    # Это НЕ поломка бота, поэтому и не `failed`: снятая вакансия — такой же
+    # мёртвый адрес, как «страница недоступна» у LinkedIn и внешних ATS, и уходит
+    # человеку теми же словами. Замер 2026-09-18 (вакансия 137340183): лид упал в
+    # «ошибку», хотя соседние отправились нормально до и после него. Нас самих
+    # блокировку ловит `_check_not_blocked` строкой выше — этот случай не про неё.
     if resp is not None and resp.status >= 400:
-        raise ChannelError(f"вакансия недоступна (HTTP {resp.status}): {url}")
+        raise ManualApplyRequired(f"{GONE_NOTE} (HTTP {resp.status}): {url}")
     if page.locator(SEL_ALREADY_APPLIED).count() > 0:
         raise ChannelError(f"already applied: {url}")
     # Grab the vacancy text now (for answering questions) before we leave the page.

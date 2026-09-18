@@ -1,6 +1,8 @@
 import pytest
 
-from app.domain.channel import ChannelError, OutreachContent, RateLimitedError
+from app.domain.channel import (
+    ChannelError, ManualApplyRequired, OutreachContent, RateLimitedError,
+)
 from app.infrastructure.channels.headhunter import (
     SEL_ALREADY_APPLIED,
     SEL_APPLY,
@@ -951,3 +953,28 @@ def test_the_recheck_costs_nothing_when_the_letter_field_is_there():
 
     assert [a for a in page.actions if a[0] == "goto"] == [
         ("goto", "https://hh.ru/vacancy/2")]        # только первый заход
+
+
+# --- недоступная вакансия это не поломка бота ---------------------------------
+# Живьём 2026-09-18 (вакансия 137340183): hh ответил 403, и лид ушёл в «ошибку» —
+# в ту же корзину, где лежат настоящие поломки. Но 403 у hh означает архивную или
+# ограниченную вакансию, о чём прямо сказано в комментарии рядом с этим кодом, а
+# блокировку НАС ловит отдельная проверка строкой выше. По всему остальному
+# проекту недоступная страница уводит лид в РУЧНЫЕ с пометкой GONE_NOTE — см.
+# linkedin.py и external_apply.py. Здесь было иначе, и это пачкало отчёт:
+# «ошибки» перестают означать «бот сломался».
+
+class _GonePage(_FakePage):
+    """hh отвечает 403 на архивную или ограниченную вакансию."""
+
+    def goto(self, url, **kw):
+        super().goto(url, **kw)
+        return type("Resp", (), {"status": 403})()
+
+
+def test_an_unavailable_vacancy_is_a_manual_lead_not_a_failure():
+    page = _GonePage({SEL_APPLY: 1})
+
+    with pytest.raises(ManualApplyRequired, match="страница недоступна"):
+        apply_via_page(page, "https://hh.ru/vacancy/137340183",
+                       OutreachContent(body="Здравствуйте"))
