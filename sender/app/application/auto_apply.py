@@ -344,7 +344,12 @@ _EXPERIENCE_RE = re.compile(
     # experiencia tienes con LangChain?» — ответ ушёл свободным текстом, и
     # LinkedIn отверг его как «Invalid input». Ударение и «ñ» пишут не всегда,
     # поэтому оба написания.
-    r"cu[áa]ntos\s+a[ñn]os|a[ñn]os\b[^\n]{0,20}\bexperiencia",
+    r"cu[áa]ntos\s+a[ñn]os|a[ñn]os\b[^\n]{0,20}\bexperiencia|"
+    # Живьём 2026-09-18: «Quanti anni di esperienza di lavoro hai con Python?» и
+    # такие же про Transformer Models — ответ ушёл текстом, LinkedIn отверг его
+    # как «Invalid input». Итальянский — пятый язык подряд, на котором спотыкался
+    # один и тот же вопрос (после французского, немецкого и испанского).
+    r"quanti\s+anni|anni\b[^\n]{0,20}\besperienza",
     re.I)
 
 # Число внутри варианта списка: «3-5 years» -> 3, «5+» -> 5.

@@ -162,3 +162,15 @@ def test_the_spanish_phrasing_works():
                     PROFILE, "/cv.pdf")
     assert got.value == "3"
     assert got.source == "profile"
+
+
+def test_the_italian_phrasing_works():
+    """Живьём 2026-09-18 (LinkedIn Easy Apply, шаг 3): «Quanti anni di esperienza
+    di lavoro hai con Python?» и такие же вопросы про Transformer Models остались
+    без ответа — правило знало английский, русский, французский, немецкий и
+    испанский, но не итальянский. Ответ ушёл свободным текстом, и LinkedIn его
+    отверг: «Invalid input, 8/20 символов». Заявка не ушла."""
+    got = map_field(_field("Quanti anni di esperienza di lavoro hai con Python?"),
+                    PROFILE, "/cv.pdf")
+    assert got.value == "3"
+    assert got.source == "profile"
