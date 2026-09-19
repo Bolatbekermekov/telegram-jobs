@@ -75,3 +75,12 @@ def test_a_european_ats_link_becomes_a_lead_too():
     missed = [u for u in (EU_LEVER, EU_GREENHOUSE)
               if detect_contact(u) != Contact("ats", u)]
     assert missed == []
+
+
+def test_an_embedded_or_dotted_ashby_link_becomes_a_lead_too():
+    """Близнецы обязаны согласиться и здесь — иначе ссылка станет вакансией,
+    а лид под неё всё равно не сохранится."""
+    from tests.test_ats_job_url import ASHBY_DOTTED, ASHBY_EMBED
+    missed = [u for u in (ASHBY_EMBED, ASHBY_DOTTED)
+              if detect_contact(u) != Contact("ats", u)]
+    assert missed == []

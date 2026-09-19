@@ -216,7 +216,12 @@ _ATS_RE = re.compile(
     # побайтовый, поэтому держать их вместе приходится руками.
     r"(?:boards|job-boards)\.(?:eu\.)?greenhouse\.io/[\w%-]+/jobs/\d+"
     r"|jobs\.(?:eu\.)?lever\.co/[\w%-]+/[\w%-]+"
-    r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
+    # Доска Ashby с точками и Ashby, встроенный в сайт компании через
+    # `?ashby_jid=<uuid>` (живьём 2026-09-19, FunnelFox). Та же правка, что в
+    # оригинале intake-bot/app/domain/contact.py.
+    r"|jobs\.ashbyhq\.com/[\w.%-]+/[\w%-]+"
+    r"|[\w.-]+(?:/\S*?)?[?&]ashby_jid=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
     r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"
     r"|[\w-]+\.[\w-]+\.myworkdayjobs\.com/\S*?/job/[\w%-]+"

@@ -191,3 +191,39 @@ def test_the_european_greenhouse_instance_is_a_vacancy():
 def test_a_european_board_root_is_still_not_a_vacancy():
     """Путь вакансии по-прежнему обязателен: «вот наша доска» — не отклик."""
     assert is_ats_job_url("https://jobs.eu.lever.co/xm") is False
+
+
+# --- Ashby, встроенный в сайт компании -----------------------------------------
+# Живьём 2026-09-19: переслан пост про FunnelFox, где единственная видимая ссылка —
+# `https://funnelfox.com/careers/?ashby_jid=f19afd7e-…`. Это вакансия на Ashby, но
+# встроенная в сайт компании: своего адреса `jobs.ashbyhq.com/…` у неё в посте нет,
+# есть только параметр `ashby_jid` на чужом домене. Интейк её не узнал.
+#
+# Код доски из такой ссылки не вычислить: его знает только скрипт встраивания, а
+# у интейка на Vercel нет браузера и ~10 секунд на всё. Поэтому ссылка
+# сохраняется КАК ЕСТЬ, а доску и анкету находит отправитель, у которого браузер
+# есть (проверено сухим прогоном: он входит в iframe и доходит до анкеты).
+#
+# Попутно вскрылась вторая дыра: у FunnelFox код доски в Ashby — `jobs.funnelfox.com`,
+# С ТОЧКАМИ (Ashby называет доску по хосту компании), а правило пускало в код
+# доски только буквы, цифры и дефис. Прямая ссылка на такую вакансию тоже не
+# узналась бы.
+ASHBY_EMBED = "https://funnelfox.com/careers/?ashby_jid=f19afd7e-43c9-416e-9740-44cb675efd7f"
+ASHBY_DOTTED = "https://jobs.ashbyhq.com/jobs.funnelfox.com/f19afd7e-43c9-416e-9740-44cb675efd7f"
+
+
+def test_an_ashby_job_embedded_in_a_company_site_is_a_vacancy():
+    assert is_ats_job_url(ASHBY_EMBED) is True
+
+
+def test_an_ashby_board_named_after_a_host_is_still_a_vacancy():
+    assert is_ats_job_url(ASHBY_DOTTED) is True
+
+
+def test_a_careers_page_without_a_job_id_is_not_a_vacancy():
+    """Без `ashby_jid` это просто страница «у нас есть вакансии»."""
+    assert is_ats_job_url("https://funnelfox.com/careers/") is False
+
+
+def test_a_dotted_ashby_board_root_is_still_not_a_vacancy():
+    assert is_ats_job_url("https://jobs.ashbyhq.com/jobs.funnelfox.com") is False

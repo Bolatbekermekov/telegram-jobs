@@ -486,7 +486,16 @@ _ATS_JOB_RE = re.compile(
     r"(?:boards|job-boards)\.(?:eu\.)?greenhouse\.io/[\w%-]+/jobs/\d+"
     # Lever и Ashby: второй сегмент пути — uuid вакансии.
     r"|jobs\.(?:eu\.)?lever\.co/[\w%-]+/[\w%-]+"
-    r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
+    # Код доски Ashby бывает С ТОЧКАМИ — Ashby называет доску по хосту компании
+    # (живьём 2026-09-19: FunnelFox, `jobs.ashbyhq.com/jobs.funnelfox.com/<uuid>`).
+    r"|jobs\.ashbyhq\.com/[\w.%-]+/[\w%-]+"
+    # Ashby, встроенный в сайт компании: у вакансии нет своего адреса, есть только
+    # `?ashby_jid=<uuid>` на чужом домене (FunnelFox, тот же день). Код доски из
+    # такой ссылки не вычислить без браузера, которого у интейка нет, — поэтому
+    # ссылка сохраняется как есть, а анкету находит отправитель. Близнец —
+    # `_ATS_RE` в contact.py, менять оба вместе.
+    r"|[\w.-]+(?:/\S*?)?[?&]ashby_jid=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     # Workable прячет вакансию за /j/, SmartRecruiters адресует числом.
     r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
     r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"
