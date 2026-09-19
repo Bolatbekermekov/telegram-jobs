@@ -73,12 +73,21 @@ _VENDOR_APPLY_PATH = {
     "teamtailor.com": "applications/new",
     "recruitee.com": "c/new",
     "workable.com": "apply",
+    # Живьём 2026-09-19 (FunnelFox): вакансия встроена в сайт компании через
+    # `?ashby_jid=<uuid>`, отправитель входит в iframe и попадает на ОПИСАНИЕ
+    # `jobs.ashbyhq.com/<доска>/<uuid>`, где полей нет. Анкета — рядом.
+    "ashbyhq.com": "application",
 }
 
 # У Workable на одном хосте живут и доски компаний, и вакансии, поэтому хвост
 # дописывается только к адресу ОДНОЙ вакансии: к доске `/mlabs/` он дал бы 404.
+# У Ashby то же. Имя доски бывает с точками — Ashby называет её по собственному
+# хосту компании (`jobs.funnelfox.com`), — поэтому сегмент доски `[^/]+`.
 _ONE_JOB_PATH = {
     "workable.com": re.compile(r"^(?:/[^/]+)?/j/[A-Za-z0-9]+$"),
+    "ashbyhq.com": re.compile(
+        r"^/[^/]+/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
 }
 
 # Teamtailor из LinkedIn иногда ведёт не на вакансию, а в чат-бота:
