@@ -161,3 +161,33 @@ def test_scripts_and_styles_never_leak_into_the_brief():
 def test_an_empty_react_shell_reads_as_nothing():
     """Ashby и Workable: честный «» лучше, чем «enable JavaScript» в брифе."""
     assert extract_ats_vacancy(EMPTY_SHELL) == ""
+
+
+# --- европейские инстансы тех же вендоров -------------------------------------
+# Живьём 2026-09-19: владелец переслал `https://jobs.eu.lever.co/xm/c2fecf9b-…`, и
+# интейк ответил «⚠️ В статье нет контакта … нужен Telegram, почта, hh или ATS
+# (Greenhouse, Lever, Ashby и др.)» — то есть отверг Lever, прямо перечислив Lever
+# среди разрешённых. Правило знало только `jobs.lever.co`, а у Lever есть отдельный
+# европейский инстанс `jobs.eu.lever.co`.
+#
+# У Greenhouse та же история: в таблице владельца лежат пять вакансий на
+# `job-boards.eu.greenhouse.io` (JetBrains, Parloa, Dwelly, xntltd, agency) — они
+# пришли через поиск, но пересланная боту любая из них была бы отвергнута так же.
+#
+# Отправитель такие адреса уже пропускает (`apply_guard` сравнивает по окончанию
+# домена), так что дыра была только здесь.
+EU_LEVER = "https://jobs.eu.lever.co/xm/c2fecf9b-1a7e-4e6d-96bb-5d8f133c28c1"
+EU_GREENHOUSE = "https://job-boards.eu.greenhouse.io/jetbrains/jobs/4961618101"
+
+
+def test_the_european_lever_instance_is_a_vacancy():
+    assert is_ats_job_url(EU_LEVER) is True
+
+
+def test_the_european_greenhouse_instance_is_a_vacancy():
+    assert is_ats_job_url(EU_GREENHOUSE) is True
+
+
+def test_a_european_board_root_is_still_not_a_vacancy():
+    """Путь вакансии по-прежнему обязателен: «вот наша доска» — не отклик."""
+    assert is_ats_job_url("https://jobs.eu.lever.co/xm") is False

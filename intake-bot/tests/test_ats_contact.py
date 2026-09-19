@@ -59,3 +59,19 @@ def test_everything_vacancy_text_calls_an_ats_link_also_becomes_a_lead():
 def test_and_neither_of_them_takes_a_company_landing_page():
     from tests.test_ats_job_url import ROOTS
     assert [u for u in ROOTS if detect_contact(u) is not None] == []
+
+
+# --- европейские инстансы: близнецы должны согласиться -------------------------
+# Живьём 2026-09-19 (`jobs.eu.lever.co/xm/…`): первой правкой научился
+# `is_ats_job_url`, и сквозная проверка тут же показала, что `detect_contact` на
+# той же ссылке всё ещё отвечает None. То есть ровно тот худший исход, от которого
+# предостерегает тест выше: ссылка считается вакансией и читается, но контакта
+# под неё нет, и лид всё равно выбрасывается. Существующий тест на согласие
+# близнецов его не поймал — он проверяет только список VENDORS, а европейских
+# адресов там не было.
+
+def test_a_european_ats_link_becomes_a_lead_too():
+    from tests.test_ats_job_url import EU_GREENHOUSE, EU_LEVER
+    missed = [u for u in (EU_LEVER, EU_GREENHOUSE)
+              if detect_contact(u) != Contact("ats", u)]
+    assert missed == []

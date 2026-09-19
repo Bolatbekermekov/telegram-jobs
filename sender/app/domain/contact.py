@@ -210,8 +210,12 @@ _REMOTEOK_RE = re.compile(
 # Согласованность пары держит тест, а не устройство кода.
 _ATS_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:"
-    r"(?:boards|job-boards)\.greenhouse\.io/[\w%-]+/jobs/\d+"
-    r"|jobs\.lever\.co/[\w%-]+/[\w%-]+"
+    # Европейские инстансы (`.eu.` в хосте) — те же вендоры. Живьём 2026-09-19:
+    # `jobs.eu.lever.co` отвергался интейком; правка сделана и в оригинале
+    # (intake-bot/app/domain/contact.py). Этот файл с оригиналом давно не
+    # побайтовый, поэтому держать их вместе приходится руками.
+    r"(?:boards|job-boards)\.(?:eu\.)?greenhouse\.io/[\w%-]+/jobs/\d+"
+    r"|jobs\.(?:eu\.)?lever\.co/[\w%-]+/[\w%-]+"
     r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
     r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
     r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"

@@ -220,8 +220,12 @@ _REMOTEOK_RE = re.compile(
 # Согласованность пары держит тест, а не устройство кода.
 _ATS_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:"
-    r"(?:boards|job-boards)\.greenhouse\.io/[\w%-]+/jobs/\d+"
-    r"|jobs\.lever\.co/[\w%-]+/[\w%-]+"
+    # Европейские инстансы (`.eu.` в хосте) — те же вендоры. Близнец этого
+    # правила — `_ATS_JOB_RE` в vacancy_text.py; живьём 2026-09-19 первым
+    # научился он один, и `jobs.eu.lever.co` считался вакансией, но контакта под
+    # него не находилось — лид всё равно выбрасывался. Менять ОБА места вместе.
+    r"(?:boards|job-boards)\.(?:eu\.)?greenhouse\.io/[\w%-]+/jobs/\d+"
+    r"|jobs\.(?:eu\.)?lever\.co/[\w%-]+/[\w%-]+"
     r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
     r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
     r"|jobs\.smartrecruiters\.com/[\w%-]+/\d[\w%-]*"

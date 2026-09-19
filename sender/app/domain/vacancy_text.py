@@ -479,9 +479,13 @@ _REMOTEOK_JOB_RE = re.compile(
 _ATS_JOB_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?(?:"
     # Greenhouse держит два хоста разом: компании переезжают со старого на новый.
-    r"(?:boards|job-boards)\.greenhouse\.io/[\w%-]+/jobs/\d+"
+    # И у него, и у Lever есть отдельный европейский инстанс с `.eu.` в хосте.
+    # Живьём 2026-09-19: переслан `jobs.eu.lever.co/xm/…`, и интейк отверг его,
+    # хотя в том же ответе перечислил Lever среди разрешённых; в таблице владельца
+    # пять вакансий на `job-boards.eu.greenhouse.io` (JetBrains, Parloa и др.).
+    r"(?:boards|job-boards)\.(?:eu\.)?greenhouse\.io/[\w%-]+/jobs/\d+"
     # Lever и Ashby: второй сегмент пути — uuid вакансии.
-    r"|jobs\.lever\.co/[\w%-]+/[\w%-]+"
+    r"|jobs\.(?:eu\.)?lever\.co/[\w%-]+/[\w%-]+"
     r"|jobs\.ashbyhq\.com/[\w%-]+/[\w%-]+"
     # Workable прячет вакансию за /j/, SmartRecruiters адресует числом.
     r"|apply\.workable\.com/[\w%-]+/j/[\w%-]+"
