@@ -187,11 +187,24 @@ _REQUIRED_WORD = r"required|erforder\w*|pflichtfeld|обязательн\w*"
 _CAPTION_TAIL_RE = re.compile(r"[\w)\]?!:»\"']$")
 # Законченное предложение до маркера: значит, он стоит уже не при подписи.
 _SENTENCE_BREAK_RE = re.compile(r"[.!?]\s+[A-ZА-ЯЁ]")
+# Точки, которые предложение не заканчивают. Живьём 2026-09-22, лид #1520
+# (Teamtailor, Leadtech): «2. Could you … (e.g. EUR, GBP, USD)?*Required» и
+# «3. Where did you hear …?*Required» — номер вопроса и «e.g.» читались как
+# граница фразы, оба поля сочлись необязательными и ушли пустыми.
+_QUESTION_NUMBER_RE = re.compile(r"^\s*\d{1,2}[.)]\s+")
+_ABBREVIATION_RE = re.compile(r"\b(?:e\.g|i\.e|etc|vs|approx|incl|z\.B|d\.h|т\.е|т\.к)\.",
+                              re.I)
 # Фраза продолжается — звёздочка была сноской. Скобку пропускаем: «* (примерно)»
 # это тоже продолжение, а «* (erforderlich)» ловится словом-пометкой ниже.
 _TAIL_CONTINUES_RE = re.compile(r"^\s*[(\[]?\s*[a-zа-яё]")
 _TAIL_IS_REQUIRED_WORD_RE = re.compile(
     r"^\s*[(\[]?\s*(?:" + _REQUIRED_WORD + r")", re.I)
+# Пометка, стоящая вплотную за звёздочкой в САМОМ КОНЦЕ подписи: «…position.*Required».
+# Её не отменяет и законченное предложение до неё — вопрос Teamtailor бывает из
+# двух фраз («…employee? If yes, please provide …*Required», лид #1520), а сноской
+# в прозе такая концовка не бывает.
+_TAIL_IS_ONLY_REQUIRED_WORD_RE = re.compile(
+    r"^\s*[(\[]?\s*(?:" + _REQUIRED_WORD + r")\s*[)\]]?\s*$", re.I)
 _LEADING_REQUIRED_RE = re.compile(r"^\s*(?:" + _REQUIRED_WORD + r")\s*[.:*]", re.I)
 
 
@@ -210,7 +223,10 @@ def label_says_required(label: str) -> bool:
         # обязательности всегда одиночная.
         if _STAR_RE.match(text[m.start() - 1:m.start()]) or _STAR_RE.match(tail[:1]):
             continue
-        if not _CAPTION_TAIL_RE.search(head) or _SENTENCE_BREAK_RE.search(head):
+        if head and _TAIL_IS_ONLY_REQUIRED_WORD_RE.match(tail):
+            return True
+        prose = _ABBREVIATION_RE.sub("", _QUESTION_NUMBER_RE.sub("", head))
+        if not _CAPTION_TAIL_RE.search(head) or _SENTENCE_BREAK_RE.search(prose):
             continue
         if not tail.strip() or _TAIL_IS_REQUIRED_WORD_RE.match(tail):
             return True
@@ -225,7 +241,11 @@ def field_is_required(f: FieldObs) -> bool:
     Правило только ДОБАВЛЯЕТ обязательность: `required=true` в разметке остаётся
     решающим, снять его подпись не может.
     """
-    return bool(f.required) or label_says_required(f.label)
+    # `question` — подпись целиком: `label` режется до 80 знаков и на длинном
+    # вопросе теряет маркер вместе с хвостом («…(e.g. EUR, GBP, USD)?*Required»,
+    # Teamtailor, лид #1520).
+    return (bool(f.required) or label_says_required(f.label)
+            or label_says_required(getattr(f, "question", "") or ""))
 
 
 def _satisfied(a: FillAction) -> bool:

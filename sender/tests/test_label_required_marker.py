@@ -16,6 +16,8 @@ Submit — верил DOM на слово, поэтому на таких фор
 отклик заявку, которая ушла бы сама, — поэтому половина тестов здесь про то, что
 правило НЕ срабатывает.
 """
+import pytest
+
 from app.application.auto_apply import (
     build_plan, field_is_required, label_says_required, map_field,
 )
@@ -186,3 +188,45 @@ def test_teamtailor_consent_marked_by_the_word_is_ticked_not_held():
     plan = build_plan(obs, PROF, CV)
     assert plan.actions[0].value == "true" and plan.actions[0].source == "profile"
     assert plan.ready_to_submit() is True
+
+
+# Живьём 2026-09-22, лид #1520 (Teamtailor, Leadtech): вопросы пронумерованы, и
+# «2. C» / «3. W» читались как конец предложения перед маркером — оба поля
+# сочлись необязательными, остались пустыми, и сервер вернул форму с «Text can't
+# be blank». Во втором ещё и «(e.g. EUR» — сокращение, а не граница фразы.
+LEADTECH_NUMBERED = [
+    "2. Could you please share your gross annual salary expectations and "
+    "indicate the currency (e.g. EUR, GBP, USD)?*Required",
+    "3. Where did you hear about this job opportunity?*Required",
+    "1) What is your current notice period?*",
+]
+
+
+@pytest.mark.parametrize("label", LEADTECH_NUMBERED, ids=lambda s: s[:12])
+def test_a_numbered_question_keeps_its_marker(label):
+    assert label_says_required(label)
+
+
+def test_a_real_sentence_before_the_star_still_is_not_a_marker():
+    """Сноска в глубине текста согласия — по-прежнему не пометка поля."""
+    assert not label_says_required(
+        "We store your data. See the policy* for details on retention.")
+
+
+def test_a_marker_glued_at_the_very_end_counts_after_a_second_sentence():
+    """«…employee? If yes, please provide … position.*Required» — вопрос из двух
+    фраз, но «*Required» вплотную в самом конце — пометка поля, не сноска."""
+    assert label_says_required(
+        "4. Were you referred to Leadtech or any other Leadtech partners by a "
+        "current employee? If yes, please provide their full name and position.*Required")
+    assert label_says_required(
+        "7. Where would you like to be based for this role? Please specify the "
+        "city and country.*Required")
+
+
+def test_requiredness_is_read_from_the_full_question_when_the_label_is_cut():
+    """Подпись режется до 80 знаков и теряет маркер; целиком он есть в `question`."""
+    q = ("2. Could you please share your gross annual salary expectations and "
+         "indicate the currency (e.g. EUR, GBP, USD)?*Required")
+    f = FieldObs(tag="input", type="text", label=q[:80], question=q)
+    assert field_is_required(f)
