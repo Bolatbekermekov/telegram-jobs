@@ -1224,6 +1224,39 @@ def _neutralize_cookie_banner(page) -> None:
         pass
 
 
+# Какую из подходящих под SEL_SUBMIT кнопок нажимать. Живьём 2026-09-22, лид
+# #1520 (Teamtailor): форма в модалке поверх страницы вакансии, и первой под
+# селектор попадает «Apply for this job» ВНЕ формы — её нажатие открывает модалку
+# заново с пустой формой, заявка не уходит. Берём кнопку из формы, в которой
+# больше всего наших полей (`data-af`); среди них — настоящий submit раньше
+# прочих («Apply with LinkedIn» в той же форме — type=button). Если ни одна
+# кнопка не лежит в форме с нашими полями (Ashby держит кнопку вне <form>),
+# остаётся прежний выбор — первая.
+_PICK_SUBMIT_JS = r"""(els) => {
+  let best = 0, key = null;
+  els.forEach((el, i) => {
+    const f = el.form || el.closest('form');
+    const ours = f ? f.querySelectorAll('[data-af]').length : 0;
+    if (!ours) return;
+    const k = [ours, (el.type || '').toLowerCase() === 'submit' ? 1 : 0,
+               el.getClientRects().length ? 1 : 0];
+    if (!key || k[0] > key[0] || (k[0] === key[0] && (k[1] > key[1]
+        || (k[1] === key[1] && k[2] > key[2])))) { best = i; key = k; }
+  });
+  return best;
+}"""
+
+
+def _submit_button(page):
+    """Кнопка отправки заполненной формы; см. _PICK_SUBMIT_JS."""
+    submit = page.locator(SEL_SUBMIT)
+    try:
+        idx = submit.evaluate_all(_PICK_SUBMIT_JS)
+    except Exception:  # noqa: BLE001 — у фейковой страницы нет evaluate_all
+        return submit.first
+    return submit.nth(idx) if isinstance(idx, int) and idx > 0 else submit.first
+
+
 def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
     fill_fields(page, plan, profile=profile)
     if dry_run:
@@ -1237,10 +1270,9 @@ def fill_and_submit(page, plan, dry_run: bool, profile=None) -> None:
     _reassert_choices(page, plan)
     _reassert_text_values(page, plan)
     _reassert_lever_location(page, plan)
-    submit = page.locator(SEL_SUBMIT)
-    if submit.count() == 0:
+    if page.locator(SEL_SUBMIT).count() == 0:
         raise ManualApplyRequired("внешняя форма: не нашёл кнопку отправки, нужен ручной отклик")
-    btn = submit.first
+    btn = _submit_button(page)
     try:
         btn.scroll_into_view_if_needed(timeout=2000)
     except Exception:  # noqa: BLE001 — best-effort; some fakes/pages have no scroll
