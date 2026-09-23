@@ -435,3 +435,18 @@ def test_a_real_handle_after_a_service_path_still_wins():
 
 def test_service_path_alone_gives_no_telegram_contact():
     assert detect_contact("Все вакансии: https://t.me/addlist") is None
+
+
+# Лид #1550 (2026-09-23): подпись «оплата через t.me/tribute» стала адресатом.
+def test_telegram_service_bots_are_not_contacts():
+    from app.domain.contact import detect_contact
+    text = "Подборка вакансий, подписка через https://t.me/tribute или @wallet"
+    assert detect_contact(text) is None
+    assert detect_contact(text + "\nCV: hr@acme.io").target == "hr@acme.io"
+
+
+# Лид #1552 (2026-09-23): страница компании в LinkedIn стала адресатом.
+def test_linkedin_company_page_is_not_a_contact():
+    from app.domain.contact import detect_contact
+    text = "Apply: https://lnkd.in/x\nhttps://www.linkedin.com/company/google/"
+    assert detect_contact(text) is None

@@ -4,7 +4,10 @@ import re
 
 from telethon import TelegramClient
 
-from app.domain.channel import ChannelUnavailable, OutreachContent, RateLimitedError
+from app.domain.channel import (
+    ChannelError, ChannelUnavailable, OutreachContent, RateLimitedError,
+)
+from app.domain.contact import is_service_account
 
 _CAPTION_LIMIT = 1024
 
@@ -72,6 +75,11 @@ class TelegramChannel:
         self._client.disconnect()
 
     def send(self, target: str, content: OutreachContent) -> None:
+        # Последний рубеж для лидов, записанных до фильтра в detect_contact:
+        # лид #1550 (2026-09-23) ушёл платёжному боту @tribute.
+        if is_service_account(target):
+            raise ChannelError(
+                f"{target} — служебный аккаунт Telegram, а не работодатель")
         username = normalize_target(target)
         try:
             self._client.loop.run_until_complete(self._send(username, content))

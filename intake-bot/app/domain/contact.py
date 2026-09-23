@@ -48,6 +48,27 @@ def _is_service_path(target: str) -> bool:
     tail = target.rstrip("/").rsplit("/", 1)[-1] if "/" in target else ""
     return tail.split("?", 1)[0].lower() in _TME_RESERVED
 
+
+# Служебные аккаунты самого Telegram и его платёжных сервисов: законные ники,
+# за которыми бот платформы, а не работодатель. Живьём 2026-09-23: лид #1550 —
+# рекламная подборка каналов с подписью «оплата через t.me/tribute» — получил
+# целью @tribute, и сопроводительное письмо с резюме ушло платёжному боту.
+# Оракул их не ловит: это `private`, а боты найма (@Adapty_Talent_Bot) законно
+# проходят как тот же `private`. Поэтому отсечение по имени, как у путей выше.
+_TG_SERVICE_ACCOUNTS = frozenset({
+    "tribute", "wallet", "send", "cryptobot", "botfather", "spambot",
+    "donate", "premiumbot", "stars", "telegraph", "stickers", "gif", "vote",
+    "like", "durgerkingbot", "telegram", "notoscam", "verify",
+})
+
+
+def is_service_account(target: str) -> bool:
+    """'@nick' / 't.me/nick' — служебный аккаунт Telegram, а не человек."""
+    t = (target or "").strip().rstrip("/")
+    if "/" in t:
+        t = t.rsplit("/", 1)[-1]
+    return t.split("?", 1)[0].lstrip("@").lower() in _TG_SERVICE_ACCOUNTS
+
 # A Telegram @handle anchored to start-or-whitespace, so it never matches the
 # "@" inside an email address (e.g. john@gmail.com).
 _HANDLE_RE = re.compile(r"(?:^|\s)@(\w{4,})\b")
@@ -175,6 +196,10 @@ def _unwrap_linkedin(url: str) -> str:
     return url
 
 
+_LINKEDIN_NOT_A_PERSON_RE = re.compile(
+    r"^https?://(?:[\w-]+\.)*linkedin\.com/(?:company|school|showcase|safety/go)\b", re.I)
+
+
 def canonical_linkedin_url(url: str) -> str:
     """A LinkedIn link -> one the fetcher can actually open.
 
@@ -293,7 +318,7 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
     # Отклонённая ссылка передаёт очередь следующей, а не всему правилу сразу.
     for m in _TME_RE.finditer(text):
         target = _clean(m.group(0))
-        if _is_service_path(target):
+        if _is_service_path(target) or is_service_account(target):
             continue
         if _writable(target, telegram_writable):
             return Contact("telegram", target)
@@ -346,6 +371,8 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
         # проверка стоит внутри цикла: отказ уступает очередь следующему нику, а
         # если человеческого нет — почте ниже.
         target = "@" + m.group(1)
+        if is_service_account(target):
+            continue
         if _writable(target, telegram_writable):
             return Contact("telegram", target)
     m = _EMAIL_RE.search(text)
@@ -354,9 +381,13 @@ def detect_contact(text: str, telegram_writable=None) -> Contact | None:
         # period that ended the sentence, and "hr@acme.io." is what an MTA rejects at
         # RCPT TO — the lead lands `failed` and the recruiter is never written to.
         return Contact("email", _clean(m.group(0)))
-    m = _LINKEDIN_RE.search(text)
-    if m:
-        return Contact("linkedin", canonical_linkedin_url(_clean(m.group(0))))
+    # Страница компании и «safety/go»-обёртка чужой ссылки — не адресат: писать
+    # там некому. Живьём 2026-09-23: лид #1552 (перепост jobright.ai) получил
+    # целью linkedin.com/company/google/ и упал «ни Сообщение, ни Контакт».
+    for m in _LINKEDIN_RE.finditer(text):
+        url = canonical_linkedin_url(_clean(m.group(0)))
+        if not _LINKEDIN_NOT_A_PERSON_RE.match(url):
+            return Contact("linkedin", url)
     m = _HH_VACANCY_RE.search(text) or _HH_RE.search(text)
     if m:
         return Contact("hh", canonical_hh_url(_clean(m.group(0))))

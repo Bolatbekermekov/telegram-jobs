@@ -133,3 +133,33 @@ def test_a_fully_cyrillic_handle_is_refused():
 def test_an_ascii_handle_glued_to_cyrillic_prose_is_not_truncated():
     """«@ivan_hrПиши» — не «@ivan_hr»: обрезка выдумывает адресата."""
     assert detect_contact("пиши @ivan_hrПиши в личку") is None
+
+
+# Лид #1550 (2026-09-23): рекламная подборка с подписью «оплата через
+# t.me/tribute» — письмо с резюме ушло платёжному боту.
+TRIBUTE_AD = """Подборка IT-вакансий: удалёнка, релокация, стажировки.
+Подписка оформляется через https://t.me/tribute или @wallet"""
+
+
+def test_service_bot_link_and_handle_are_not_contacts():
+    assert detect_contact(TRIBUTE_AD) is None
+
+
+def test_service_bot_yields_to_employer_email():
+    text = TRIBUTE_AD + "\nРезюме: hr@acme.io"
+    assert detect_contact(text) == Contact("email", "hr@acme.io")
+
+
+def test_hiring_bot_still_wins():
+    assert detect_contact("Отклик через @Adapty_Talent_Bot") == Contact(
+        "telegram", "@Adapty_Talent_Bot")
+
+
+# Лид #1552 (2026-09-23): перепост jobright.ai, контакт — страница компании.
+def test_linkedin_company_page_is_not_a_contact():
+    text = ("Apply here: https://lnkd.in/guNdYEjv\n"
+            "https://www.linkedin.com/company/google/\n"
+            "https://www.linkedin.com/safety/go/?url=https%3A%2F%2Flnkd%2Ein%2Fx")
+    assert detect_contact(text) is None
+    assert detect_contact(text + "\nhttps://www.linkedin.com/in/jane-doe/") == Contact(
+        "linkedin", "https://www.linkedin.com/in/jane-doe/")
