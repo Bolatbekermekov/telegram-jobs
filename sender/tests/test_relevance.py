@@ -10,8 +10,12 @@ def test_parse_extracts_json_amid_prose_and_clamps():
     assert parse_score_response('Sure: {"score": 200, "reason": "x"} done') == (100, "x")
 
 
-def test_parse_malformed_returns_zero():
-    assert parse_score_response("not json at all") == (0, "")
+def test_parse_malformed_is_an_error_not_a_zero():
+    """Ноль ниже порога списывает вакансию навсегда — сбой формата так делать
+    не должен. См. test_score_determinism.py."""
+    import pytest
+    with pytest.raises(ValueError):
+        parse_score_response("not json at all")
 
 
 def test_build_score_prompt_includes_inputs():

@@ -103,13 +103,23 @@ def build_score_prompt(profile: str, title: str, description: str,
 
 
 def parse_score_response(raw: str) -> tuple[int, str]:
+    """(балл 0-100, причина) из ответа модели; ValueError, если балла в нём нет.
+
+    Раньше неразобранный ответ становился баллом 0. Ноль ниже любого порога, и
+    `score_and_filter` отдавал такую вакансию в память отказников — она
+    списывалась НАВСЕГДА из-за сбоя формата, а не из-за вердикта о ней. Ошибка
+    вместо нуля идёт по той же дорожке, что сбой сети: вакансия пропускается в
+    этом прогоне и оценивается снова в следующем.
+    """
+    m = re.search(r"\{.*\}", raw or "", re.DOTALL)
+    if not m:
+        raise ValueError("в ответе модели нет JSON с баллом")
     try:
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        data = json.loads(m.group(0)) if m else {}
-        score = max(0, min(100, int(data.get("score", 0))))
-        return score, str(data.get("reason", "")).strip()
-    except Exception:  # noqa: BLE001 — malformed model output → drop the job
-        return 0, ""
+        data = json.loads(m.group(0))
+        score = int(data["score"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ValueError(f"в ответе модели нет числового балла: {exc}") from exc
+    return max(0, min(100, score)), str(data.get("reason", "")).strip()
 
 
 def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
