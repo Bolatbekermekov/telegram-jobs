@@ -124,7 +124,7 @@ def parse_score_response(raw: str) -> tuple[int, str]:
 
 def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
                      on_reject=None, scan_limit=None, on_scan_limit=None,
-                     on_quota_exhausted=None):
+                     on_quota_exhausted=None, eligibility=None, on_ineligible=None):
     """Скорить, пока не наберётся `max_jobs` ПРОШЕДШИХ порог вакансий.
 
     `max_jobs` считает попавших в лист, а не потраченные попытки. Раньше бюджет
@@ -161,6 +161,12 @@ def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
     «одна плохая вакансия», и LinkedIn перебирал 169 штук всю ночь. Оценка
     останавливается, отобранное возвращается; без слушателя исключение уходит
     наверх, а не тонет в цикле.
+
+    `eligibility(description, location) -> Eligibility` — проверка явных
+    требований, которые кандидат не выполняет (`domain/eligibility`). Идёт ДО
+    модели: невыполнимая вакансия не стоит вызова и уходит в `on_reject`,
+    как отказник, — вердикт про её текст, и описание незачем качать снова.
+    `on_ineligible(candidate, verdict)` — чтобы сказать об этом вслух.
     """
     kept = []
     scanned = 0
@@ -174,6 +180,14 @@ def score_and_filter(candidates, describe, scorer, profile, threshold, max_jobs,
         scanned += 1
         try:
             description = describe(c)
+            if eligibility is not None:
+                verdict = eligibility(description, c.location)
+                if not verdict.eligible:
+                    if on_ineligible is not None:
+                        on_ineligible(c, verdict)
+                    if on_reject is not None:
+                        on_reject(c)
+                    continue
             # Локация идёт отдельным полем: её знает карточка выдачи, а не текст
             # объявления, и у remocate она заполнена всегда, тогда как в описании
             # страны может не быть вовсе.

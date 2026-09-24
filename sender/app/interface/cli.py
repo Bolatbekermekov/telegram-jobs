@@ -35,6 +35,7 @@ from app.application.send_plan import (
     dm_fallback_reason,
     has_placeholder,
     hold_reason,
+    ineligible_reason,
     needs_vacancy_refetch,
     pause_after,
     skip_reason,
@@ -243,6 +244,33 @@ def _scored_out_store():
     return ScoredOutStore(config.SCORED_OUT_PATH)
 
 
+def _home_country() -> str:
+    """Страна, где у кандидата есть право работать, из анкеты; "" — если анкеты нет.
+
+    Пустая строка выключает проверку права на работу целиком
+    (`ineligible_reason`, `_relevance_args`): без неё чужой выглядела бы любая
+    страна."""
+    from app.infrastructure.apply_profile_loader import load_apply_profile
+    try:
+        return load_apply_profile(config.APPLY_PROFILE_PATH).country.strip()
+    except Exception:  # noqa: BLE001 — сломанная анкета не должна ронять поиск
+        return ""
+
+
+def _eligibility_args() -> dict:
+    """Kwargs проверки права на работу для run_search, или {} без анкеты."""
+    home = _home_country()
+    if not home:
+        return {}
+    from app.domain.eligibility import check_eligibility
+    return dict(
+        eligibility=lambda description, location: check_eligibility(
+            description, location=location, home_country=home),
+        on_ineligible=lambda c, verdict: print(
+            f"   ⛔ {c.title}: {verdict.blocking_reasons[0]} — не оцениваю"),
+    )
+
+
 def _relevance_args() -> dict:
     """Kwargs that turn on AI relevance scoring in run_search, or {} when disabled."""
     if not config.RELEVANCE_ENABLED:
@@ -276,6 +304,7 @@ def _relevance_args() -> dict:
         on_scan_limit=lambda scanned, kept: print(
             f"   ⚠️ упёрлись в потолок оценок ({scanned}), набрано {kept} — "
             "остальное осталось непросмотренным"),
+        **_eligibility_args(),
     )
 
 
@@ -502,6 +531,7 @@ def run() -> None:
     cv_library = CvLibrary(config.CV_DIR, config.CV_PATH)
 
     switcher = ChannelSwitcher(lambda p: build_channel(p, config))
+    home_country = _home_country()
     paused = parse_paused(config.PAUSED_PLATFORMS)
     if paused:
         print(f"⏸  На паузе: {', '.join(sorted(paused))}. "
@@ -720,6 +750,19 @@ def run() -> None:
             dead = dead_vacancy_reason(lead.target, vacancy_gone)
             if dead is not None:
                 status, note = dead
+                repo.mark_status(lead, status, note=note)
+                print(f"✋ Лид #{lead.lead_id} [{platform}]: {note} "
+                      "— генерацию не трачу.")
+                continue
+
+            # Вакансия явно требует того, чего у кандидата нет (гражданство,
+            # жизнь в другой стране, право работать там без визы). ATS отсеет
+            # такой отклик knockout-вопросом ещё до человека. Лид из интейка
+            # оценку не проходил, поэтому калитка нужна здесь, а не только в
+            # поиске. Статус `manual`: человек видит причину и решает сам.
+            inel = ineligible_reason(lead, home_country)
+            if inel is not None:
+                status, note = inel
                 repo.mark_status(lead, status, note=note)
                 print(f"✋ Лид #{lead.lead_id} [{platform}]: {note} "
                       "— генерацию не трачу.")

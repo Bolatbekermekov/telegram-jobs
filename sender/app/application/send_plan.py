@@ -8,6 +8,7 @@ mid-run rate limits are handled by the loop itself, which leaves those leads
 """
 import re
 
+from app.domain.eligibility import check_eligibility
 from app.domain.lead import STATUS_MANUAL, STATUS_SKIPPED
 from app.domain.page_gone import GONE_NOTE
 from app.domain.vacancy_text import (
@@ -280,6 +281,41 @@ def dead_vacancy_reason(target: str, gone) -> tuple[str, str] | None:
     if not dead_url:
         return None
     return STATUS_MANUAL, f"{GONE_NOTE}: {dead_url}"
+
+
+# Поиск кладёт страну в текст вакансии строкой «Зарплата: …, Локация: …».
+_LOCATION_LINE = re.compile(r"Локация:\s*([^\n]+)")
+
+INELIGIBLE_NOTE = "не подано автоматически: вакансия требует того, чего у кандидата нет"
+
+
+def ineligible_reason(lead, home_country: str) -> tuple[str, str] | None:
+    """Почему этот лид нельзя подать автоматически, как (статус, заметка), или None.
+
+    Вакансия явно требует того, чего у кандидата нет: гражданства, жизни в
+    другой стране, права работать там без визы (`domain/eligibility`). На такой
+    отклик ATS отвечает knockout-отказом ещё до человека, а прогон успевал
+    заплатить за роль, письмо и браузер.
+
+    Стоит в прогоне, а не только в поиске, потому что лиды из интейка оценку
+    не проходят вовсе, и старая очередь тоже.
+
+    Статус `manual`, а не `skipped` — по той же причине, что у
+    `dead_vacancy_reason`: владелец запретил закрывать лиды автоматически.
+    Человек видит причину в заметке и, если с ней не согласен, подаёт сам.
+
+    Пустая домашняя страна (анкета не заполнена) ничего не блокирует: без неё
+    любая страна выглядела бы чужой.
+    """
+    if not (home_country or "").strip():
+        return None
+    text = "\n".join(p for p in (lead.raw_text, lead.vacancy_context) if p)
+    m = _LOCATION_LINE.search(text)
+    verdict = check_eligibility(text, location=m.group(1) if m else "",
+                                home_country=home_country)
+    if verdict.eligible:
+        return None
+    return STATUS_MANUAL, f"{INELIGIBLE_NOTE} — {'; '.join(verdict.blocking_reasons)}"
 
 
 # A slot the writer was supposed to fill: bracketed prose in ANY case
