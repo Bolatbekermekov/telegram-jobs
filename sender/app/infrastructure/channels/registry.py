@@ -63,9 +63,20 @@ def _external_apply_deps(config, log=None):
     if getattr(config, "SMTP_HOST", "") and getattr(config, "SMTP_USER", ""):
         email_channel = EmailChannel(config.SMTP_HOST, config.SMTP_PORT, config.SMTP_USER,
                                      config.SMTP_PASSWORD, config.EMAIL_FROM_NAME)
+    # Код «подтвердите, что вы человек» из письма ATS (Greenhouse) читается из
+    # того же Gmail, с которого уходят письма, — решение владельца 2026-09-26.
+    # Через partial, а не новым аргументом у пяти каналов: они зовут `fn`
+    # одинаково, и код из письма едет внутри самой функции.
+    fn = external_apply
+    if getattr(config, "EMAILED_CODE_ENABLED", True) and getattr(config, "SMTP_USER", "") \
+            and getattr(config, "SMTP_PASSWORD", ""):
+        from functools import partial
+        from app.infrastructure.verification_mail import GmailCodeReader
+        reader = GmailCodeReader(config.SMTP_USER, config.SMTP_PASSWORD)
+        fn = partial(external_apply, code_source=reader.code_since)
     return {
         "enabled": True,
-        "fn": external_apply,
+        "fn": fn,
         "profile": load_apply_profile(config.APPLY_PROFILE_PATH,
                                       getattr(config, "CONTACTS", None)),
         "cv_path": config.CV_PATH,

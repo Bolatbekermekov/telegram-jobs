@@ -1744,7 +1744,8 @@ def _page_notice_text(page) -> str:
 
 def external_apply(page, job_url: str, content, profile, cv_path: str,
                    answerer=None, dry_run: bool = False, email_channel=None,
-                   subject_maker=None, vacancy_context: str = "") -> None:
+                   subject_maker=None, vacancy_context: str = "",
+                   code_source=None) -> None:
     obs, route = scrape_until_ready(page)
     if route is Route.NONE and _reveal_apply_form(page):
         # Кнопка «Apply» ведёт к форме не всегда. Замер 2026-08-26 на Zalando
@@ -1856,11 +1857,15 @@ def external_apply(page, job_url: str, content, profile, cv_path: str,
                 f"(поле «{a.field.label or a.field.name}») — проверь вручную: {obs.url}")
 
     submit_before = _submit_count(page)
+    # Момент ДО нажатия: код ищется только в письмах, пришедших после него, —
+    # в ящике лежат коды прошлых попыток к тем же компаниям.
+    submitted_at = time.time()
     fill_and_submit(page, plan, dry_run, profile=profile)
     if dry_run:
         raise ManualApplyRequired(
             f"DRY_RUN: заполнено, НЕ отправлено — проверь вручную: {obs.url}")
-    _verify_submitted(page, obs.url, submit_before)
+    _verify_submitted(page, obs.url, submit_before,
+                      code_source=code_source, since=submitted_at)
 
 
 # What an ATS says once it has the application. Kept to phrases that only appear
@@ -1926,9 +1931,12 @@ def asks_for_emailed_code(page_text: str) -> bool:
 
     Живьём 2026-09-13, Greenhouse (лид #1177): «A verification code was sent to
     …@gmail.com. To submit your application, enter the 8-character code to
-    confirm you're a human». Код приходит на почту владельца, и доставать его
-    оттуда автоматически — значит обходить проверку. Исход при этом известен
-    точно: заявка не ушла, и человеку надо сказать ровно это.
+    confirm you're a human». Код приходит на почту владельца.
+
+    До 2026-09-26 такая заявка уходила человеку. Решение владельца 2026-09-26:
+    код читается из его же Gmail (`verification_mail.GmailCodeReader`) и
+    вводится автоматически, см. `_submit_emailed_code`. Без доступа к ящику
+    исход прежний: заявка не ушла, и человеку говорится ровно это.
     """
     return bool(_EMAILED_CODE_RE.search(page_text or ""))
 
@@ -1973,7 +1981,76 @@ def _invalid_required(page) -> list:
     return [n for n in names if isinstance(n, str)] if isinstance(names, list) else []
 
 
-def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
+# Восемь ячеек по одному знаку: `fieldset#email-verification`, поля
+# `#security-input-0..7` с maxlength=1 (разметка живой страницы Greenhouse).
+SEL_SECURITY_CELLS = "input[id^='security-input-']"
+
+
+def _enter_emailed_code(page, code: str) -> bool:
+    """Ввести код в ячейки экрана подтверждения. False — ячеек нет или не встало.
+
+    По знаку на ячейку: у поля maxlength=1, и целиком в первое код не влезет.
+    Если форма перескакивает фокус сама и значения разъехались — второй заход
+    одним набором с клавиатуры с первой ячейки, как вставил бы человек.
+    """
+    cells = page.locator(SEL_SECURITY_CELLS)
+    try:
+        n = cells.count()
+    except Exception:  # noqa: BLE001
+        return False
+    if n < len(code):
+        return False
+    for i, ch in enumerate(code):
+        cells.nth(i).fill(ch)
+
+    def entered():
+        try:
+            return cells.evaluate_all("els => els.map(e => e.value).join('')")
+        except Exception:  # noqa: BLE001
+            return ""
+    if entered() == code:
+        return True
+    try:
+        for i in range(n):
+            cells.nth(i).fill("")
+        cells.first.focus()
+        page.keyboard.type(code, delay=60)
+    except Exception:  # noqa: BLE001
+        return False
+    return entered() == code
+
+
+def _resubmit(page) -> None:
+    """Нажать ту же «Submit application» ещё раз — после ввода кода."""
+    btn = _submit_button(page)
+    try:
+        btn.evaluate("el => el.click()", timeout=8000)
+    except Exception:  # noqa: BLE001 — нет JS-хэндла: обычный клик
+        btn.click(timeout=8000)
+
+
+def _submit_emailed_code(page, url: str, code_source, since) -> None:
+    """Достать код из письма, ввести его и отправить заявку повторно.
+
+    Экран сохраняется всегда: разметка у Greenhouse меняется, а повторить её
+    потом нельзя — повтор значит ещё одну заявку. Не пришёл код или некуда
+    его ввести — заявка НЕ ушла, и человеку говорится, что именно не вышло.
+    """
+    _dump_form_debug(page, f"emailed-code-{_slug(urlsplit(url).netloc)}-{int(time.time())}")
+    code = code_source(since)
+    if not code:
+        raise ManualApplyRequired(
+            "ATS запросил код подтверждения из письма, но код не пришёл на почту "
+            f"вовремя — заявка НЕ ушла, введи код из письма и отправь вручную: {url}")
+    if not _enter_emailed_code(page, code):
+        raise ManualApplyRequired(
+            "ATS прислал на почту код подтверждения: код получен, но поле для него "
+            f"не нашлось — заявка НЕ ушла, введи код вручную: {url}")
+    _resubmit(page)
+
+
+def _verify_submitted(page, url: str, submit_before: int = -1,
+                      code_source=None, since=None) -> None:
     """Confirm the application landed, and say so honestly when we can't tell.
 
     The old check was "is a submit button still on the page after 2 seconds",
@@ -2024,7 +2101,13 @@ def _verify_submitted(page, url: str, submit_before: int = -1) -> None:
             "ATS показал капчу после отправки — заявка НЕ ушла, "
             f"подать можно только вручную: {url}")
     # Код из письма «подтвердите, что вы человек» — известный исход, не «не знаю».
+    # С доступом к ящику код вводится, и отправка проверяется заново — один раз:
+    # повторный запрос кода значит, что код не приняли, и дальше решает человек.
     if asks_for_emailed_code(_page_text(page)):
+        if code_source is not None:
+            _submit_emailed_code(page, url, code_source, since)
+            _verify_submitted(page, url, submit_before)
+            return
         raise ManualApplyRequired(
             "ATS прислал на почту код подтверждения («подтвердите, что вы человек») — "
             f"заявка НЕ ушла: введи код из письма и отправь вручную: {url}")

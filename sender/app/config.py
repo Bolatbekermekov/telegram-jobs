@@ -161,6 +161,10 @@ THREADS_STATE_PATH = os.environ.get(
 EXTERNAL_APPLY_ENABLED = os.environ.get("EXTERNAL_APPLY_ENABLED", "true").lower() == "true"
 # true = fill the form but DO NOT click Submit (dry run for obkatka).
 APPLY_DRY_RUN = os.environ.get("APPLY_DRY_RUN", "false").lower() == "true"
+# Код «подтвердите, что вы человек» из письма ATS (Greenhouse): читать его из
+# Gmail по IMAP (тот же ящик и пароль приложения, что у SMTP) и вводить в форму.
+# Решение владельца 2026-09-26; false — такие заявки снова уходят в ручные.
+EMAILED_CODE_ENABLED = os.environ.get("EMAILED_CODE_ENABLED", "true").lower() == "true"
 APPLY_PROFILE_PATH = os.environ.get(
     "APPLY_PROFILE_PATH", str(_ROOT / "sender" / "apply_profile.yml"))
 
