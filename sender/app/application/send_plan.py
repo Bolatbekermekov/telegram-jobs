@@ -285,6 +285,12 @@ def dead_vacancy_reason(target: str, gone) -> tuple[str, str] | None:
 
 # Поиск кладёт страну в текст вакансии строкой «Зарплата: …, Локация: …».
 _LOCATION_LINE = re.compile(r"Локация:\s*([^\n]+)")
+# И вердикт своей модели — «75/100: причина» отдельной строкой, а в старых
+# строках приклеенным к названию («Title — 82/100: …»). Это догадка модели, а
+# не текст работодателя: живьём 2026-09-24 (#1591) модель по одной локации
+# «United States (Remote)» написала «без визовой поддержки», хотя в описании о
+# визе ни слова. Калитка читает только то, что написал работодатель.
+_OWN_VERDICT = re.compile(r"\b\d{1,3}/100\b.*$", re.MULTILINE)
 
 INELIGIBLE_NOTE = "не подано автоматически: вакансия требует того, чего у кандидата нет"
 
@@ -310,6 +316,7 @@ def ineligible_reason(lead, home_country: str) -> tuple[str, str] | None:
     if not (home_country or "").strip():
         return None
     text = "\n".join(p for p in (lead.raw_text, lead.vacancy_context) if p)
+    text = _OWN_VERDICT.sub("", text)
     m = _LOCATION_LINE.search(text)
     verdict = check_eligibility(text, location=m.group(1) if m else "",
                                 home_country=home_country)

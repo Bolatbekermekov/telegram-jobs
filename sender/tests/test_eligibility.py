@@ -107,3 +107,54 @@ def test_remote_anywhere_without_sponsorship_is_a_warning_not_a_block():
                           home_country=HOME)
     assert v.eligible
     assert v.warnings
+
+
+# --- длинный список стран Wellfound ---
+#
+# Живьём 2026-09-24: «Hires remotely in: Atlanta, Georgia • Austin, Texas •
+# Australia • Baltimore, Maryland • …» — список идёт по алфавиту и длиннее окна
+# в 70 символов. Страна кандидата, стоящая дальше в списке, окном не видна, и
+# выполнимое требование читалось как невыполнимое.
+_LONG_LIST = ("Hires remotely in: Atlanta, Georgia • Austin, Texas • Australia • "
+              "Baltimore, Maryland • Boston, Massachusetts • California • Chicago, "
+              "Illinois • Denver, Colorado • {extra}Toronto, Canada, Remote work "
+              "policy, Remote only")
+
+
+def test_the_home_country_late_in_a_long_hiring_list_is_seen():
+    assert not _blocked(_LONG_LIST.format(extra="Kazakhstan • "))
+
+
+def test_worldwide_late_in_a_long_hiring_list_is_seen():
+    assert not _blocked(_LONG_LIST.format(extra="Worldwide • "))
+
+
+def test_a_long_hiring_list_without_the_home_country_still_blocks():
+    assert _blocked(_LONG_LIST.format(extra=""))
+
+
+def test_the_hiring_list_ends_at_the_next_field():
+    """Поля карточки Wellfound идут одной строкой через запятую: страны после
+    «Remote work policy» списку найма уже не принадлежат."""
+    text = ("Hires remotely in: United States, Remote work policy, Remote only, "
+            "Company offices: Kazakhstan")
+    assert _blocked(text)
+
+
+# --- «only» про льготы, а не про найм ---
+
+def test_benefits_for_us_candidates_only_is_not_a_hiring_restriction():
+    """Живьём 2026-09-24 (Remotive, «Frontend Web Application Developer»): раздел
+    льгот «Full Time Employee Benefits (U.S. candidates only): Health &
+    Dental…» прочитан как «нанимаем только из США», и вакансия ушла в отказники
+    без оценки. Льготы только для американцев — это не запрет нанимать
+    остальных."""
+    text = ("Full Time Employee Benefits (U.S. candidates only) : Health & Dental "
+            "insurance, 401(k) match, paid time off.")
+    assert not _blocked(text)
+
+
+def test_a_real_restriction_next_to_a_benefits_section_still_blocks():
+    text = ("Benefits: health insurance, PTO.\n"
+            "This role is open to US-based candidates only.")
+    assert _blocked(text)

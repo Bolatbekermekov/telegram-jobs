@@ -128,3 +128,24 @@ def test_run_search_hands_the_check_to_the_scoring_loop():
                on_ineligible=lambda c, v: told.append(c.title))
     assert [c.title for c in repo.added] == ["A"]
     assert told == ["B"]
+
+
+def test_our_own_model_verdict_is_not_the_employers_requirement():
+    """Живьём 2026-09-24, лид #1591 (RemoteHunter): в описании ни слова о визе
+    и праве на работу, а модель по одной локации «United States (Remote)»
+    написала в причине оценки «удаленка только для США без визовой поддержки».
+    Поиск кладёт эту причину строкой «75/100: …» в текст вакансии, и калитка
+    прогона приняла догадку модели за требование работодателя. Блокирует только
+    то, что написал работодатель."""
+    lead = _lead("Mid-Level Backend Engineer — RemoteHunter\n"
+                 "Локация: United States (Remote)\n"
+                 "75/100: Роль Backend Engineer подходит (уровень Mid), но удаленка "
+                 "только для США без визовой поддержки.")
+    assert ineligible_reason(lead, HOME) is None
+
+
+def test_an_old_style_verdict_on_the_title_line_is_ignored_too():
+    """Старые строки клеили оценку к названию: «Title — 82/100: …»."""
+    lead = _lead("Junior AI Engineer — 82/100: entry-level, remote UK-only "
+                 "(нужно право на работу в UK)")
+    assert ineligible_reason(lead, HOME) is None

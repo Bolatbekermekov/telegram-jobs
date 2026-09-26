@@ -128,6 +128,16 @@ _WINDOW = 70
 # Мягкие слова превращают требование в пожелание.
 _SOFT = re.compile(r"prefer|ideally|nice\s+to\s+have|\bplus\b|bonus|желательн|"
                    r"приветству|будет\s+плюсом", re.I)
+# Предложение про льготы говорит, кому они положены, а не кого нанимают:
+# «Full Time Employee Benefits (U.S. candidates only): Health & Dental…»
+# (Remotive, живьём 2026-09-24) — не запрет нанимать остальных.
+_BENEFITS = re.compile(r"benefits?\b|perks|insurance|401\s*\(?k\)?|\bpto\b|"
+                       r"paid\s+time\s+off|льгот|ДМС", re.I)
+
+
+def _not_a_requirement(text: str, start: int, end: int) -> bool:
+    sentence = _sentence_around(text, start, end)
+    return bool(_SOFT.search(sentence) or _BENEFITS.search(sentence))
 
 # Всегда блокирует: гражданство, национальность, допуск.
 _NATIONALITY = [
@@ -154,11 +164,21 @@ _RESIDENCY = [
     re.compile(r"\b(?:only|exclusively)\s+(?:open\s+to\s+|for\s+|accepting\s+|considering\s+|"
                r"hiring\s+)?(?:candidates|applicants|residents|people|talent)\s+(?:who\s+are\s+)?"
                r"(?:based\s+|located\s+|residing\s+|living\s+)?(?:in|from|within)\b", re.I),
-    re.compile(r"\bhires?\s+remotely\s+in\b", re.I),
     re.compile(r"(?:только|исключительно)\s+(?:из|на\s+территории)\b", re.I),
     re.compile(r"(?:обязательн\w*|необходим\w*|требуется)\s+(?:нахождение|находиться|"
                r"проживание|проживать|присутствие)\s+(?:в|на\s+территории)\b", re.I),
 ]
+# Список стран найма Wellfound. Читается ЦЕЛИКОМ, а не окном: он идёт по
+# алфавиту («Atlanta, Georgia • Austin, Texas • Australia • …», живьём
+# 2026-09-24) и длиннее `_WINDOW`, так что страна кандидата в хвосте окном не
+# видна. Кончается на следующем поле карточки — они идут той же строкой через
+# запятую.
+_HIRES_IN = re.compile(r"\bhires?\s+remotely\s+in\b", re.I)
+_NEXT_FIELD = re.compile(
+    r"\n|,\s*(?:remote\s+work\s+policy|job\s+type|visa\s+sponsorship|relocation|"
+    r"preferred\s+timezones?|hires\s+in|company|skills|compensation)\b", re.I)
+_LIST_LIMIT = 1500
+
 _AUTHORIZATION = [
     re.compile(r"\b(?:authori[sz]ed|eligible|permitted|legally\s+able|entitled|right)\s+"
                r"to\s+work\s+(?:\w+\s+){0,2}?in\b", re.I),
@@ -205,6 +225,11 @@ def _window_after(text: str, end: int) -> str:
     return text[end: min(stop.start() if stop else len(text), end + _WINDOW)]
 
 
+def _list_after(text: str, end: int) -> str:
+    stop = _NEXT_FIELD.search(text, end)
+    return text[end: min(stop.start() if stop else len(text), end + _LIST_LIMIT)]
+
+
 def _foreign(places: list[str], neutral: bool, home: str) -> list[str]:
     """Страны, в которые кандидат не проходит. Пусто — если требование выполнимо
     (есть домашняя страна или нейтральный регион) или места не нашлось вовсе."""
@@ -233,7 +258,7 @@ def check_eligibility(text: str, location: str = "",
     def requirement(patterns, kind: str) -> None:
         for rx in patterns:
             for m in rx.finditer(text):
-                if _SOFT.search(_sentence_around(text, m.start(), m.end())):
+                if _not_a_requirement(text, m.start(), m.end()):
                     continue
                 places, neutral = _places_in(_window_after(text, m.end()))
                 bad = _foreign(places, neutral, home)
@@ -242,18 +267,24 @@ def check_eligibility(text: str, location: str = "",
 
     requirement(_NATIONALITY, "только для граждан/жителей")
     for m in _X_ONLY.finditer(text):
-        if _SOFT.search(_sentence_around(text, m.start(), m.end())):
+        if _not_a_requirement(text, m.start(), m.end()):
             continue
         places, neutral = _places_in(m.group(1))
         bad = _foreign(places, neutral, home)
         if bad:
             block(f"только для {', '.join(bad)} («{_quote(text, m.start(), m.end())}»)")
     for m in _CLEARANCE.finditer(text):
-        if not _SOFT.search(_sentence_around(text, m.start(), m.end())):
+        if not _not_a_requirement(text, m.start(), m.end()):
             block(f"нужен допуск/гражданство («{_quote(text, m.start(), m.end())}»)")
 
     if not offers:
         requirement(_RESIDENCY, "нужно находиться в")
+        for m in _HIRES_IN.finditer(text):
+            places, neutral = _places_in(_list_after(text, m.end()))
+            bad = _foreign(places, neutral, home)
+            if bad:
+                block(f"нужно находиться в {', '.join(bad)} "
+                      f"(«{_quote(text, m.start(), m.end())}»)")
         requirement(_AUTHORIZATION, "нужно право работать в")
 
     if no_sponsor:
