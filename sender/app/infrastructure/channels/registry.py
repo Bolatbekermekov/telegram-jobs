@@ -42,7 +42,11 @@ def _hh_answerer(config, cv_path=None):
         # здесь, а не в каждом канале: этот answerer обслуживает и hh, и внешние
         # формы, и LinkedIn Easy Apply. Журнал ответов вешается снаружи, поэтому
         # в «Заметку» попадёт уже исправленное — то, что реально ушло.
-        return canonicalize_answers(answers, getattr(config, "CONTACTS", None))
+        # Подробно, но не длиннее 500 знаков (решение владельца 2026-09-25). Здесь,
+        # а не в канале: этот answerer общий у hh, LinkedIn и внешних форм, а журнал
+        # в «Заметке» висит снаружи и увидит то, что реально ушло.
+        from app.domain.answer_length import cap_answers
+        return cap_answers(canonicalize_answers(answers, getattr(config, "CONTACTS", None)))
 
     # Резюме роли вместо запасного CV_PATH — см. answerer_cv.answerer_for_cv.
     answer.for_cv = lambda path: _hh_answerer(config, path)
