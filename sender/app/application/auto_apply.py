@@ -1105,15 +1105,87 @@ def renumber_notice_answers(plan) -> list:
     return changed
 
 
+# Шкала или процент: «from 0% to 100%», «on a scale of 1-10», «(0-100)», «от 1
+# до 10». Живьём 2026-09-25 (лид #1576) такой вопрос считался числовым только
+# потому, что в нём стояло слово «rate» из правила зарплаты; без него — «evaluate
+# your English from 1 to 10» — не считался вовсе. Границы шкалы — до трёх цифр:
+# «from 2023 to 2024» — это годы в тексте открытого вопроса, а не шкала.
+_SCALE_Q_RE = re.compile(
+    r"\bfrom\s+\d{1,3}\s*%?\s*(?:to|-|–)\s*\d{1,3}\s*%?(?!\d)"
+    r"|\bon\s+a\s+scale\b|\bscale\s+(?:of|from)\s+\d"
+    r"|\(\s*\d{1,3}\s*(?:-|–|to)\s*\d{1,3}\s*%?\s*\)"
+    r"|\bpercent(?:age)?\b|в\s+процентах|\bот\s+\d{1,3}\s*%?\s+до\s+\d{1,3}(?!\d)",
+    re.I)
+
+
+# Вопрос про опыт — «Do you have experience with X?», «How many years…», «опыт».
+# «experiance» — не опечатка правила: так вопрос написан у работодателя (живьём
+# 2026-09-25, вакансия 4469924642).
+_EXPERIENCE_Q_RE = re.compile(r"experi[ae]n|\byears?\b|опыт|\bлет\b", re.I)
+_SAYS_NO_RE = re.compile(r"^\s*(?:no|нет)\b", re.I)
+# Короткое поле: развёрнутый ответ в него не помещается в принципе, так что
+# перевод в число ничего подробного не уничтожит. У числового компонента
+# LinkedIn Easy Apply лимит 20.
+_SHORT_FIELD_MAX = 25
+
+
+def renumber_experience_answers(plan) -> list:
+    """Вопрос «да/нет» про опыт на числовом поле — числом, после отказа формы.
+
+    Живьём 2026-09-25 (LinkedIn 4469924642): «Do you have experiance with LLM
+    APIs?)», поле в 20 знаков, ответ «Yes, 4+ years.» — «Invalid input». По
+    подписи поле не отличить от текстового, подсказка появляется только после
+    отказа, поэтому и правило, как у `renumber_notice_answers`, зовётся только
+    тогда. «Yes, 4+ years» -> «4», «No, …» -> «0». Трогает лишь короткие поля:
+    подробный ответ в большом поле на том же экране не должен пострадать от
+    чужого отказа.
+
+    Возвращает изменённые действия: их и надо заполнить заново.
+    """
+    changed = []
+    for a in plan.actions:
+        field = a.field
+        limit = getattr(field, "max_len", 0) or 0
+        if not limit or limit > _SHORT_FIELD_MAX:
+            continue
+        question = getattr(field, "question", "") or field.label or field.name or ""
+        value = (a.value or "").strip()
+        if not value or value.isdigit() or not _EXPERIENCE_Q_RE.search(question):
+            continue
+        number = _number_in(value) or ("0" if _SAYS_NO_RE.match(value) else "")
+        if number:
+            a.value = number
+            changed.append(a)
+    return changed
+
+
 def _asks_for_a_number(field) -> bool:
     if (field.type or "").lower() == "number":
         return True
-    label = field.label or field.name or ""
-    if _NUMERIC_Q_RE.search(label):
+    # Подпись режется до 80 знаков, полный текст вопроса — в `question`.
+    label = " ".join(p for p in (field.label or field.name or "",
+                                 getattr(field, "question", "") or "") if p)
+    if _NUMERIC_Q_RE.search(label) or _SCALE_Q_RE.search(label):
         return True
     # Текущая зарплата — тоже число: с 2026-09-13 модель её оценивает (решение
     # владельца), а поле под неё у LinkedIn числовое и фразу отвергает.
     return bool(_SALARY_Q_RE.search(label))
+
+
+def _number_in(value: str) -> str:
+    """Первое число ответа без знаков и слов, или "" если числа нет.
+
+    «85%» -> «85», «~85» -> «85», «7.5» -> «7.5», «1,200,000» и «16,00,000» ->
+    цифры подряд. Дробь — только одна точка или запятая с одной-двумя цифрами
+    после: иначе это разделители разрядов.
+    """
+    m = re.search(r"\d[\d\s.,]*", value or "")
+    if not m:
+        return ""
+    s = m.group(0).strip(" .,")
+    if re.fullmatch(r"\d+[.,]\d{1,2}", s):
+        return s.replace(",", ".")
+    return re.sub(r"[^\d]", "", s)
 
 
 def _ai_prompt(field) -> str:
@@ -1147,14 +1219,25 @@ def _fit_answer(value: str, field) -> str | None:
     что спрашивали.
     """
     limit = getattr(field, "max_len", 0) or 0
+    question = getattr(field, "question", "") or field.label or field.name or ""
+    # Числовое поле получает число всегда, а не только когда ответ не влез:
+    # «85%» уходил в поле как есть, и LinkedIn отвечал «Invalid input» (лид
+    # #1576, 2026-09-25). Срок отработки не трогаем — у него свой перевод в
+    # единицы поля (`renumber_notice_answers`), и «1-2 weeks» -> «1» его сломал бы.
+    numeric = _asks_for_a_number(field)
+    if numeric and not _NOTICE_RE.search(question):
+        number = _number_in(value)
+        if not number:
+            return None     # слова вместо числа — пусть поле назовёт человек
+        return number if not limit or len(number) <= limit else None
     if not limit or len(value) <= limit:
         return value
-    if _asks_for_a_number(field):
-        m = re.search(r"\d[\d\s.,]*", value)
-        if m:
-            digits = re.sub(r"[^\d]", "", m.group(0))[:limit]
-            if digits:
-                return digits
+    if numeric:
+        # Срок отработки, не влезший в поле: «1 month» на «(in weeks)» с
+        # лимитом 3 — число из ответа и есть то, что спрашивали.
+        number = _number_in(value)
+        if number and len(number) <= limit:
+            return number
     return None
 
 

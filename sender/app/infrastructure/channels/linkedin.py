@@ -1230,7 +1230,8 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
     )
     from app.application.answerer_cv import answerer_for_cv
     from app.application.auto_apply import (
-        ApplyPlan, answer_ai_fields, build_plan, renumber_notice_answers,
+        ApplyPlan, answer_ai_fields, build_plan, renumber_experience_answers,
+        renumber_notice_answers,
     )
 
     job_id = _job_id(job_url)
@@ -1320,7 +1321,9 @@ def easy_apply_via_page(page, job_url: str, content: OutreachContent,
         # отказа формы: там, где строка годится, её и оставляем (живьём 2026-09-13,
         # лиды #339, #866, #997).
         if said and plan is not None:
-            again = renumber_notice_answers(plan)
+            # И вопрос «да/нет» про опыт на числовом поле: «Yes, 4+ years.» -> «4»
+            # (живьём 2026-09-25, вакансия 4469924642).
+            again = renumber_notice_answers(plan) + renumber_experience_answers(plan)
             if again:
                 fill_fields(page, ApplyPlan(actions=again), where="LinkedIn Easy Apply")
                 _click_via_dom(page.locator(SEL_APPLY_NEXT).first)
