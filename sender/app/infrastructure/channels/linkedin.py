@@ -333,7 +333,7 @@ def _wait_until(page, predicate, timeout_ms: int) -> bool:
     return False
 
 
-def _press_send(page, composer, scope=None) -> None:
+def _press_send(page, composer, scope=None, body: str = "") -> None:
     """Press «Отправить» on the open composer and confirm the message left it.
 
     NOT a Playwright .click(). That click needs a hit point inside the viewport,
@@ -375,8 +375,62 @@ def _press_send(page, composer, scope=None) -> None:
 
     if not _wait_until(page, lambda: not (composer.inner_text() or "").strip(),
                        _SEND_CONFIRM_TIMEOUT_MS):
+        if _landed_in_thread(page, composer, scope, body):
+            return
+        _dump_unsent_message(page)
         raise ChannelError(
             "LinkedIn: текст остался в поле ввода — отправка не подтверждена")
+
+
+def _landed_in_thread(page, composer, scope, body: str) -> bool:
+    """Ушло ли письмо в ленту переписки, хотя поле ввода его не отпустило.
+
+    Живьём 2026-09-26 (лид #1698): письмо «TODAY 12:35» с резюме стояло в
+    переписке, а поле ввода держало тот же текст, и лид лёг в `failed` — повтор
+    послал бы второе письмо. Признак: начало письма видно в окне ЕЩЁ РАЗ, помимо
+    самого поля. Только в поле — не ушло. Поле опустело позже срока — ушло.
+    """
+    def norm(text):
+        return " ".join((text or "").split())
+
+    key = " ".join(norm(body).split()[:12])
+    if not key:
+        return False
+    try:
+        in_box = norm(composer.inner_text())
+        if not in_box:
+            return True
+        where = scope if scope is not None else page
+        try:
+            window = norm(where.inner_text())
+        except TypeError:           # Page.inner_text ждёт селектор
+            window = norm(page.inner_text("body"))
+        return window.count(key) - in_box.count(key) >= 1
+    except Exception:  # noqa: BLE001 — не смогли спросить = не подтверждено
+        return False
+
+
+def _dump_unsent_message(page) -> None:
+    """Разметка и снимок окна переписки, из которого сообщение не ушло. Не роняет.
+
+    Живьём 2026-09-26 (лид #1698) этот путь не сохранял ничего, и причину было
+    не разобрать. Прошлый такой случай (2026-08-22) оказался переименованной
+    кнопкой отправки — и видно это было только по разметке. Повторять вслепую
+    нельзя: если сообщение всё же ушло, человек получит второе.
+    """
+    import re as _re
+    from pathlib import Path
+
+    from app import config
+    try:
+        d = Path(config.APPLY_DEBUG_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        slug = _re.sub(r"[^\w-]+", "-", getattr(page, "url", "") or "").strip("-")[-60:]
+        tag = f"message-unsent-{slug or 'no-url'}"
+        (d / f"{tag}.html").write_text(page.content(), encoding="utf-8")
+        page.screenshot(path=str(d / f"{tag}.png"), full_page=False)
+    except Exception:  # noqa: BLE001 — снимок не должен заслонить саму ошибку
+        pass
 
 
 def _send_message(page, content: OutreachContent) -> None:
@@ -409,7 +463,7 @@ def _send_message(page, content: OutreachContent) -> None:
     composer.fill(content.body)
     if content.attachment_path:
         _attach_cv(page, content.attachment_path, scope)
-    _press_send(page, composer, scope)
+    _press_send(page, composer, scope, body=content.body)
 
 
 def fill_and_send(page, profile_url: str, content: OutreachContent) -> None:
