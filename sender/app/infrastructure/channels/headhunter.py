@@ -10,7 +10,8 @@ import re
 
 from app.application.answerer_cv import answerer_for_cv
 from app.domain.channel import (
-    ChannelError, ManualApplyRequired, OutreachContent, RateLimitedError,
+    ChannelError, ChannelUnavailable, ManualApplyRequired, OutreachContent,
+    RateLimitedError,
 )
 from app.domain.hh_resume import hh_resume_title
 from app.domain.page_gone import GONE_NOTE
@@ -884,6 +885,18 @@ class HeadHunterChannel:
         context = self._browser.new_context(
             storage_state=self._storage_state_path, no_viewport=True)
         self._page = context.new_page()
+        # Файл сессии есть — не значит, что hh нас узнаёт. Живьём 2026-09-25 файл и
+        # кука `hhtoken` были на месте, а hh показывал вакансии анониму: отклик по
+        # телефону без поля письма, и лиды #1608-#1613 подряд легли в `failed`,
+        # каждый заплатив генерацией. Как у LinkedIn: мёртвая сессия останавливает
+        # канал при старте, лиды остаются `new`.
+        self._page.goto("https://hh.ru/", wait_until="domcontentloaded", timeout=45000)
+        self._page.wait_for_timeout(2500)
+        if not hh_logged_in(self._page):
+            self.stop()
+            raise ChannelUnavailable(
+                "сессия hh.ru разлогинена (hh не узнаёт аккаунт, хотя файл сессии "
+                "есть) — выполни `make login_hh` и залогинься заново")
 
     def stop(self) -> None:
         if self._browser:
